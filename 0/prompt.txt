@@ -951,3 +951,76 @@ Files are in /Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_final
 ---
 
 Can you continue now that the session limits reset, just maybe more Opus and not Fable?
+
+---
+
+<task-notification>
+<task-id>aca9e958470992e7f</task-id>
+<tool-use-id>toolu_01HGwuB3G7cTV9QMknE438qB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/aca9e958470992e7f.output</output-file>
+<status>completed</status>
+<summary>Agent "Cut tokens in page views" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've committed the view changes on branch `worktree-agent-aca9e958470992e7f`, rebased onto current main. All 73 tests pass. The biggest finding was a bug rather than a token saving: the old history trim removed the page the model was on. Token savings are clear on form pages (about 25% fewer input tokens) and small on read-only browsing.
+
+**What changed**
+- **Latest view kept (bug fix, `worker.py`).** The old trim kept the page only in the newest request. So after any `note()` call the model had no page in front of it and invented values. Traces show refused notes with made-up dates and prices, and pages reopened over and over. Now the newest page view stays until a newer one arrives. The first prompt's page view is cut to its URL once a newer view exists.
+- **Same-page diffs (`extract.py`, `browser_tools.py`).** After click, fill, select, check, goto or back on the same page, the model gets only the changed parts, or "unchanged". Each control counts as its own piece, so a changed field is one short line, and refs in unchanged parts stay valid. Navigating to another page, or a change bigger than 40% of the page, still sends the whole view. The full view stays in context, so it stays in the cached prefix.
+- **Long selects.** Option lists over 600 characters show the count, the first 8 and the last 2. A new `options(ref, contains)` tool lists or searches them. A failed `select` now names close matches instead of waiting 10 s for a timeout. Option text the model looks up counts as seen, so the grounding check still covers it.
+- **Grounding check unchanged in behaviour.** `session.seen` still gets every whole view.
+- **Stopped workers now report usage.** Workers that hit the step limit used to log no token counts; now they record requests, input, cached and output tokens.
+- **Prompt caching** needed no change: the instructions and tools never vary between steps.
+
+**Main moved, one fix needed.** The new `agent/research.py` reads `session.look()` text directly to extract content. So diffs only come from the browser tools (`look(brief=True)`). Every other caller still gets the whole view, and such a read resets the diff baseline. I did not touch `research.py`.
+
+**Before/after**
+
+Read-only smoke goals, 3 runs each. All runs used the same scouting account, alternating base and new:
+
+| site | variant | done | requests | input tokens | cached | seconds | tokens/request |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| tender-portal | base | 0/3 | 26.3 | 117,915 | 68,469 | 134 | 4,478 |
+| tender-portal | new | 1/3 | 24.0 | 94,524 | 55,403 | 119 | 3,938 |
+| customer-portal | base | 3/3 | 26.7 | 97,077 | 56,971 | 126 | 3,640 |
+| customer-portal | new | 2/3 | 26.3 | 88,180 | 51,221 | 105 | 3,349 |
+| erp | base | 3/3 | 6.7 | 16,199 | 6,795 | 23 | 2,430 |
+| erp | new | 3/3 | 7.3 | 18,391 | 9,931 | 33 | 2,508 |
+| mail | base | 3/3 | 2.7 | 8,584 | 1,045 | 24 | 3,219 |
+| mail | new | 3/3 | 6.3 | 18,848 | 9,408 | 42 | 2,976 |
+
+- **Mail costs more, but the answers are correct.** The inbox shows 3 messages per page. Base returned "5 newest" after 1 to 3 requests by guessing items 4 and 5, or saying it couldn't see them. New opens page 2 and returns the right five.
+- **Model wandering dominates the noise.** The model often keeps going after it has the answer, so read-only results vary a lot between runs.
+- **Diffs barely fired on read-only sites**, since those runs mostly navigate between pages.
+
+To test diffs where they matter, I made an invented local form (fill quantity and reference, pick 1 of 61 options, tick terms, save). This proxies the bid configurator, which I never opened:
+
+| variant | runs | correct | requests | input tokens | seconds |
+| --- | --- | --- | --- | --- | --- |
+| base | 7 | 7/7 | 6 to 7 | ~27,700 | 19 to 28 |
+| new | 13 | 13/13 | 7 to 8 | 17,700 to 21,900 | 20 to 38 |
+
+The configurator spends most of its steps on same-page actions, so this is where the 217k-token bid worker should save most. That is an estimate; I could not measure it under the read-only rule.
+
+**Evaluated and dropped**
+- **Repeated boilerplate removal.** Limited to lines that can't hide content, it saved only 1 to 4% of view text. Without that limit it would hide status words that are traps ("gültig", "ersetzt", table headers).
+- **Path-only URLs in old history stubs.** Tiny gain, and that part is mostly cached anyway.
+
+Per request, about 5k characters are fixed instructions and tools, about 3k history and 1.5 to 2.5k the current view. 40 to 55% of input tokens were reported as cached. Browser actions take 0.3 to 0.7 s and a model step 1 to 4 s, so the number of steps drives both tokens and time.
+
+**Accuracy risks**
+- The model must combine a diff with its last full view. On the form it did so correctly every time (20/20 runs), but the real configurator hasn't been tested.
+- With a long select, the model sometimes calls `options()` even when it knows the exact text, which costs one extra request. It never picks an option automatically, so look-alike entries like "&lt;ref&gt;-A" can't be chosen by mistake.
+- If the model never calls `options()`, it can't see the hidden options in a long list.
+
+**Branch and commits**
+- `660d2ec` Trim page views and keep the latest one (includes the `docs/learned.md` lessons)
+- `622a81e` Send view diffs only from browser tools
+
+Not pushed or merged.
+
+My measurement scripts are outside the repo, in `/tmp/rfqbench/`. `bench.py` is a smoke variant whose tender goal forbids the bid area, and `formbench.py` is the invented form. Two run-time notes:
+- One early run hung for over 15 minutes during site start-up and did not happen again. The bench now has a timeout there; `SiteSession.start()` in the agent still has none.
+- One ERP run hit the site's "guest_unavailable" error.</result>
+<usage><subagent_tokens>207148</subagent_tokens><tool_uses>15</tool_uses><duration_ms>162070</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aca9e958470992e7f</worktreePath><worktreeBranch>worktree-agent-aca9e958470992e7f</worktreeBranch></worktree>
+</task-notification>
