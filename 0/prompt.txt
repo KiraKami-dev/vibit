@@ -2456,3 +2456,18 @@ Can you (maybe a subagent also) ask it to add an option for anthrophic backend. 
 ---
 
 yeah maybe an .env and .env.example or so would be nice. And then tell me where it is on the worktree or so
+
+---
+
+fyi "
+
+<pasted_content id="c6ab">
+back up
+
+bunch of (v) hot paths are streamlined now for current scale - should fly now (everything a lot quicker, sqlite + a bunch of single-threaded node processes were drowning) :)
+that also resolves the rare annoying site timeouts under full load, occasional queueing, etc.
+
++ concurrent runs cap also increased once more
+</pasted_content id="c6ab">
+
+"
