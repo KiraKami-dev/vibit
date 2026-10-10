@@ -44,7 +44,6 @@ from research_tender import (
     keep_results_tool,
     paging_tool,
     reader_model,
-    reader_settings,
     ungrounded,
 )
 from worker import run_worker
@@ -54,6 +53,8 @@ MIN_KIND_SECONDS = 50.0  # a search shorter than this rarely gets through one fo
 KEEP_GRACE = 60.0  # after the first kept hit, the other folders get this long before the search ends
 READ_RESERVE = 25.0  # the kind returns this long before the mail deadline, so its records are not lost
 RETRY_SECONDS = 60.0  # a search that kept nothing is tried once more if this much of its budget is left
+READ_TIMEOUT = 60.0  # one message reads in 10 to 35 s; a stalled call (seen: 180 s of silence) is retried sooner
+PLAN_TIMEOUT = 30.0  # the plan answers in about 12 s; a stalled call is retried sooner than the default 45 s
 FIRST = ("approval",)  # searched first: the approval moves every position's price
 
 # ---------------------------------------------------------------- record contents per kind
@@ -265,7 +266,7 @@ async def plan_searches(brief: str, sites: dict[str, str], findings: str = "") -
     choices = "\n".join(f"- {s.name}: {s.holds}" for s in SCHEMAS.values())
     # Thinking off: the brief states the kinds outright, and a long thinking answer outlasts the client timeout.
     agent = Agent(llm.model(), output_type=SearchPlan, instructions=PLAN_INSTRUCTIONS,
-                  model_settings=llm.settings(thinking=False), retries=3)
+                  model_settings=llm.settings(thinking=False, timeout=PLAN_TIMEOUT), retries=3)
     raw = " ".join(brief.split())
     flat = raw.casefold()
 
@@ -348,7 +349,7 @@ class KindResult:
 async def read_message(view: str, kind: Kind, reference: str) -> MailRecord | None:
     record_type = MailRecord[kind.schema.content]  # type: ignore[valid-type]
     agent = Agent(reader_model(), output_type=record_type, instructions=READ_INSTRUCTIONS,
-                  model_settings=reader_settings(), retries=3)
+                  model_settings=llm.settings(thinking=True, timeout=READ_TIMEOUT), retries=3)
 
     @agent.output_validator
     def _grounded(record):
@@ -482,8 +483,8 @@ async def mailbox_address(session: SiteSession) -> str:
     from what the tab has shown so far (its sign-in page and every page since, not only the current view), tried
     again while the tab is still loading. '' if no page showed it; resolve_mail then falls back to the recipients.
     """
-    agent = Agent(llm.model(), output_type=Address, model_settings=llm.settings(thinking=False), retries=3,
-                  instructions="You read webmail pages and report the address of the mailbox that is signed in "
+    agent = Agent(llm.model(), output_type=Address, model_settings=llm.settings(thinking=False, timeout=20.0),
+                  retries=3, instructions="You read webmail pages and report the address of the mailbox that is signed in "
                                "(the account the pages show as signed in, not a sender or another person).")
     candidates: list[str] = []
 
