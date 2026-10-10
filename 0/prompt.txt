@@ -1401,3 +1401,15 @@ Can you change it so it is 3.14 by default and also use this?
 ---
 
 Are there any other fixes? Or improvements? And what did we plan for v3 and further?
+
+---
+
+<task-notification>
+<task-id>bg0y07i9x</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>22:15 run_9371dffa1ac79744 3f5d6b6 quality=0 11.1min $0.075 no bid
+tender problem: text='TimeoutError: tender-portal:tender: the site could not be opened in 2 attempts'
+run_9371dffa1ac79744 3f5d6b6 quality=0 11.1min $0.075 no bid
+tender problem: text='TimeoutError: tender-portal:tender: the site could not be opened in 2 attempts'</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
