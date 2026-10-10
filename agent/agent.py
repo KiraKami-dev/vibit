@@ -26,13 +26,15 @@ async def solve(task: dict, page) -> dict | None:
     trace = Trace()
     left = min(contract.seconds_left(task), LOCAL_SECONDS)
     deadline = time.monotonic() + left - SAFETY_SECONDS
-    briefing = await read_brief(task)
+    # Sign in to every website while the model reads the brief: which one plays which part is only known after it.
+    contexts = await browsers.more_contexts(page, len(task["access"]))
+    sessions = {site["siteId"]: SiteSession(site, context, trace) for site, context in zip(task["access"], contexts)}
+    started = asyncio.gather(*(session.start() for session in sessions.values()), return_exceptions=True)
+    briefing, outcomes = await asyncio.gather(read_brief(task), started)
     trace.event("briefing", "done", **briefing.model_dump(exclude={"submission_steps"}))
-    sites = {site["siteId"]: site for site in task["access"]}
-    bid_context, mail_context = await browsers.more_contexts(page, 2)
-    bid = SiteSession(sites[briefing.bid_site], bid_context, trace)
-    mail = SiteSession(sites[briefing.mail_site], mail_context, trace)
-    await asyncio.gather(bid.start(), mail.start())
+    failed = {name for name, outcome in zip(sessions, outcomes) if isinstance(outcome, BaseException)}
+    bid, mail = sessions[briefing.bid_site], sessions[briefing.mail_site]
+    await asyncio.gather(*(session.start() for session in (bid, mail) if session.name in failed))
     result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline)
     trace.event("result", "done", result=result.model_dump() if result else None)
     return None
