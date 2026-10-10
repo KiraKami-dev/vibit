@@ -159,3 +159,6 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   approval 106 s). Session expiry while opening a message's reading pane gave the reader a sign-in page (empty
   record); messages are now reopened when the tab landed elsewhere. Without the mailbox address, records are
   authorised by the recipients' domain instead of all being dropped.
+- sub_63a81b12d47a68b9 (promoted from soak run run_262c91398cd64598): quality 100 in 7:33 for $0.110, rank #2.
+  Final candidate since 22:17 UTC; exact code is 8c7ab8f (branch submitted/sub_63a81b12). Same code over 6 soak
+  runs: 100, 100, 100, 100, 59, 37.1.
