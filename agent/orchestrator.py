@@ -882,8 +882,12 @@ class Orchestrator:
             answer = self.fallback_answer()
             self.trace.event("calc", "answer", answer=answer, problems=problems, fallback=True)
             return answer, None
-        check = None if self.form_left() < 30 else await confirm_decision(result.decision, self.board.summary() + "\n\nProblems:\n"
-                                       + "\n".join(self.board.problems + problems), self.rules)
+        # The check can only turn a bid with missing materials into no_bid; calc never returns such a bid today,
+        # so it is asked only then and costs the bid form no time otherwise.
+        disputable = result.decision == "bid" and bool(result.missing_materials)
+        check = None if self.form_left() < 30 or not disputable else await confirm_decision(
+            result.decision, self.board.summary() + "\n\nProblems:\n" + "\n".join(self.board.problems + problems),
+            self.rules)
         if check is not None and not check.agrees:
             self.trace.event("verify", "decision_disputed", proposed=result.decision, wanted=check.decision,
                              reason=check.reason)
