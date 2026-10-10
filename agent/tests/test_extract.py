@@ -143,10 +143,10 @@ class UnchangedViewTest(unittest.TestCase):
                     session = SiteSession({"siteId": "demo", "url": "https://example.com/"}, context,
                                           Trace(directory), pages=[page])
                     first = await session.look(fresh=True)
-                    again = await session.look()
+                    again = await session.look(brief=True)
                     fresh = await session.look(fresh=True)
                     await page.set_content("<p>Stock: 13</p><button>Reload</button>")
-                    changed = await session.look()
+                    changed = await session.look(brief=True)
                     session.trace.file.close()
                 await browser.close()
                 return first, again, fresh, changed, session.seen
@@ -171,17 +171,22 @@ class UnchangedViewTest(unittest.TestCase):
                                           Trace(directory), pages=[page])
                     await session.look(fresh=True)
                     await page.fill("input", "7")
-                    first = await session.look()
+                    first = await session.look(brief=True)
                     await page.fill("input", "8")
-                    second = await session.look()
+                    second = await session.look(brief=True)
+                    whole = await session.look()  # a helper's read: whole, and no baseline afterwards
+                    after = await session.look(brief=True)
                     session.trace.file.close()
                 await browser.close()
-                return first, second
-        first, second = asyncio.run(run())
+                return first, second, whole, after
+        first, second, whole, after = asyncio.run(run())
+        self.assertIn("Row 3", whole)
+        self.assertIn("Row 3", after)
         for text, value in ((first, "7"), (second, "8")):
             self.assertTrue(text.startswith("The page changed."), text)
             self.assertNotIn("Row 3", text)
-            self.assertRegex(text, r"@@ after 'Qty':\n- \[e1 textbox \"Qty\" value=\"1\"\]\n\+ \[e1 textbox \"Qty\" value=\"%s\"\]" % value)
+            self.assertIn(f"@@ after 'Qty':\n- [e1 textbox \"Qty\" value=\"1\"]\n"
+                          f"+ [e1 textbox \"Qty\" value=\"{value}\"]", text)
 
 
 class ChangesTest(unittest.TestCase):

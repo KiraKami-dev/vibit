@@ -254,12 +254,13 @@ class SiteSession:
                 self.events.append(f"closed popup {title!r} with its close button")
                 self.trace.event(self.name, "helper", action="close_popup", title=title)
 
-    async def look(self, offset: int = 0, fresh: bool = False) -> str:
+    async def look(self, offset: int = 0, brief: bool = False, fresh: bool = False) -> str:
         """What the model sees: the helpers' events, the tab, then the page text with refs.
 
         After an action on the same page, only the changed lines are sent when that is much shorter: the model still
-        has its latest full view (worker.py keeps it), and unchanged lines keep their refs. `fresh` (a conversation
-        that has not seen the page yet) always gets the whole view.
+        has its latest full view (worker.py keeps it), and unchanged lines keep their refs. Only with `brief` (the
+        browser tools, whose result the model gets as is). `fresh` marks a whole view the model now holds (a
+        worker's first prompt); other callers (helpers that reshape the text) get it whole and reset the baseline.
         """
         page = self.page
         await self._collect_closed(page)
@@ -279,12 +280,12 @@ class SiteSession:
             notes.append("Since your last action: " + "; ".join(self.events))
             self.events.clear()
         key = (page.url, title, self.view)
-        if offset == 0 and not fresh and key == self.shown:
+        if offset == 0 and brief and key == self.shown:
             return "\n".join([*notes, "The page is unchanged since your last action (same text and refs)."])
         if offset == 0:
             self.trace.event(self.name, "view", quiet=True, url=page.url, text=self.view)
             self.seen += "\n" + self.view
-            same_page = not fresh and self.base and self.base[:2] == key[:2] and len(self.view) <= MAX_VIEW
+            same_page = brief and self.base and self.base[:2] == key[:2] and len(self.view) <= MAX_VIEW
             diff = changes(self.base[2], self.view) if same_page else None
             if diff is not None:
                 self.shown = key
@@ -295,7 +296,7 @@ class SiteSession:
         rest = len(self.view) - offset - len(text)
         if rest > 0:
             text += f"\n[... {rest} more characters: read_more(offset={offset + len(text)})]"
-        self.shown = self.base = key if offset == 0 and rest <= 0 else ()
+        self.shown = self.base = key if offset == 0 and rest <= 0 and (brief or fresh) else ()
         return "\n".join(header + notes) + "\n\n" + text
 
     async def act(self, kind: str, ref: str, fn) -> str:
@@ -303,7 +304,8 @@ class SiteSession:
         async with self.lock:
             element = await locate(self.page, ref)
             if element is None:
-                return f"No element {ref} on this page (refs change with every view).\n\n" + await self.look()
+                return (f"No element {ref} on this page (refs change with every view).\n\n"
+                        + await self.look(brief=True))
             started = time.monotonic()
             before = (self.page.url, self.view)
             try:
@@ -311,11 +313,11 @@ class SiteSession:
             except Exception as error:
                 first = str(error).splitlines()[0][:300]
                 self.trace.event(self.name, "action_error", action=kind, ref=ref, error=first)
-                return f"{kind} {ref} failed: {first}\n\n" + await self.look()
+                return f"{kind} {ref} failed: {first}\n\n" + await self.look(brief=True)
             await asyncio.sleep(0.25)
             await self.settle()
             self.trace.event(self.name, "action", action=kind, ref=ref, seconds=round(time.monotonic() - started, 2))
-            view = await self.look()
+            view = await self.look(brief=True)
             if (self.page.url, self.view) == before:
                 view = (f"Nothing on the page changed after {kind} {ref}. Do not repeat it; check the page for what "
                         f"is still missing (a required field, a checkbox, another button).\n\n") + view
@@ -347,7 +349,7 @@ async def goto(ctx: RunContext[Deps], url: str) -> str:
     async with session.lock:
         await session._goto(target)
         session.trace.event(session.name, "action", action="goto", url=target)
-        return await session.look()
+        return await session.look(brief=True)
 
 
 async def click(ctx: RunContext[Deps], ref: str) -> str:
@@ -446,7 +448,7 @@ async def back(ctx: RunContext[Deps]) -> str:
         except Exception:
             pass
         await session.settle()
-        return await session.look()
+        return await session.look(brief=True)
 
 
 async def read_more(ctx: RunContext[Deps], offset: int) -> str:
