@@ -8,6 +8,7 @@ reload transient error pages and sign in again after a session timeout. What to 
 left to the model through `TOOLS`.
 """
 import asyncio
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -20,6 +21,8 @@ from tracing import Trace
 
 SETTLE_SECONDS = 45  # upper bound for waiting on a page and its helpers after one action
 MAX_VIEW = 14000  # characters of a page shown at once; read_more pages through the rest
+START_SECONDS = float(os.environ.get("SESSION_START_SECONDS", "90"))  # one sign-in attempt
+LOOP_VISITS = 3  # arriving on one page this often in a session gets the model a loop hint
 
 # Closes modal <dialog>s and aria-modal popups through their own close button as soon as they open, and records
 # what it closed. Links inside popups ("accept and continue") are never followed.
@@ -109,6 +112,9 @@ class SiteSession:
     seen: str = ""  # every view's text this session, to check notes against
     shown: tuple = ()  # (url, title, view) the model has now, so an unchanged page is not sent again
     base: tuple = ()  # the same for the latest view it got in full; changes are told against this one
+    visits: dict[str, int] = field(default_factory=dict)  # page URL -> times the model arrived on it
+    last_url: str = ""
+    scripted: bool = False  # the popup closer is installed in this context
 
     @property
     def name(self) -> str:
@@ -120,9 +126,33 @@ class SiteSession:
         self.pages = open_pages
         return open_pages[-1]
 
-    async def start(self) -> str:
-        """Open the site's start page in a new tab, signed in."""
-        await self.context.add_init_script(AUTO_CLOSE_JS)
+    async def start(self, attempts: int = 2) -> str:
+        """
+        Open the site's start page in a new tab, signed in, within START_SECONDS, once more on failure: a hung
+        sign-in (a cookie button that never answers, a page that never loads) must not hold a worker, or the
+        whole bid, for minutes. A tab that lands on the browser's own error page counts as failed.
+        """
+        for attempt in range(attempts):
+            try:
+                view = await asyncio.wait_for(self._open(), START_SECONDS)
+                if self.page.url.startswith("chrome-error:") or not self.view.strip():
+                    raise ConnectionError(f"the start page did not load ({self.page.url[:80]})")
+                return view
+            except Exception as error:
+                self.trace.event(self.name, "start_failed", attempt=attempt + 1,
+                                 error=f"{type(error).__name__}: {str(error)[:160]}")
+                for page in self.pages:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+                self.pages = []
+        raise TimeoutError(f"{self.name}: the site could not be opened in {attempts} attempts")
+
+    async def _open(self) -> str:
+        if not self.scripted:
+            await self.context.add_init_script(AUTO_CLOSE_JS)
+            self.scripted = True
         page = await self.context.new_page()
         self._watch(page)
         await self._goto(self.site["url"])
@@ -285,6 +315,13 @@ class SiteSession:
         notes = []
         if len(self.pages) > 1:
             notes.append(f"Windows open: {len(self.pages)} (you are in the newest)")
+        if offset == 0 and page.url != self.last_url:
+            self.last_url = page.url
+            self.visits[page.url] = self.visits.get(page.url, 0) + 1
+            if self.visits[page.url] >= LOOP_VISITS:  # a loop guard: paging back and forth finds nothing new
+                notes.append(f"Note: you have arrived on this page {self.visits[page.url]} times; going back and "
+                             f"forth between the same pages shows nothing new. Act on what this page offers (open "
+                             f"an entry, its menu or its actions) or take another route.")
         if self.events:
             notes.append("Since your last action: " + "; ".join(self.events))
             self.events.clear()

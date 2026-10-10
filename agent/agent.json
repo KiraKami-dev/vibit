@@ -2,5 +2,5 @@
   "setup": ["uv", "sync"],
   "run": ["uv", "run", "--no-sync", "python", "agent.py"],
   "models": ["qwen"],
-  "browsers": 2
+  "browsers": 4
 }

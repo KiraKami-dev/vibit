@@ -366,14 +366,16 @@ def _parse_requirement(seen: RequirementSeen, revision: str) -> Requirement:
 
 
 async def research_spec(session: SiteSession, briefing: Briefing, *, context: str = "",
-                        deadline: float | None = None, on_requirement=None, on_revision=None) -> SpecResult:
+                        deadline: float | None = None, on_requirement=None, on_revision=None,
+                        thinking: bool = False) -> SpecResult:
     """
     The current specification revision's requirements: a worker finds the document and its revision history
     (navigation, thinking off), a model decides the current revision (thinking on), the worker opens it and pages
     through it, and a model extracts each page (thinking on, in parallel).
 
     `on_revision()` runs once the governing revision is chosen (e.g. to warm up the ERP), `on_requirement(req)` as
-    soon as each requirement is parsed, so ERP research can start before the last page is read.
+    soon as each requirement is parsed, so ERP research can start before the last page is read. `thinking`
+    turns thinking on for finding the document (a second attempt after a fast one got lost).
     """
     started = time.monotonic()
     result = SpecResult()
@@ -388,7 +390,7 @@ async def research_spec(session: SiteSession, briefing: Briefing, *, context: st
         return result
 
     history, _ = await run_worker(session, FIND_SPEC_GOAL, RevisionHistory, context=goal_context, deadline=deadline,
-                                  max_steps=25, **_worker_kwargs(notes=False))
+                                  max_steps=25, **_worker_kwargs(notes=False, thinking=thinking))
     if history is None or not history.revisions:
         return finish("no revision history found")
     result.document = history.document
@@ -604,8 +606,8 @@ def _keep_views(session: SiteSession, views: dict[str, str] | None = None) -> di
     views = {} if views is None else views
     look = session.look
 
-    async def recording_look(offset: int = 0) -> str:
-        out = await look(offset)
+    async def recording_look(offset: int = 0, **options) -> str:  # brief/fresh pass through to look()
+        out = await look(offset, **options)
         if offset == 0:
             views[session.page.url] = _strip_refs(session.view)
         return out
@@ -734,7 +736,10 @@ class Erp:
         for attempt in range(2):  # retry once: the ERP sometimes drops the session mid-search
             await self._enter()
             try:
-                session = await self._tab(req.requirement_id if not attempt else f"{req.requirement_id}+")
+                try:  # a tab that does not open (SiteSession.start gave up) costs this attempt, not the research
+                    session = await self._tab(req.requirement_id if not attempt else f"{req.requirement_id}+")
+                except Exception:
+                    continue
                 report, _ = await run_worker(session, SEARCH_GOAL.format(group=req.catalog_group, want=_want(req)),
                                              SearchReport, deadline=self.deadline, max_steps=14,
                                              **_worker_kwargs(notes=False))
@@ -776,7 +781,10 @@ class Erp:
         for attempt in range(2):  # a second pass, keeping what was read, when facts are missing
             await self._enter()
             try:
-                session = await self._tab(number if not attempt else f"{number}+")
+                try:  # a tab that does not open costs this attempt, not the research
+                    session = await self._tab(number if not attempt else f"{number}+")
+                except Exception:
+                    continue
                 _keep_views(session, views)
                 if link:
                     await self.open(session, link)
@@ -814,10 +822,20 @@ class Erp:
 
     async def collect(self) -> ErpResearch:
         """Wait for every started requirement and the materials they inspect."""
-        results = [await self.tasks[k] for k in sorted(self.tasks, key=calc.position_key)]
+        results = []
+        for k in sorted(self.tasks, key=calc.position_key):
+            try:
+                results.append(await self.tasks[k])
+            except Exception as error:  # one failed requirement must not cost the others
+                results.append(RequirementResearch(requirement_id=k, problems=[
+                    f"research failed: {type(error).__name__}: {str(error)[:160]}"]))
         materials = {}
         for number, task in self.materials.items():
-            record = await task
+            try:
+                record = await task
+            except Exception as error:
+                self.trace.event("erp", "material_failed", material=number, error=f"{type(error).__name__}")
+                continue
             if record is not None:
                 materials[number] = record
         return ErpResearch(requirements=results, materials=materials,
