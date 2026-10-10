@@ -19,3 +19,21 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   total consistency score 0 even with every position omitted and total 0; positions need v2.
 - v1 submission: review passed, quality 10, 4:41 min, $0.024; team rank #4. Submit from a clean `git archive` export
   of agent/ so unfinished files never reach the package reviewer.
+- Scouting logins are shared by all teams: TAN request numbers are global and a request from another team
+  invalidates ours (local runs saw "Anforderung 59" rejected after someone requested 60). The bid wizard state is
+  per browser session, so local runs are fine for the form phase; measure signing only in test runs
+  (`AGENT_STOP_BEFORE_SIGN=1` stops a local run before the TAN request).
+- Bid speed-up, test runs: baseline 201 s; two phases (form thinking off, review thinking on) 271 s (one run:
+  documents detour, mail lookup hit its step limit, slow thinking steps); review thinking off too 171 s;
+  final variant 94 s and 96 s, quality 10 each, cost $0.009 instead of $0.019.
+- Final variant: form phase thinking off with fill_in() (several form actions per step), then one thinking-off
+  model call checks the review page, then the signing phase (thinking off unless the check fails or finds
+  problems) uses request_signing_tan(ref), which clicks the model-chosen button and fetches the TAN in one tool.
+- Summary check offline test (6 doctored review pages: ok, alternative offer, 5 % discount, position not
+  omitted, extra position, transposed VAT id): thinking off 6/6 in 2 to 5 s, thinking on 6/6 in 4 to 27 s.
+- Briefing with thinking off is correct (validated against the brief) and takes 6 to 10 s instead of 17 to 45 s.
+- Thinking-off form steps sometimes click the wrong ref on the one-position-per-step configurator ("add
+  position" instead of "next"); the summary check and the goal's "never use options that add positions" catch it.
+- Goal wording costs time: "acknowledge the tender documents" sent the model to read every document (35 s);
+  "tick the form's acknowledgement (no need to open them)" fixed it.
+- After the bid is in, the platform closes the run's model token; the final model call gets 401. Caught now.
