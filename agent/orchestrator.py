@@ -49,6 +49,26 @@ SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "420"))  # the bid
 MAIL_TABS = int(os.environ.get("MAIL_TABS", "4"))
 FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys before planning from the brief alone
 REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at least this much research time left
+SESSION_START_SECONDS = float(os.environ.get("SESSION_START_SECONDS", "90"))  # one site sign-in, tried twice
+
+
+async def start_session(session: SiteSession, attempts: int = 2) -> SiteSession:
+    """Open and sign in to a site within a time limit, once more on failure: a hung sign-in (a cookie button
+    that never answers) must not hold a worker, or the whole bid, for minutes."""
+    for attempt in range(attempts):
+        try:
+            await asyncio.wait_for(session.start(), SESSION_START_SECONDS)
+            return session
+        except Exception as error:
+            session.trace.event(session.name, "start_failed", attempt=attempt + 1,
+                                error=f"{type(error).__name__}: {str(error)[:160]}")
+            for page in session.pages:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+            session.pages = []
+    raise TimeoutError(f"{session.name}: the site could not be opened in {attempts} attempts")
 
 # ---------------------------------------------------------------- the planner
 
@@ -219,6 +239,7 @@ class Orchestrator:
         self.mail_facts = None
         self.spec: SpecResult | None = None
         self.erp: ErpResearch | None = None
+        self._erp: Erp | None = None
         self.requirements: dict[str, Requirement] = {}
         self.chosen: dict[str, str | None] = {}
         self.mail_kinds: list = []
@@ -232,9 +253,7 @@ class Orchestrator:
         access = self.access[site]
         if tag:
             access = {**access, "siteId": f"{site}:{tag}"}
-        session = SiteSession(access, self.contexts[site], self.trace)
-        await session.start()
-        return session
+        return await start_session(SiteSession(access, self.contexts[site], self.trace))
 
     # ------------------------------------------------------------ workers
 
@@ -281,9 +300,12 @@ class Orchestrator:
 
     async def specification(self, site: str, erp_site: str | None) -> None:
         board = self.board
-        erp = Erp(self.access[erp_site], self.contexts[erp_site], self.trace, self.research_deadline) if erp_site else None
-        if erp:
-            erp.warm_up()
+        erp = None
+        if erp_site:
+            if self._erp is None:
+                self._erp = Erp(self.access[erp_site], self.contexts[erp_site], self.trace, self.research_deadline)
+                self._erp.warm_up()
+            erp = self._erp
         try:
             session = await self.session(site, "spec")
             context = self.task["brief"].split("## Rules")[0].strip()
@@ -304,7 +326,6 @@ class Orchestrator:
                 on_requirement(req)
             for problem in self.spec.problems:
                 board.problem("specification", problem)
-            board.finish("requirement")
             if erp is None:
                 return
             self.erp = await erp.collect()
@@ -376,16 +397,23 @@ class Orchestrator:
     async def research(self) -> None:
         self.plan = await plan_research(self.task, self.briefing)
         self.trace.event("plan", "done", needs=[f"{n.kind}@{n.site}: {n.why}" for n in self.plan.needs])
-        sites = {n.kind: n.site for n in self.plan.needs}
+        sites: dict[str, list[str]] = {}  # a role may be spread over several websites in another dataset
+        for n in self.plan.needs:
+            if n.site not in sites.setdefault(n.kind, []):
+                sites[n.kind].append(n.site)
         jobs = []
         if "tender" in sites and research_tender is not None:
-            jobs.append(asyncio.create_task(self.tender(sites["tender"])))
+            jobs += [asyncio.create_task(self.tender(site), name=f"tender@{site}") for site in sites["tender"]]
         elif "tender" in sites:
             self.board.problem("plan", "tender research module not available")
-        if "specification" in sites:
-            jobs.append(asyncio.create_task(self.specification(sites["specification"], sites.get("materials"))))
+        erp_sites = sites.get("materials", [])
+        if len(erp_sites) > 1:
+            self.board.problem("plan", f"materials on several sites {erp_sites}; only the first is searched")
+        for site in sites.get("specification", []):
+            jobs.append(asyncio.create_task(self.specification(site, erp_sites[0] if erp_sites else None),
+                                            name=f"specification@{site}"))
         if "mails" in sites and research_mail is not None:
-            jobs.append(asyncio.create_task(self.mails(sites["mails"])))
+            jobs += [asyncio.create_task(self.mails(site), name=f"mails@{site}") for site in sites["mails"]]
         elif "mails" in sites:
             self.board.problem("plan", "mail research module not available")
         if not jobs:
@@ -413,7 +441,7 @@ class Orchestrator:
             rework = self.rework.get(worker)
             if rework is None or self.left() < REWORK_SECONDS:
                 continue
-            self.trace.event("verify", "rework", worker=worker, facts=[f.ident for f in facts])
+            self.trace.event("verify", "rework", by=worker, facts=[f.ident for f in facts])
             try:
                 await asyncio.wait_for(rework(facts), max(1.0, self.left()))
             except Exception as error:

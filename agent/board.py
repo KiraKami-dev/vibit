@@ -56,7 +56,7 @@ class Board:
         self.facts[(kind, key)] = fact
         self._event(self._first, kind).set()
         if self.trace:
-            self.trace.event("board", "fact", quiet=True, fact_kind=kind, key=key, worker=worker,
+            self.trace.event("board", "fact", quiet=True, fact_kind=kind, key=key, by=worker,
                              value=value if isinstance(value, (str, int, float)) else str(value)[:300])
         return fact
 

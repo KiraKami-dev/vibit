@@ -16,8 +16,9 @@ from pydantic_ai import Agent
 
 import llm
 from board import Board, Fact
+from research import _slow_model
 
-VERIFY_SECONDS = 120.0
+VERIFY_SECONDS = 150.0  # per call, with the reader's client timeout (a thinking call can take a minute)
 MAX_FACTS = 60  # per call; the board is checked in batches
 
 
@@ -63,8 +64,10 @@ async def verify_board(board: Board, rules: str, reference: str, scenario: str, 
     facts = [f for f in board.facts.values() if not (only_new and f.verdict)]
     if not facts:
         return []
-    agent = Agent(llm.model(), output_type=Verdicts, instructions=INSTRUCTIONS,
-                  model_settings=llm.settings(llm.thinking("verify", True)), retries=2)
+    # Thinking off by default (THINKING_VERIFY=1 turns it on): the quotes carry the evidence, and a thinking call
+    # over a long batch outran its budget in local runs.
+    agent = Agent(_slow_model(), output_type=Verdicts, instructions=INSTRUCTIONS,
+                  model_settings=llm.settings(llm.thinking("verify", False)), retries=2)
     doubtful: list[Fact] = []
     started = time.monotonic()
     for i in range(0, len(facts), MAX_FACTS):
@@ -92,7 +95,7 @@ async def verify_board(board: Board, rules: str, reference: str, scenario: str, 
 
 async def confirm_decision(proposed: str, evidence: str, rules: str) -> DecisionCheck | None:
     """Before signing: the model confirms bid/no_bid from the evidence summary (missing active material, rule 3)."""
-    agent = Agent(llm.model(), output_type=DecisionCheck, model_settings=llm.settings(llm.thinking("verify", True)),
+    agent = Agent(_slow_model(), output_type=DecisionCheck, model_settings=llm.settings(llm.thinking("verify", False)),
                   retries=2, instructions="You check a bid/no_bid decision against the bid rules and the evidence "
                                           "the research established. Decide only from what is listed.")
     try:
