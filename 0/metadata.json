@@ -1,0 +1,104 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M4KYP8ZRGA1504KWMHMSSKY8",
+  "session_id": "31d452ef-43e2-40e8-8e62-18edf113e130",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-10T22:24:44.959481Z",
+  "branch": "monitor-dashboard-tmp",
+  "checkpoints_count": 2,
+  "save_step_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "0e46f7e4857b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 268,
+    "cache_creation_tokens": 390622,
+    "cache_read_tokens": 21317592,
+    "output_tokens": 105488,
+    "api_call_count": 117,
+    "subagent_tokens": {
+      "input_tokens": 352,
+      "cache_creation_tokens": 3666526,
+      "cache_read_tokens": 31011148,
+      "output_tokens": 291685,
+      "api_call_count": 174
+    }
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 4762,
+      "user_lines_removed": 118,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "agent/agent.json": 1,
+        "agent/agent.py": 156,
+        "agent/bidplan.py": 527,
+        "agent/briefing.py": 10,
+        "agent/browser_tools.py": 249,
+        "agent/browsers.py": 5,
+        "agent/evidence.py": 189,
+        "agent/llm.py": 26,
+        "agent/parse.py": 249,
+        "agent/pyproject.toml": 1,
+        "agent/research.py": 647,
+        "agent/submit.py": 442,
+        "agent/tests/test_bidplan.py": 420,
+        "agent/tests/test_parse.py": 149,
+        "agent/tests/test_research.py": 216,
+        "agent/tests/test_submit.py": 241,
+        "agent/uv.lock": 12,
+        "agent/worker.py": 91,
+        "dev/research_check.py": 94,
+        "starter/.gitignore": 6,
+        "starter/README.md": 112,
+        "starter/agent.json": 5,
+        "starter/agent.py": 54,
+        "starter/browsers.py": 31,
+        "starter/models.py": 40,
+        "starter/pyproject.toml": 10,
+        "starter/run.py": 81,
+        "starter/tests/test_kit.py": 210,
+        "starter/uv.lock": 488
+      },
+      "user_removed_per_file": {
+        "agent/agent.json": 1,
+        "agent/agent.py": 14,
+        "agent/briefing.py": 3,
+        "agent/browser_tools.py": 13,
+        "agent/browsers.py": 2,
+        "agent/llm.py": 1,
+        "agent/submit.py": 45,
+        "agent/uv.lock": 1,
+        "agent/worker.py": 38
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 4763,
+      "agent_lines_removed": 118
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 13,
+      "user_lines_removed": 1,
+      "agent_lines_added": 4774,
+      "agent_lines_removed": 118,
+      "user_added_per_file": {
+        "agent/evidence.py": 1,
+        "agent/tests/test_bidplan.py": 12
+      },
+      "user_removed_per_file": {
+        "agent/evidence.py": 1
+      }
+    }
+  ]
+}
