@@ -66,7 +66,9 @@ PLAN_PATIENT_TIMEOUT = 90.0  # per call when the quick mail plan failed: a loade
 # doubtful mail facts go back to their search in the gap pass's first round (side by side with the gap retries)
 # instead of in a round of their own before calc, which held the first answer back by up to 2 minutes
 GAP_REWORK = os.environ.get("AGENT_GAP_REWORK", "1") == "1"
-REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at least this much research time left
+REWORK_SECONDS = 150.0
+TENDER_WATCH_SECONDS = float(os.environ.get("AGENT_TENDER_WATCH_SECONDS", "240"))  # no positions by then: retry
+TENDER_RETRY_SECONDS = 150.0  # research time a second tender attempt needs  # a doubtful fact goes back to its worker only with at least this much research time left
 
 
 async def start_session(session: SiteSession, until: float | None = None) -> SiteSession:
@@ -322,11 +324,45 @@ class Orchestrator:
 
     # ------------------------------------------------------------ workers
 
-    async def tender(self, site: str) -> None:
+    async def _tender_watch(self, site: str, first: asyncio.Task) -> None:
+        """
+        The gap check that cannot wait for the end of research: every position, and so the whole answer, waits on
+        the tender's positions. When none are read TENDER_WATCH_SECONDS after the tender research started (a
+        reader call that keeps timing out held them for ten minutes in one sandbox run), a second tender attempt
+        on fresh tabs runs alongside; whichever completes with positions first wins and the other is stopped.
+        """
+        started = time.monotonic()
+
+        def read() -> bool:
+            return first.done() or bool(self.board.get("position")) or bool(getattr(self.tender_facts, "positions", None))
+
+        while not read() and time.monotonic() - started < TENDER_WATCH_SECONDS:
+            await asyncio.sleep(min(2.0, max(0.01, TENDER_WATCH_SECONDS - (time.monotonic() - started))))
+        if read() or self.left() < TENDER_RETRY_SECONDS:
+            return
+        self.trace.event("gaps", "gap", gap="tender/positions", reason="no positions read yet", early=True,
+                         seconds=round(time.monotonic() - started))
+        retry = asyncio.create_task(self.tender(site, "2"), name=f"tender2@{site}")
+        pending = {first, retry}
+        try:
+            while pending:
+                _, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                if getattr(self.tender_facts, "positions", None):
+                    break
+        finally:  # also at the research deadline: the retry is no job of research(), so it ends here
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+        if getattr(self.tender_facts, "positions", None):
+            self.trace.event("gaps", "gap_filled", gap="tender/positions", early=True,
+                             by="retry" if retry.done() and not retry.cancelled() else "first attempt")
+
+    async def tender(self, site: str, attempt: str = "") -> None:
         board = self.board
         try:
-            session, qa_session = await asyncio.gather(self.session(site, "tender"), self.session(site, "qa"),
-                                                       return_exceptions=True)
+            session, qa_session = await asyncio.gather(self.session(site, f"tender{attempt}"),
+                                                       self.session(site, f"qa{attempt}"), return_exceptions=True)
             if isinstance(session, BaseException):
                 if isinstance(qa_session, BaseException):
                     raise session
@@ -702,7 +738,9 @@ class Orchestrator:
                 sites[n.kind].append(n.site)
         jobs = []
         if "tender" in sites and research_tender is not None:
-            jobs += [asyncio.create_task(self.tender(site), name=f"tender@{site}") for site in sites["tender"]]
+            for site in sites["tender"]:
+                first = asyncio.create_task(self.tender(site), name=f"tender@{site}")
+                jobs += [first, asyncio.create_task(self._tender_watch(site, first), name=f"tender-watch@{site}")]
         elif "tender" in sites:
             self.board.problem("plan", "tender research module not available")
         erp_sites = sites.get("materials", [])

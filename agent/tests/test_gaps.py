@@ -311,5 +311,47 @@ class PendingStroke(unittest.TestCase):
 
 
 
+class TenderWatch(unittest.TestCase):
+    def run_watch(self, first_seconds: float):
+        import orchestrator
+        from orchestrator import Orchestrator
+        o = Orchestrator.__new__(Orchestrator)
+        o.board, o.trace, o.tender_facts = Board(), Events(), None
+        o.research_deadline = time.monotonic() + 600
+        attempts = []
+
+        async def tender(site, attempt=""):
+            attempts.append(attempt)
+            await asyncio.sleep(first_seconds if not attempt else 0.05)
+            o.tender_facts = SimpleNamespace(positions=[attempt or "first"])
+
+        o.tender = tender
+        saved = orchestrator.TENDER_WATCH_SECONDS
+        orchestrator.TENDER_WATCH_SECONDS = 0.1
+
+        async def scenario():
+            first = asyncio.create_task(tender("s"))
+            await o._tender_watch("s", first)
+            return first
+
+        try:
+            first = asyncio.run(scenario())
+        finally:
+            orchestrator.TENDER_WATCH_SECONDS = saved
+        return o, attempts, first
+
+    def test_a_stalled_tender_gets_a_second_attempt_that_wins(self):
+        o, attempts, first = self.run_watch(30)
+        self.assertEqual(attempts, ["", "2"])
+        self.assertTrue(first.cancelled())
+        self.assertEqual(o.tender_facts.positions, ["2"])
+        self.assertEqual(o.trace.kinds("gap_filled")[0]["by"], "retry")
+
+    def test_no_second_attempt_when_positions_come_in_time(self):
+        o, attempts, _ = self.run_watch(0.01)
+        self.assertEqual(attempts, [""])
+        self.assertEqual(o.trace.kinds("gap"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
