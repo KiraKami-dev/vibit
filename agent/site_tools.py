@@ -183,7 +183,8 @@ ROWS_JS = r"""
                   text: clean(a.innerText || a.textContent || a.getAttribute('aria-label')),
                   href: a.tagName === 'A' ? a.getAttribute('href') : ''});
     }
-    const t = clean(text(r)).replace(/( ; )+/g, ' ; ').replace(/^( ; )+|( ; )+$/g, '').replace(/( ?[|;])+$/, '');
+    const t = clean(text(r)).replace(/( [;|] )+/g, m => m.includes('|') ? ' | ' : ' ; ')
+      .replace(/^( [;|] )+/, '').replace(/( ?[|;])+$/, '');
     return {text: t, links};
   });
   return {rows, path: pathOf(container), how, tag: container.tagName.toLowerCase()};
@@ -206,14 +207,14 @@ NEXT_JS = r"""
     if (cs.display === 'none' || cs.visibility === 'hidden') continue;
     const name = clean(el.getAttribute('aria-label') || el.innerText || el.value || el.textContent || el.title);
     if (!name || name.length > 40 || !NEXT.test(name) || STOP.test(name)) continue;
-    const chrome = el.closest('nav,header,footer,[role=navigation],[role=menubar]');
-    if (chrome && !(container && container.contains(el))) continue;
     let where = 2;  // a control before a known list is never its pagination (toolbars, imitation browser chrome)
     if (container) {
       if (container.contains(el)) where = 0;
       else if (container.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) where = 1;
+      if (where === 2) continue;
+    } else if (el.closest('nav,header,footer,[role=navigation],[role=menubar]')) {
+      continue;  // without a known list, site navigation is not pagination (a pagination <nav> after the list is)
     }
-    if (container && where === 2) continue;
     found.push({ref: el.getAttribute('data-ar'), name, where});
   }
   found.sort((a, b) => a.where - b.where);
@@ -357,9 +358,21 @@ def _format(listing: Listing, header: str) -> str:
     return "\n".join(lines)
 
 
-def _hit_notes(text: str) -> list[str]:
-    """What the page says about the result set: too many hits, or none."""
+COUNT = re.compile(r"(?<!maximal )(?<!max\. )(?<!höchstens )(?<!bis zu )(?<!at most )(?<!up to )(?<!limit )"
+                   r"\b\d+\s+(nachrichten|treffer|ergebnisse|einträge|eintraege|datensätze|datensaetze|dokumente|"
+                   r"materialien|positionen|results|hits|entries|records|messages|items|documents)\b|"
+                   r"\b(seite|page)\s+\d+\s+(von|of)\s+\d+\b", re.IGNORECASE)
+
+
+def _hit_notes(text: str, rows: int) -> list[str]:
+    """What the page says about the result set: its count and paging, and, when no rows show, that there are
+    too many or no hits (a page with rows is not a refused search, whatever its help text says)."""
     notes = []
+    said = [" ".join(m.group(0).split()) for m in COUNT.finditer(text)]
+    if said:
+        notes.append("the page says: " + "; ".join(dict.fromkeys(said)))
+    if rows:
+        return notes
     for pattern, kind in ((TOO_MANY, "the site says the search has too many hits"),
                           (NO_HITS, "the site says there are no hits")):
         m = pattern.search(text)
@@ -381,9 +394,9 @@ async def run_search(session: SiteSession, field_ref: str, query: str, submit_re
         view = await session.act("click", submit_ref, _click)
         if view.startswith("No element") or view.startswith("click "):
             return view
-    notes = _hit_notes(_page_text(session))
+    said = _page_text(session)
     listing = await paginate(session)
-    listing.notes = notes + listing.notes
+    listing.notes = _hit_notes(said, len(listing.rows)) + listing.notes
     header = (f"Search for {query!r}: {len(listing.rows)} rows" + (f" over {listing.pages} pages" if listing.pages > 1
               else "") + f" ({listing.how}). URL: {session.page.url}")
     return _format(listing, header)

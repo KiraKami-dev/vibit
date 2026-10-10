@@ -86,7 +86,7 @@ ONE_PER_PAGE = """
 <tr><td><canvas role="img" aria-label="DOC-001"></canvas></td><td>Guide <button>Actions</button></td></tr>
 </tbody></table>
 <p>Page <span id="p">1</span> of 3</p>
-<a href="#" id="next" onclick="next(); return false;">Nächste Seite</a>
+<nav><a href="#" id="next" onclick="next(); return false;">Nächste Seite</a></nav>
 <script>
 let page = 1;
 function next() {
@@ -109,6 +109,8 @@ function go() {
   const q = document.getElementById('q').value;
   const out = document.getElementById('out');
   if (q === 'many') out.innerHTML = '<p>Zu viele Treffer (mehr als 20). Bitte Suche einschränken.</p>';
+  else if (q === 'two') out.innerHTML = '<p>2 Treffer, maximal 20 Treffer</p>'
+    + '<div class="hit"><a href="/h/1">Alpha</a> first</div><div class="hit"><a href="/h/2">Beta</a> second</div>';
   else if (q === 'none') out.innerHTML = '<p>Keine Treffer für diese Suche.</p>';
   else out.innerHTML = '<div class="hit"><a href="/h/1">Hit A ' + q + '</a> 1.234,50 (de-DE)</div>'
                      + '<div class="hit"><a href="/h/2">Hit B ' + q + '</a> 2,345.60 (en-US)</div>';
@@ -201,6 +203,7 @@ class PaginateTest(unittest.TestCase):
         self.assertEqual([r.text for r in listing.rows],
                          ["[img: DOC-001] | Guide Actions", "DOC-002 | Record 2 Actions", "DOC-003 | Record 3 Actions"])
         self.assertEqual(listing.how, "main list of the page")
+        self.assertEqual(listing.pages, 4)  # three pages, then a click that showed nothing new
 
     def test_page_without_a_list_says_so(self):
         async def go():
@@ -228,6 +231,12 @@ class SearchTest(unittest.TestCase):
         self.assertIn("2 rows", out)
         self.assertRegex(out, r'1\. Hit A abc 1\.234,50 \(de-DE\)  links: \[e\d+ "Hit A abc" -> /h/1\]')
         self.assertIn("2. Hit B abc 2,345.60 (en-US)", out)
+
+    def test_help_text_is_no_refusal_when_rows_show(self):
+        out = self._search("two")
+        self.assertIn("2 rows", out)
+        self.assertTrue(out.endswith("Note: the page says: 2 Treffer"), out)
+        self.assertNotIn("too many", out)
 
     def test_too_many_hits_is_reported(self):
         out = self._search("many")
