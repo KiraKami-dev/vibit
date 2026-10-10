@@ -606,3 +606,7 @@ Files:
 <usage><subagent_tokens>172858</subagent_tokens><tool_uses>67</tool_uses><duration_ms>2043554</duration_ms></usage>
 <worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177</worktreePath><worktreeBranch>worktree-agent-a0f71dbdbb8caf177</worktreeBranch></worktree>
 </task-notification>
+
+---
+
+Entire should stay enabled. What are the subagents going? Is there anything to act on or add to it?
