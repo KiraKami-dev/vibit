@@ -606,8 +606,8 @@ def _keep_views(session: SiteSession, views: dict[str, str] | None = None) -> di
     views = {} if views is None else views
     look = session.look
 
-    async def recording_look(offset: int = 0) -> str:
-        out = await look(offset)
+    async def recording_look(offset: int = 0, **options) -> str:  # brief/fresh pass through to look()
+        out = await look(offset, **options)
         if offset == 0:
             views[session.page.url] = _strip_refs(session.view)
         return out

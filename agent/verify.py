@@ -16,10 +16,15 @@ from pydantic_ai import Agent
 
 import llm
 from board import Board, Fact
-from research import _slow_model
 
 VERIFY_SECONDS = 150.0  # per call, with the reader's client timeout (a thinking call can take a minute)
 MAX_FACTS = 60  # per call; the board is checked in batches
+
+
+def _settings():
+    """A verifier call reads a long batch of facts (20 to 50 s thinking off): the whole-call deadline is the
+    reader one, LLM_READ_TIMEOUT, at least 120 s."""
+    return llm.settings(llm.thinking("verify", False), timeout=max(120.0, llm.env_seconds("LLM_READ_TIMEOUT", 120.0)))
 
 
 class Verdict(BaseModel):
@@ -66,8 +71,8 @@ async def verify_board(board: Board, rules: str, reference: str, scenario: str, 
         return []
     # Thinking off by default (THINKING_VERIFY=1 turns it on): the quotes carry the evidence, and a thinking call
     # over a long batch outran its budget in local runs.
-    agent = Agent(_slow_model(), output_type=Verdicts, instructions=INSTRUCTIONS,
-                  model_settings=llm.settings(llm.thinking("verify", False)), retries=2)
+    agent = Agent(llm.model(), output_type=Verdicts, instructions=INSTRUCTIONS,
+                  model_settings=_settings(), retries=2)
     doubtful: list[Fact] = []
     started = time.monotonic()
     for i in range(0, len(facts), MAX_FACTS):
@@ -95,7 +100,7 @@ async def verify_board(board: Board, rules: str, reference: str, scenario: str, 
 
 async def confirm_decision(proposed: str, evidence: str, rules: str) -> DecisionCheck | None:
     """Before signing: the model confirms bid/no_bid from the evidence summary (missing active material, rule 3)."""
-    agent = Agent(_slow_model(), output_type=DecisionCheck, model_settings=llm.settings(llm.thinking("verify", False)),
+    agent = Agent(llm.model(), output_type=DecisionCheck, model_settings=_settings(),
                   retries=2, instructions="You check a bid/no_bid decision against the bid rules and the evidence "
                                           "the research established. Decide only from what is listed.")
     try:
