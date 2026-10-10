@@ -18,25 +18,24 @@ per team). The agent lives in `agent/` and is built on the Atira starter kit. Ke
 - Next: v2 to v4 for field points (research workers for spec, ERP, tender Q&A and mail, wired into `calc.py`). Use
   `git status` and `atira status` for the current state; do not trust dated numbers in this file.
 
-## Tracking runs (always)
+## Tracking runs
 
-Every local run, test run and submission goes into `experiments/runs.jsonl` (append-only, committed), rendered to
-`docs/experiments.md`. Use the wrappers, which run and record in one go, from the repo root:
+Record every test run and submission; they go to `experiments/runs.jsonl` (append-only, `merge=union`, committed with
+the change it measured). Local runs go to `experiments/local-runs.jsonl` (gitignored). `python3 dev/track.py report`
+renders both to `docs/experiments.md` (gitignored). From the repo root:
 
 ```sh
-dev/run-local.sh v1 "what changed" [experiment]   # local, headless; needs `atira models proxy`
 dev/test-run.sh v1 "what changed" [experiment]    # sandbox test run, followed to the end, score recorded
+dev/run-local.sh v1 "what changed" [experiment]   # local, headless; needs `atira models proxy`
 python3 dev/track.py platform <sub_id> --version v1 --experiment NAME --note "..."   # after `atira submit`
 ```
 
 `version` is the base being measured (v1, v2, ...); `experiment` names what a run varies on top of it (e.g.
 `thinking-off-forms`, `model-<name>`, `4-browsers`), so variants of one version compare side by side. Environment
-overrides (`AGENT_*`, `LLM_*`, `THINKING*`, `MAX_STEPS*`) are recorded with every run. Bigger experiments go on an
-`exp/<name>` branch; the recorded commit pins the exact code.
-
-Commit `experiments/runs.jsonl` and `docs/experiments.md` with the code change they measured. After a run that taught
-something (a failure mode, a speed-up, a score change), add a bullet under "What we tried and learned" in
-`docs/experiments.md`. Notes never contain credentials or values copied from the sites.
+overrides (`AGENT_*`, `LLM_*`, `THINKING*`, `MAX_STEPS*`) are recorded, with secrets redacted. `atira test-run`
+uploads untracked files too, so the recorded commit is a pointer; `atira package <id>` shows the exact upload.
+When a run taught something (a failure mode, a speed-up, a score change), add a bullet to `docs/learned.md`. Notes
+never contain credentials or values copied from the sites.
 
 ## Platform docs (source of truth; re-read, they change)
 
