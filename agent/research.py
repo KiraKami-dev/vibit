@@ -754,6 +754,9 @@ MATERIAL_SECONDS = 90.0
 STEP_SECONDS = float(os.environ.get("ERP_STEP_SECONDS", "5"))  # one model step and its browser action, under load
 
 
+UNFINISHED = "materials not all read by the research deadline"
+
+
 def steps(until: float | None, floor: int, cap: int) -> int:
     """A worker's step limit: what the time until `until` allows at about STEP_SECONDS a step, between `floor`
     and `cap` (the cap only stops loops; the deadline stops the worker anyway)."""
@@ -814,6 +817,7 @@ class Erp:
         self.busy = 0  # workers using the ERP now
         self.active_at = 0.0  # last time a worker used it
         self.idle_limit = float(os.environ.get("ERP_IDLE_SECONDS", "120"))  # the ERP drops idle sessions
+        self.partial: dict[str, RequirementResearch] = {}  # requirement -> research whose search has finished
         self.started_at: float | None = None
 
     def left(self) -> float:
@@ -1030,6 +1034,10 @@ class Erp:
         out.inspected = list(dict.fromkeys(c.material_number for c in out.candidates))[:MAX_INSPECT]
         if len(out.candidates) > MAX_INSPECT:
             out.problems.append(f"{len(out.candidates)} hits, inspected the first {MAX_INSPECT}")
+        # until the choice below is made, the research stands with its hits marked unfinished (so_far): a later
+        # choice can still find the exact match among the materials read, and no match omits the position
+        out.problems.append(UNFINISHED)
+        self.partial[req.requirement_id] = out
         links = {c.material_number: c.link for c in out.candidates}
         tasks = [self.material(number, links.get(number, "")) for number in out.inspected]
         # material workers stop early enough for their reader; a record still open at the deadline is left out
@@ -1048,8 +1056,21 @@ class Erp:
                                                             max(1.0, self.left() - 2))
         except asyncio.TimeoutError:
             out.selected, problems = None, [f"{req.requirement_id}: no choice before the research deadline"]
-        out.problems += problems
+        out.problems = [p for p in out.problems if p != UNFINISHED] + problems
         return out
+
+    def so_far(self) -> ErpResearch:
+        """What the ERP stage has at the deadline: finished requirements, the ones whose search finished (hits
+        marked unfinished), and every finished material record."""
+        results = []
+        for k in sorted(self.tasks, key=calc.position_key):
+            task = self.tasks[k]
+            if task.done() and not task.cancelled() and task.exception() is None:
+                results.append(task.result())
+            elif k in self.partial:
+                results.append(self.partial[k])
+        return ErpResearch(requirements=results, materials=self.records(),
+                           seconds=round(time.monotonic() - (self.started_at or time.monotonic()), 1))
 
     def material(self, number: str, link: str = "") -> asyncio.Task:
         """One detail worker per material, shared when several requirements inspect the same one."""
