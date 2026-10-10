@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4KW0F33DCXMCWZA62MJJYHQ",
+  "strategy": "manual-commit",
+  "branch": "worktree-agent-a8687a95aa506b084",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 926,
+    "cache_creation_tokens": 642426,
+    "cache_read_tokens": 165077719,
+    "output_tokens": 318837,
+    "api_call_count": 415,
+    "subagent_tokens": {
+      "input_tokens": 40,
+      "cache_creation_tokens": 240543,
+      "cache_read_tokens": 3727569,
+      "output_tokens": 12915,
+      "api_call_count": 19
+    }
+  }
+}
