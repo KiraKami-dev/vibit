@@ -366,14 +366,16 @@ def _parse_requirement(seen: RequirementSeen, revision: str) -> Requirement:
 
 
 async def research_spec(session: SiteSession, briefing: Briefing, *, context: str = "",
-                        deadline: float | None = None, on_requirement=None, on_revision=None) -> SpecResult:
+                        deadline: float | None = None, on_requirement=None, on_revision=None,
+                        thinking: bool = False) -> SpecResult:
     """
     The current specification revision's requirements: a worker finds the document and its revision history
     (navigation, thinking off), a model decides the current revision (thinking on), the worker opens it and pages
     through it, and a model extracts each page (thinking on, in parallel).
 
     `on_revision()` runs once the governing revision is chosen (e.g. to warm up the ERP), `on_requirement(req)` as
-    soon as each requirement is parsed, so ERP research can start before the last page is read.
+    soon as each requirement is parsed, so ERP research can start before the last page is read. `thinking`
+    turns thinking on for finding the document (a second attempt after a fast one got lost).
     """
     started = time.monotonic()
     result = SpecResult()
@@ -388,7 +390,7 @@ async def research_spec(session: SiteSession, briefing: Briefing, *, context: st
         return result
 
     history, _ = await run_worker(session, FIND_SPEC_GOAL, RevisionHistory, context=goal_context, deadline=deadline,
-                                  max_steps=25, **_worker_kwargs(notes=False))
+                                  max_steps=25, **_worker_kwargs(notes=False, thinking=thinking))
     if history is None or not history.revisions:
         return finish("no revision history found")
     result.document = history.document

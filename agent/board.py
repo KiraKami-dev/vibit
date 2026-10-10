@@ -130,7 +130,9 @@ class MailKindLike(Protocol):
 
 @runtime_checkable
 class MailFactsLike(Protocol):
-    """`research_mail.research_mail(sessions, reference, scenario, brief, *, kinds, deadline)` returns this."""
+    """`research_mail.resolve_mail(results, reference, domain, scenario, mailbox)` returns this; the orchestrator
+    runs `research_kind(session, kind, reference, *, deadline)` per kind over its tabs itself (own deadline,
+    partial results kept) and finds the address with `mailbox_address(session)`."""
     mailbox: str
     approval: Any  # calc.Approval | None
     end_reserves: dict  # key -> object with reserve_per_end_mm (and revision)

@@ -11,11 +11,10 @@ Flow (every arrow is a board event, not a fixed order in code):
                 -> mails (approval, rules, indices, reserves, tariffs, commitments, pools, bonus)
   all facts -> verifier (doubtful facts go back to their worker once) -> calc -> decision confirmed -> answer
 
-The tender Q&A and mail research modules are built separately; they are imported if present and the pipeline
-runs without them (spec + ERP + calc) otherwise. Nothing here names a site, a label or a value of any dataset.
+The tender Q&A and mail research modules are optional imports: without one the pipeline runs on the rest
+(spec + ERP + calc), and fields that need its facts stay blank. The mail side has its own deadline. Nothing here names a site, a label or a value of any dataset.
 """
 import asyncio
-import dataclasses
 import os
 import re
 import time
@@ -37,7 +36,7 @@ from research import Erp, ErpResearch, SpecResult, research_spec, reselect
 from tracing import Trace
 from verify import confirm_decision, verify_board
 
-try:  # built in parallel by another agent; the pipeline degrades without them
+try:  # the pipeline degrades without them
     import research_tender
 except ImportError:  # pragma: no cover
     research_tender = None
@@ -48,6 +47,10 @@ except ImportError:  # pragma: no cover
 
 SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "420"))  # the bid form needs this much before the end
 MAIL_TABS = int(os.environ.get("MAIL_TABS", "4"))
+SPEC_RETRY_SECONDS = 240.0  # research time a second specification attempt needs to still feed the ERP
+SELECT_SECONDS = 75.0  # the final material choice (a model call per requirement, in parallel)
+MAIL_TAB_STAGGER = 4.0  # seconds between the mail tabs' sign-ins
+MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "540"))  # from the orchestrator's start
 FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys before planning from the brief alone
 REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at least this much research time left
 SESSION_START_SECONDS = float(os.environ.get("SESSION_START_SECONDS", "90"))  # one site sign-in, tried twice
@@ -254,6 +257,11 @@ class Orchestrator:
         self.mail_sessions: list[SiteSession] = []
         self.rework: dict[str, object] = {}  # worker -> coroutine function for doubtful facts
         self.blank_hints: dict[str, set[str]] = {}  # position -> answer fields that stay blank
+        self.mailbox = ""
+        self.mail_results: dict[str, object] = {}  # record kind -> research_mail.KindResult
+        # The mail side is the slowest (a planner and about nine record kinds): it gets its own deadline, and
+        # calc runs with whatever records exist by then.
+        self.mail_deadline = min(self.research_deadline, time.monotonic() + MAIL_SECONDS)
 
     def left(self) -> float:
         return self.research_deadline - time.monotonic()
@@ -299,12 +307,15 @@ class Orchestrator:
     def _amendments(self) -> list[calc.Amendment]:
         return list(getattr(self.tender_facts, "amendments", []) or [])
 
-    def _reserves(self) -> dict[str, Decimal]:
+    def _reserves(self, revision: str) -> dict[str, Decimal]:
+        """Per-end reserves by key, only from records for the requirement's own spec revision (they are
+        revision-specific); a record that names no revision counts for any."""
         reserves = getattr(self.mail_facts, "end_reserves", None) or {}
-        return {key: Decimal(str(getattr(entry, "reserve_per_end_mm", entry))) for key, entry in reserves.items()}
+        return {key: Decimal(str(getattr(entry, "reserve_per_end_mm", entry))) for key, entry in reserves.items()
+                if not getattr(entry, "revision", "") or _same_id(getattr(entry, "revision", ""), revision)}
 
     def effective(self, req: Requirement) -> EffectiveRequirement:
-        return effective_requirement(req, amendments=self._amendments(), reserves=self._reserves(),
+        return effective_requirement(req, amendments=self._amendments(), reserves=self._reserves(req.revision),
                                      scenario_date=self.scenario_stamp)
 
     async def specification(self, site: str, erp_site: str | None) -> None:
@@ -331,6 +342,15 @@ class Orchestrator:
 
             self.spec = await research_spec(session, self.briefing, context=context, deadline=self.research_deadline,
                                             on_requirement=on_requirement)
+            if not self.spec.requirements and self.left() > SPEC_RETRY_SECONDS:
+                # The fast (thinking off) navigator sometimes loses its way in the document list: once more, from a
+                # fresh tab, thinking.
+                for problem in self.spec.problems:
+                    board.problem("specification", f"first attempt: {problem}")
+                session = await self.session(site, "spec2")
+                self.spec = await research_spec(session, self.briefing, context=context,
+                                                deadline=self.research_deadline, on_requirement=on_requirement,
+                                                thinking=True)
             for req in self.spec.requirements:
                 on_requirement(req)
             for problem in self.spec.problems:
@@ -365,29 +385,94 @@ class Orchestrator:
     async def mails(self, site: str) -> None:
         board = self.board
         try:
-            first = await self.session(site, "mail")
-            others = await asyncio.gather(*(self.session(site, f"mail{i + 2}") for i in range(MAIL_TABS - 1)),
-                                          return_exceptions=True)  # fewer tabs is slower, not fatal
-            self.mail_sessions = [first, *(s for s in others if isinstance(s, SiteSession))]
+            # The tabs sign in while the planner reads the brief and waits for the tender's keys.
+            # Staggered: several tabs signing in to one website at the same moment hung in local runs.
+            starts = [asyncio.create_task(self._mail_tab(site, i)) for i in range(MAIL_TABS)]
             positions = await board.wait("position", timeout=min(FINDINGS_WAIT, max(1.0, self.left())))
             findings = "\n".join(f"- position {k}: " + ", ".join(
                 f"{f} {v}" for f, v in fact.value.items() if f.endswith("_key") or f == "condition_group")
                 for k, fact in positions.items())
             sites = {s["siteId"]: s["url"] for s in self.task["access"]}
-            kinds = await research_mail.plan_searches(self.task["brief"], sites, findings)
-            # The tabs carry tagged names (site:mailN); kinds planned on this website are searched in them.
-            here = self.mail_sessions[0].name
-            self.mail_kinds = [dataclasses.replace(k, site=here) if getattr(k, "site", site) == site else k
-                               for k in kinds]
-            await self._research_mail(self.mail_kinds)
+            kinds = await asyncio.wait_for(research_mail.plan_searches(self.task["brief"], sites, findings),
+                                           max(1.0, self.mail_deadline - time.monotonic()))
+            self.mail_kinds = [k for k in kinds if k.site == site]
+            elsewhere = [f"{k.name} on {k.site}" for k in kinds if k.site != site]
+            if elsewhere:  # another mail site would be its own job (the plan names every website it needs)
+                board.problem("mails", f"planned on other websites, not searched here: {elsewhere}")
+            self.trace.event("mails", "plan", kinds=[f"{k.name}: {k.subject} / {k.sender}" for k in self.mail_kinds])
+            await self._research_mail(self.mail_kinds, starts=starts)
         except Exception as error:
             board.problem("mails", f"{type(error).__name__}: {str(error)[:200]}")
         finally:
             board.finish("mail")
 
-    async def _research_mail(self, kinds: list) -> None:
-        facts = await research_mail.research_mail(self.mail_sessions, self.reference, self.scenario,
-                                                  self.task["brief"], kinds=kinds, deadline=self.research_deadline)
+    async def _mail_tab(self, site: str, i: int) -> SiteSession:
+        await asyncio.sleep(MAIL_TAB_STAGGER * i)
+        return await self.session(site, f"mail{i + 1}")
+
+    async def _mailbox(self) -> str:
+        """The bidder's own address (its domain authorises the record senders): the first tab that shows it."""
+        if not self.mailbox:
+            for session in self.mail_sessions:
+                self.mailbox = await research_mail.mailbox_address(session)
+                if self.mailbox:
+                    break
+        return self.mailbox
+
+    async def _research_mail(self, kinds: list, deadline: float | None = None, starts: list | None = None) -> None:
+        """
+        Search the record kinds over the mail tabs (one kind per tab at a time) until the mail deadline, then
+        resolve whatever records were read: a kind still open at the deadline is dropped, the rest go to calc.
+        Results accumulate, so a rework of some kinds keeps the others. `starts` are tabs still signing in; each
+        joins as soon as it is ready (a tab that never opens just leaves the work to the others).
+        """
+        queue: asyncio.Queue = asyncio.Queue()
+        for kind in kinds:
+            queue.put_nowait(kind)
+        deadline = deadline or self.mail_deadline
+
+        address: list[asyncio.Task] = []
+
+        async def tab(source) -> None:
+            if isinstance(source, SiteSession):
+                session = source
+            else:
+                try:
+                    session = await source
+                except Exception:
+                    return
+                self.mail_sessions.append(session)
+            if not address:  # the first open tab also looks up the mailbox address, alongside its searches
+                address.append(asyncio.create_task(self._mailbox()))
+            while not queue.empty() and time.monotonic() < deadline - 20:
+                kind = queue.get_nowait()
+                try:
+                    self.mail_results[kind.name] = await research_mail.research_kind(
+                        session, kind, self.reference, deadline=deadline)
+                except Exception as error:  # one failed kind must not cost the others
+                    self.board.problem("mails", f"{kind.name}: {type(error).__name__}: {str(error)[:160]}")
+
+        tabs = [asyncio.create_task(tab(s)) for s in (starts or list(self.mail_sessions))]
+        _, late = await asyncio.wait(tabs, timeout=max(1.0, deadline - time.monotonic()))
+        for job in late:
+            job.cancel()
+        for start in starts or []:
+            if not start.done():
+                start.cancel()
+        if late:
+            await asyncio.gather(*late, return_exceptions=True)
+        open_kinds = [k.name for k in kinds if k.name not in self.mail_results]
+        if open_kinds:
+            self.board.problem("mails", f"mail deadline: {open_kinds} not read; their fields stay blank")
+        if not self.mail_sessions:
+            raise ConnectionError("no mail tab could be opened")
+        mailbox = await address[0] if address else await self._mailbox()
+        facts = research_mail.resolve_mail(list(self.mail_results.values()), self.reference,
+                                           mailbox.split("@", 1)[1] if "@" in mailbox else "", self.scenario, mailbox)
+        if not mailbox:
+            facts.problems.append("mailbox address not found: no sender could be authorised")
+        for problem in facts.problems:
+            self.board.problem("mails", problem)
         self.mail_facts = facts
         site = self.mail_sessions[0].site["siteId"].split(":")[0]
         used = {}
@@ -445,7 +530,7 @@ class Orchestrator:
         names = {f.key.split("/")[0] for f in doubtful}
         kinds = [k for k in self.mail_kinds if k.name in names]
         if kinds and self.mail_sessions:
-            await self._research_mail(kinds)
+            await self._research_mail(kinds, min(self.research_deadline, time.monotonic() + REWORK_SECONDS))
 
     async def verify(self) -> None:
         doubtful = await verify_board(self.board, self.rules, self.reference, self.briefing.scenario_date)
@@ -469,7 +554,11 @@ class Orchestrator:
         if self.erp is None or not self.requirements:
             return
         effective = [self.effective(req) for req in self.requirements.values()]
-        self.chosen = await reselect(effective, self.erp, self.trace)
+        try:  # one hung model call must not hold the bid; the ERP worker's own choices stand in
+            self.chosen = await asyncio.wait_for(reselect(effective, self.erp, self.trace), SELECT_SECONDS)
+        except Exception as error:
+            self.board.problem("select", f"reselect: {type(error).__name__}; the ERP workers' choices are used")
+            self.chosen = {r.requirement_id: r.selected for r in self.erp.requirements}
         self.trace.event("select", "done", chosen=self.chosen)
 
     def _unknown_clauses(self, p, clause, pool, bonus) -> None:
