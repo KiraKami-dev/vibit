@@ -1,2 +1,4 @@
 docs/experiments.md
 experiments/local-runs.jsonl
+docs/dashboard.html
+experiments/run-cache.json

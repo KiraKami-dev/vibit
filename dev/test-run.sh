@@ -14,4 +14,4 @@ atira test-run ./agent --no-open --follow </dev/null | tee "$log"
 run=$(grep -o 'run_[0-9a-f]*' "$log" | head -1)
 rm -f "$log"
 [ -n "$run" ] || { echo "No run id in the output; record it later with: $record"; exit 1; }
-eval "$(echo "$record" | sed "s/RUN/$run/")" && python3 dev/track.py report
+eval "$(echo "$record" | sed "s/RUN/$run/")" && python3 dev/track.py report && python3 dev/dashboard.py

@@ -18,5 +18,5 @@ status=$?
 trace=$(ls "$traces"/run-*.jsonl 2>/dev/null | head -1)
 [ -n "$trace" ] || { echo "The agent wrote no trace; nothing recorded."; exit $status; }
 python3 dev/track.py local --trace "$trace" --version "$version" --experiment "$experiment" --note "$note" \
-  --commit "$commit" --dirty "$dirty" && python3 dev/track.py report
+  --commit "$commit" --dirty "$dirty" && python3 dev/track.py report && python3 dev/dashboard.py
 exit $status
