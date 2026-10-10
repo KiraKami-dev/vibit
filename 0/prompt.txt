@@ -1,0 +1,67 @@
+Can you set this up or guid eme thorugh.  https://ehl-challenge.atira.ai/team In case you cannot access it: 
+EHL Challenge
+START
+CHALLENGE
+LEADERBOARD
+YOUR TEAM
+J
+JOSTENG
+⌄
+YOUR TEAM
+error404.ai
+Build, test and submit your agent system.
+OVERVIEW
+RUNS & SUBMISSIONS
+MEMBERS
+SECRETS
+MODELS
+Connected as a team member.
+Live · updated 10 Oct 2026 at 13:57 UTC
+Overview
+Where your team stands, and what to do next.
+NEXT STEPS
+2 of 5 done
+✓
+Create or join a team (done)
+✓
+Install the CLI and sign in (done)
+3
+Scout the websites (current)
+Run your agent system on your computer against the public websites, with the scouting logins. The starter kit is a minimal skeleton to start from. Keep atira models proxy running in a second terminal for the free models.
+MACOS AND LINUX
+eval "$(atira scout --env)"
+WINDOWS, IN POWERSHELL
+atira scout --env | Out-String | Invoke-Expression
+4
+Start a test run (upcoming)
+5
+Submit for a ranked run (upcoming)
+SUBMISSIONS
+0
+Packages sent in for a ranked run.
+TEST RUNS
+0
+Sandbox runs, never ranked.
+PUBLIC RANK
+–
+On the public dataset, once a submission is scored.
+PRIVATE RANK
+–
+From the final run on a private dataset, which weighs most for the winners. Shown once the organizers publish it.
+FINAL PRIVATE EVALUATION
+Best of 3 (opt-in)
+In the final evaluation on the private dataset, your latest passed submission runs up to 3 times instead of once, and your best run counts. If your agent uses your own model keys, those calls can cost up to 3 times as much.
+Default: one run. You can change this until the final run starts.
+How ranking works: eligible answers first (they meet the challenge's must-haves), then higher quality, then lower cost × time.
+LATEST SUBMISSIONS
+No submissions yet. When your test runs look right, run atira submit . from your agent folder.
+LATEST TEST RUNS
+No test runs yet. From your agent folder, run atira test-run .; it opens live.
+ALL RUNS AND SUBMISSIONS →
+ATIRA EHL CHALLENGE
+GETTING STARTED
+CHALLENGE
+LEADERBOARD
+YOUR TEAM
+ANNOUNCEMENTS
+FOR AGENTS
