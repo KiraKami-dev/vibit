@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Q3dWM4MwQxodaecdqPRibc",
+  "agent_id": "a8687a95aa506b084",
+  "subagent_type": "general-purpose",
+  "task_description": "Mail research reliability",
+  "token_usage": {
+    "input_tokens": 210,
+    "cache_creation_tokens": 481269,
+    "cache_read_tokens": 13956483,
+    "output_tokens": 55358,
+    "api_call_count": 105
+  },
+  "started_at": "2026-10-10T23:09:16.501395+02:00",
+  "completed_at": "2026-10-10T23:51:37.212911+02:00"
+}
