@@ -19,6 +19,7 @@ effective_requirement` takes them, and `reselect` lets the model choose again on
 ERP stage inspects every hit of the group.
 """
 import asyncio
+import contextlib
 import inspect
 import os
 import re
@@ -628,7 +629,7 @@ search(field_ref, query, submit_ref) on its search field with that group as the 
 returns every hit row with its links in one step. As soon as hits show, return every hit of that group with its
 link target and the technical attributes (bore, stroke, pressure, mounting, certification) the rows show; never
 refine a search that already lists hits. If the site refuses the search or shows no hits, change the query or the
-search field it offers. Only if the rows show no attributes, open the hits to read them. The materials are
+search field it offers. If a sign-in or notice page interrupts, get past it. Only if the rows show no attributes, open the hits to read them. The materials are
 compared with the requirement later ({want})."""
 
 DETAIL_GOAL = """\
@@ -803,10 +804,16 @@ class Erp:
         # a few tabs at once: every tab is one more page load on a site that slows down under load
         self.tabs = asyncio.Semaphore(int(os.environ.get("ERP_TABS", "6")))
         self.idle_pages: list[Page] = []  # open tabs a finished worker left, reused instead of a fresh start
+        self.opening = asyncio.Lock()  # fresh tabs sign in one after another
         self.signin = asyncio.Lock()  # one sign-in at a time
         self.signins = 0
+        self.checking = asyncio.Lock()  # one idle check at a time
         self.gate = asyncio.Lock()  # one tab gets past an entry gate at a time
         self.passes = 0  # gates passed; a tab that waited for another one's pass just opens its view again
+        self.home = ""  # the path the start address lands on while signed in and past the gate
+        self.busy = 0  # workers using the ERP now
+        self.active_at = 0.0  # last time a worker used it
+        self.idle_limit = float(os.environ.get("ERP_IDLE_SECONDS", "120"))  # the ERP drops idle sessions
         self.started_at: float | None = None
 
     def left(self) -> float:
@@ -823,21 +830,38 @@ class Erp:
         return self.ready
 
     async def _warm_up(self) -> None:
-        try:
-            session = await self._tab("start")
-        except Exception as error:  # the workers' own tabs try again
-            self.trace.event("erp", "warm_up_failed", error=f"{type(error).__name__}: {str(error)[:160]}")
-            return
-        try:
-            async with self.gate:
+        async with self.gate:
+            session = await self._worker_tab("start")
+            if session is None:  # the workers' own tabs try again
+                return
+            try:
                 await self._pass_gate(session)
-        finally:
-            await self._close(session)
+            finally:
+                await self._close(session)
 
     async def _pass_gate(self, session: SiteSession) -> None:
+        """A model gets the tab past the sign-in / notice gate; then the start address shows where a signed-in
+        tab lands (`home`). Called with `gate` held."""
         await run_worker(session, GATE_GOAL, Ready, deadline=self._until(0), max_steps=8,
                          **_worker_kwargs(notes=False, grounded=False))
         self.passes += 1
+        async with session.lock:
+            await session._goto(self.site["url"])
+        await session.look()
+        if not session.view.startswith("(") and not await self._signin_form(session):
+            self.home = urlparse(session.page.url).path or "/"
+        self.active_at = time.monotonic()
+
+    @staticmethod
+    async def _signin_form(session: SiteSession) -> bool:
+        try:
+            return bool(await session.page.locator("input[type=password]:visible").count())
+        except Exception:
+            return False
+
+    async def _at_home(self, session: SiteSession) -> bool:
+        return bool(self.home) and (urlparse(session.page.url).path or "/") == self.home \
+            and not await self._signin_form(session)
 
     async def recover(self, session: SiteSession) -> None:
         """The tab did not reach its view (session dropped, entry gate): get past the gate once for all tabs."""
@@ -847,6 +871,20 @@ class Erp:
                 return
             self.trace.event(session.name, "erp_recover", url=session.page.url)
             await self._pass_gate(session)
+
+    async def ensure(self) -> None:
+        """Before a worker starts: the session signed in. After the ERP sat idle (it drops idle sessions), one tab
+        checks it and passes the gate again if needed, before the other workers pile in and sign in at once."""
+        await self.warm_up()
+        if self.busy or time.monotonic() - self.active_at < self.idle_limit:
+            return
+        async with self.checking:
+            if self.busy or time.monotonic() - self.active_at < self.idle_limit:
+                return  # another worker checked meanwhile
+            session = await self._worker_tab("check")  # a tab that does not land at home passes the gate again
+            if session is not None:
+                await self._close(session)
+            self.active_at = time.monotonic()
 
     def _guard_login(self, session: SiteSession) -> None:
         """Sign-ins one tab at a time; a tab that waited while another signed in first reloads, since the shared
@@ -876,7 +914,7 @@ class Erp:
 
     async def _tab(self, tag: str, url: str | None = None) -> SiteSession:
         """A tab in the shared context (a reused one when a finished worker left it); `tag` names it in the
-        trace. With `url`, the tab opens that link target."""
+        trace. With `url`, the tab opens that link target, else the start address."""
         session = SiteSession({**self.site, "siteId": f"{self.site['siteId']}:{tag}"}, self.context, self.trace)
         self._guard_login(session)
         session.recover = lambda: self.recover(session)  # type: ignore[attr-defined]
@@ -888,13 +926,32 @@ class Erp:
             session.scripted = True  # the context already has the popup closer
             session._watch(page)
             if not url:
-                await session._goto(self.site["url"])
+                async with session.lock:
+                    await session._goto(self.site["url"])
                 await session.look()
         else:
-            await session.start()
+            async with self.opening:
+                await session.start()
         if url:
             await self.open(session, url)
+        elif self.home and not await self._at_home(session):  # dropped: one tab passes the gate for all
+            await self.recover(session)
+            async with session.lock:
+                await session._goto(self.site["url"])
+            await session.look()
         return session
+
+    @contextlib.asynccontextmanager
+    async def _slot(self):
+        """A tab slot for one worker, with the session checked first."""
+        await self.ensure()
+        async with self.tabs:
+            self.busy += 1
+            try:
+                yield
+            finally:
+                self.busy -= 1
+                self.active_at = time.monotonic()
 
     async def open(self, session: SiteSession, url: str) -> bool:
         """Open a link target a model reported, with the same rule as the goto tool: only on this website. A tab
@@ -942,13 +999,12 @@ class Erp:
 
     async def requirement(self, req: EffectiveRequirement) -> RequirementResearch:
         out = RequirementResearch(requirement_id=req.requirement_id)
-        await self.warm_up()
         report = None
         until = self._until(MATERIAL_SECONDS)
         for attempt in range(2):  # retry once: the ERP sometimes drops the session mid-search
             if self.left() < MATERIAL_SECONDS + 20:
                 break
-            async with self.tabs:
+            async with self._slot():
                 session = await self._worker_tab(req.requirement_id if not attempt else f"{req.requirement_id}+")
                 if session is None:
                     continue
@@ -1010,7 +1066,7 @@ class Erp:
             if self.left() < (READ_SECONDS + 30 if not attempt else MATERIAL_SECONDS + 30):
                 break  # a second pass only with time for it; the first record stays either way
             coverage = None
-            async with self.tabs:
+            async with self._slot():
                 session = await self._worker_tab(number if not attempt else f"{number}+", link or None)
                 if session is None:
                     continue
