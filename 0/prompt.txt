@@ -3011,3 +3011,56 @@ If this event is something the user would act on now, send a PushNotification. R
 <usage><subagent_tokens>231268</subagent_tokens><tool_uses>86</tool_uses><duration_ms>1840731</duration_ms></usage>
 <worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-acdfec2d75a7ea016</worktreePath><worktreeBranch>worktree-agent-acdfec2d75a7ea016</worktreeBranch></worktree>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a5fed577ffefa0386</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a5fed577ffefa0386.output</output-file>
+<status>completed</status>
+<summary>Agent "Add Anthropic backend option" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Neither Haiku run reached quality 100: run 1 scored 54 and run 2 scored 42.1. The Anthropic backend itself worked: all 634 Claude calls answered 200, with no 429s and no 400s. Because both runs fell short, I did not start a third, and I made no code changes.
+
+**Setup**
+- The team secret `ANTHROPIC_API_KEY` exists (checked by name only).
+- Local smoke call through the backend, one typed answer each: thinking off 1.9 s, thinking on 4.2 s.
+- The export of `8cdb0cb` is at `/Users/jonasstenglein/.claude/jobs/064ce75e/tmp/haiku-export/agent`. Only its `agent.json` run command was changed, and the dry run showed no `.env`.
+- Both runs are recorded in the main repo's `experiments/runs.jsonl` with `--experiment model-haiku-5-5 --commit 8cdb0cb --dirty no`. Not committed.
+
+| | Haiku run 1 `run_c22233db5d990663` | Haiku run 2 `run_6916caf75cb4fefd` | Qwen at 100 `run_262c91398cd64598` |
+| --- | --- | --- | --- |
+| Quality | 54 | 42.1 | 100 |
+| Duration | 7:29 | 9:00 | 7:33 |
+| Cost | $0.129 (345 calls) | $0.090 (289 calls) | $0.110 (304 calls) |
+| Latency p50 / p95 | 1.5 s / 4.8 s | 1.5 s / 3.3 s | 3.6 s / 18 s |
+| Total time inside model calls | 15:23 | 13:11 | 29:50 (22:27 of it queue wait) |
+
+**Cost:** all of it is Anthropic; the runs made no Qwen calls. Prompt caching works: the platform counts about 2.2k–2.8k uncached input tokens per run and about 1.1M cached. Per-run cost ends up about the same as Qwen.
+
+**Speed:** Haiku answers about twice as fast per call with no queue. The runs were not shorter overall, because website steps and the mail search budgets set the wall time.
+
+**Thinking modes:** both work. The kept logs show 103 thinking-on calls (median 2.0 s, max 7 s) and the rest thinking-off, all 200.
+
+**The 401s are harmless (inferred).** Each run ends with two `401 authentication_error` lines from the sign/submit worker, 0.1 s after the TAN was typed and submit clicked. The bid was already signed and scored at that point, and the platform shows "Failures: none" for both runs. So the proxy most likely refuses calls once the run token closes at submission, which is not a key or backend problem.
+
+**Score breakdown**
+- **Run 1:** decision, tender reference and discount scored; positions 01.02–01.04 got full points. 01.01 and 01.05 got 0, and so did the total, withdrawn answer and metal index window.
+  - 01.01 was left out of the form; the form worker reported it as omitted.
+  - 01.05: the form worker left the certification field empty three times. On 01.04 it correctly chose "Ohne Zertifizierung". That looks like a Haiku form-filling mistake (thinking off).
+  - The verifier wanted no_bid; it was overruled.
+- **Run 2:** 01.01 got full points and 01.05 got 9.1, missing surcharge, rebate and unit price. 01.02–01.04 got 0, along with the total and the index window; the withdrawn answer scored.
+  - The answer contained only 01.01 and 01.05.
+
+**Known main bugs versus Haiku**
+- **Known bugs:** both runs logged "A-2 / A-4 stroke pending (per-end reserve …)". In run 2 that matches the missing positions. Run 2 also lost 210 s waiting on the webmail sign-in ("still loading"). Mail searches hit the 20-step cap, and the setup-pool search ran out of budget once in each run.
+- **Probably Haiku:** the metal index window scored 0 in both runs, although the right index mail was found and read; the Qwen run at 100 scored it. Plus the empty certification on 01.05 in run 1.
+- Separating these cleanly needs a Haiku rerun once the reserve and ERP fixes are on main.
+
+**Next steps (your call)**
+- Rebase this branch on main once the reliability fixes land, then run Haiku again.
+- Optionally try thinking on for the form step (`THINKING_FORM=1`) and the readers.
+- Only after that would a third run say much.</result>
+<usage><subagent_tokens>263377</subagent_tokens><tool_uses>32</tool_uses><duration_ms>784907</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a5fed577ffefa0386</worktreePath><worktreeBranch>worktree-agent-a5fed577ffefa0386</worktreeBranch></worktree>
+</task-notification>
