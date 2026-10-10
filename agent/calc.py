@@ -8,12 +8,13 @@ only at the steps the rules name.
 import math
 import re
 from collections import defaultdict
-from datetime import date, datetime
+from collections.abc import Iterable
+from datetime import date, datetime, timezone
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 
 CENT = Decimal("0.01")
 HUNDRED = Decimal(100)
@@ -33,8 +34,51 @@ def position_key(position: str) -> tuple:
     return tuple((0, int(part), "") if part.isdigit() else (1, 0, part) for part in re.findall(r"\d+|\D+", position))
 
 
+# ---------------------------------------------------------------- dates and timestamps
+#
+# The scenario date is a UTC timestamp ('Z'); site records come as timestamps with an offset, as naive timestamps or
+# as plain dates. "No later than the scenario date" (rules 1, 13, 14, 21) is read on the finest grain both sides
+# share: two timestamps compare as instants (a record at 10:00 does not apply to a scenario at 09:00 the same day),
+# anything involving a date-only value compares by calendar day (a date-only record on the scenario day applies).
+# Naive timestamps are taken as UTC, the scenario's clock.
+
+
 def _day(value: date | datetime) -> date:
     return value.date() if isinstance(value, datetime) else value
+
+
+def _instant(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _order(value: date | datetime) -> datetime:
+    """A total order over dates and timestamps (a date sorts as its UTC midnight)."""
+    if isinstance(value, datetime):
+        return _instant(value)
+    return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+
+
+def _not_later(value: date | datetime, cutoff: date | datetime) -> bool:
+    """Inclusive 'value <= cutoff' with the timestamp-vs-date semantics above."""
+    if isinstance(value, datetime) and isinstance(cutoff, datetime):
+        return _instant(value) <= _instant(cutoff)
+    return _day(value) <= _day(cutoff)
+
+
+def _parse_stamp(value):
+    """Keep a date-only string a date and a timed string a datetime (pydantic would make 'T00:00:00Z' a date)."""
+    if isinstance(value, str):
+        text = value.strip()
+        if len(text) > 10:
+            try:
+                return datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return value
+    return value
+
+
+Stamp = Annotated[date | datetime, BeforeValidator(_parse_stamp)]
+"""A date or a timestamp, as the source states it; compared with _not_later / ordered with _order."""
 
 
 # ---------------------------------------------------------------- input models
@@ -69,8 +113,8 @@ class PriceScale(BaseModel):
 
 class PriceCondition(BaseModel):
     """One ERP price condition record (rule 22). Price unit is the number of pieces the price refers to (1, 100)."""
-    valid_from: date
-    valid_to: date | None = None
+    valid_from: Stamp
+    valid_to: Stamp | None = None
     currency: str = "EUR"
     fx_key: str | None = None
     price_unit: int = Field(default=1, gt=0)
@@ -92,8 +136,8 @@ class Material(BaseModel):
 class MetalIndexRate(BaseModel):
     """EUR per kg; a missing bound means the window is open on that side."""
     rate: Decimal
-    valid_from: date | None = None
-    valid_to: date | None = None
+    valid_from: Stamp | None = None
+    valid_to: Stamp | None = None
 
 
 class PackagingTariff(BaseModel):
@@ -172,7 +216,7 @@ class PositionInput(BaseModel):
 
 class BidInput(BaseModel):
     tender_reference: str
-    scenario_date: date
+    scenario_date: Stamp = Field(description="The scenario date and time (UTC) as the brief states it")
     positions: list[PositionInput]
     approval: Approval | None = None
     fx_rates: dict[str, Decimal] = Field(default_factory=dict, description="FX key (or currency) -> EUR per unit")
@@ -251,19 +295,33 @@ class BidResult(BaseModel):
 
 class QuantityChange(BaseModel):
     number: str = Field(description="Q&A answer number")
-    date: datetime
+    date: Stamp
     position: str
     quantity: int
 
 
-def resolve_quantity(tender_quantity: int, position: str, changes: list[QuantityChange], withdrawn: set[str],
-                     scenario_date: date | None = None) -> int:
-    """Rules 1 and 13: latest non-withdrawn change for the position (not future-dated), else the tender quantity."""
-    live = [c for c in changes if c.position == position and c.number not in withdrawn
-            and (scenario_date is None or _day(c.date) <= scenario_date)]
+class Withdrawal(BaseModel):
+    """A Q&A answer that withdraws an earlier answer by its number (rule 13); dated like any other record."""
+    number: str = Field(description="Q&A answer number of the withdrawal itself")
+    date: Stamp
+    withdraws: str = Field(description="Number of the withdrawn answer")
+
+
+def resolve_quantity(tender_quantity: int, position: str, changes: list[QuantityChange],
+                     withdrawn: Iterable[str | Withdrawal], scenario_date: date | datetime | None = None) -> int:
+    """
+    Rules 1, 13, 21: latest non-withdrawn change for the position, else the tender quantity.
+
+    Changes and withdrawals dated after the scenario date never apply: a future withdrawal does not remove a change.
+    Withdrawals given as bare answer numbers are taken as applicable (the caller has already dated them).
+    """
+    gone = {w if isinstance(w, str) else w.withdraws for w in withdrawn
+            if isinstance(w, str) or scenario_date is None or _not_later(w.date, scenario_date)}
+    live = [c for c in changes if c.position == position and c.number not in gone
+            and (scenario_date is None or _not_later(c.date, scenario_date))]
     if not live:
         return tender_quantity
-    return max(live, key=lambda c: (c.date, position_key(c.number))).quantity
+    return max(live, key=lambda c: (_order(c.date), position_key(c.number))).quantity
 
 
 def to_pieces(quantity: int, unit: Unit, pieces_per_set: int | None) -> int:
@@ -277,25 +335,29 @@ def to_pieces(quantity: int, unit: Unit, pieces_per_set: int | None) -> int:
 
 class Amendment(BaseModel):
     """A scoped technical amendment from the tender Q&A (rule 14)."""
-    date: datetime
+    date: Stamp
     revision: str
     requirement: str
     attributes: dict[str, Decimal | str]
 
 
 def apply_amendments(attributes: dict[str, Decimal | str], amendments: list[Amendment], revision: str,
-                     requirement: str, scenario_date: date | None = None) -> dict[str, Decimal | str]:
-    """Rule 14: only amendments naming this revision and requirement; the latest dated one wins per attribute."""
+                     requirement: str, scenario_date: date | datetime | None = None) -> dict[str, Decimal | str]:
+    """
+    Rule 14: only amendments naming this revision and requirement; the latest dated one wins per attribute.
+
+    Amendments dated after the scenario date (by timestamp when both have one) never apply.
+    """
     result = dict(attributes)
     latest: dict[str, datetime] = {}
     for a in amendments:
         if a.revision != revision or a.requirement != requirement:
             continue
-        if scenario_date is not None and _day(a.date) > scenario_date:
+        if scenario_date is not None and not _not_later(a.date, scenario_date):
             continue
         for key, value in a.attributes.items():
-            if key not in latest or a.date >= latest[key]:
-                latest[key] = a.date
+            if key not in latest or _order(a.date) >= latest[key]:
+                latest[key] = _order(a.date)
                 result[key] = value
     return result
 
@@ -326,25 +388,31 @@ class DatedRecord(BaseModel):
     """An authority record (mail) reduced to what rule 21 checks."""
     reference: str
     sender: str
-    date: datetime
+    date: Stamp
     key: str = ""
 
 
-def latest_authoritative[R: DatedRecord](records: list[R], reference: str, scenario_date: date, sender_local: str,
-                                         bidder_domain: str) -> R | None:
-    """Rule 21: latest record for the exact reference from local@domain, dated no later than the scenario date."""
+def latest_authoritative[R: DatedRecord](records: list[R], reference: str, scenario_date: date | datetime,
+                                         sender_local: str, bidder_domain: str) -> R | None:
+    """
+    Rule 21: latest record for the exact reference from local@domain, dated no later than the scenario date.
+
+    Used for approvals (16), FX fixing, packaging tariffs, commitments, setup pools, bonus and metal index mails.
+    A record on the scenario day but after the scenario time is future-dated and never applies.
+    """
     sender = f"{sender_local}@{bidder_domain}".casefold()
     ok = [r for r in records if r.reference.strip() == reference.strip() and r.sender.strip().casefold() == sender
-          and _day(r.date) <= scenario_date]
-    return max(ok, key=lambda r: r.date) if ok else None
+          and _not_later(r.date, scenario_date)]
+    return max(ok, key=lambda r: _order(r.date)) if ok else None
 
 
-def valid_condition(conditions: list[PriceCondition], on: date) -> PriceCondition:
+def valid_condition(conditions: list[PriceCondition], on: date | datetime) -> PriceCondition:
     """Rule 4: the condition whose inclusive validity contains the date (latest start if several)."""
-    valid = [c for c in conditions if c.valid_from <= on and (c.valid_to is None or on <= c.valid_to)]
+    valid = [c for c in conditions
+             if _not_later(c.valid_from, on) and (c.valid_to is None or _not_later(on, c.valid_to))]
     if not valid:
         raise CalcError(f"no price condition valid on {on}")
-    return max(valid, key=lambda c: c.valid_from)
+    return max(valid, key=lambda c: _order(c.valid_from))
 
 
 def reached_scale(scales: list[PriceScale], pieces: int) -> PriceScale:
@@ -355,14 +423,27 @@ def reached_scale(scales: list[PriceScale], pieces: int) -> PriceScale:
     return max(reached, key=lambda s: s.min_quantity)
 
 
-def metal_rate(rates: list[MetalIndexRate], on: date) -> Decimal:
-    """Rule 28: the rate whose inclusive window contains the date; a single unwindowed rate applies as is."""
-    hits = [r for r in rates
-            if (r.valid_from is None or r.valid_from <= on) and (r.valid_to is None or on <= r.valid_to)]
+def metal_rate(rates: list[MetalIndexRate], on: date | datetime) -> Decimal:
+    """
+    Rule 28: the rate whose inclusive window contains the date; a single unwindowed rate applies as is.
+
+    Overlapping windows: the one that became valid latest wins; equally late windows (or several unwindowed rates)
+    with different rates are contradictory and raise rather than silently taking the last one listed.
+    """
+    hits = [r for r in rates if (r.valid_from is None or _not_later(r.valid_from, on))
+            and (r.valid_to is None or _not_later(on, r.valid_to))]
     if not hits:
         raise CalcError(f"no metal index rate valid on {on}")
     windowed = [r for r in hits if r.valid_from is not None or r.valid_to is not None]
-    return (windowed or hits)[-1].rate
+    if windowed:
+        def start(r: MetalIndexRate) -> datetime:
+            return _order(r.valid_from) if r.valid_from is not None else datetime.min.replace(tzinfo=timezone.utc)
+        latest_start = max(start(r) for r in windowed)
+        hits = [r for r in windowed if start(r) == latest_start]
+    candidates = {r.rate for r in hits}
+    if len(candidates) > 1:
+        raise CalcError(f"ambiguous metal index rates valid on {on}: {sorted(candidates)}")
+    return candidates.pop()
 
 
 def bonus_credit(total: Decimal, bands: list[BonusBand]) -> Decimal:
