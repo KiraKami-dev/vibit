@@ -427,3 +427,50 @@ Also the challenge providers says one needs like multi agents to get good scores
 <usage><subagent_tokens>152873</subagent_tokens><tool_uses>79</tool_uses><duration_ms>1157711</duration_ms></usage>
 <worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aca9e958470992e7f</worktreePath><worktreeBranch>worktree-agent-aca9e958470992e7f</worktreeBranch></worktree>
 </task-notification>
+
+---
+
+Yeah just schedule some more exploration or testing agents if needed.
+
+---
+
+<task-notification>
+<task-id>a713df6b02283c882</task-id>
+<tool-use-id>toolu_01E1bmoxVcyJ8S17sGrwzu52</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a713df6b02283c882.output</output-file>
+<status>completed</status>
+<summary>Agent "Investigate isolated site state options" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Isolated state on the challenge sites: findings
+
+The platform gives teams no isolated scouting state, but most of it isn't needed: the bid wizard is already private to each browser session. The only shared state is the webmail, which holds the TAN mails.
+
+**1. What the docs and API offer: nothing per team.**
+- `api.md`: scouting returns "the logins the organizers publish… These are demo logins without a run token… nothing done with them counts." The response has `until_revoked: true` and never expires.
+- The OpenAPI spec has no reset endpoint, no extra accounts and no per-team scouting. The only related endpoint is `POST /v1/challenges/{id}/practice-runs`, marked "Deprecated and internal: organizers' demo access… participants never need it" (llms-full: "Organizers only"). I did not call it.
+- `faq.md`: "Can I run my agent outside the sandbox? While you develop, yes, anywhere, with the scouting logins."
+- The two announcements say nothing about this. One raised concurrent test runs to 4, but our learned.md says 5; worth checking.
+
+**2. Experiment (two separate headless browser contexts, no other agent running):**
+- **Bid wizard: tied to the session cookie, not the account.** Fresh contexts A and B both opened an empty step 1 (Bieterdaten). A filled in the bidder data once (the brief's company name and VAT id, plus the mailbox address read from the webmail) and pressed Weiter. After a reload, A showed step 2 (Angebotsart) and B still showed an empty step 1. The leftover state we saw earlier came from reusing our own session.
+- **Webmail: one mailbox shared by everyone.** Both contexts saw exactly the same list: 66 messages, the newest being TAN mails numbered "Anforderung 66, 65, 64…". So the TAN mails and their numbering are shared across all teams.
+- **Untested:** whether one TAN request cancels TANs requested from other sessions, because I was not allowed to request one. The shared numbering and the jumps we saw make account-wide cancellation likely.
+
+**3. Using a test run's logins from my laptop: technically possible, not advisable. I did not try it.**
+- A past test run's log shows the same public hostnames as scouting (`atira-rfq-*.kyora.run`). Runs get separate logins on the same public sites, so they would probably be reachable from outside.
+- The rules work against it:
+  - run-contract: "Site logins are issued per run and only work while that run is live."
+  - fair-play forbids "trying to get data out of the sandbox" and says "Nobody helps it during a run."
+- Our own agent would also share those accounts while the run is live, and code that prints `CHALLENGE_SITE_ACCESS` is exactly what the package reviewer flags.
+- Recommendation: don't do it without written permission from the organizers.
+
+## Options, best first
+
+1. **Use the session isolation we already have (no risk).** Run the bid form locally up to step 6, in separate browser contexts per developer. Add a stop before the TAN request, and test TAN signing only in test runs (up to 4–5 at once).
+2. **Ask the organizers (one message, low risk).** Ask for per-team scouting logins or a mailbox reset, and whether using a live test run's logins from outside is allowed. Mention that TAN requests from different teams collide in the shared mailbox.
+3. **Read the TAN by request number right after our own request.** This keeps local signing mostly working, but we still cancel other teams' TANs and they cancel ours. Use it sparingly.
+4. **Leak a test run's logins to a laptop (not recommended).** It risks a fair-play violation and collides with our own running agent.
+
+I appended one bullet with these results to `docs/learned.md` and committed nothing. The probe script and its logs are in `/Users/jonasstenglein/.claude/jobs/064ce75e/tmp/iso/`: `observe.py`, `obs1.log` and `obs2.log`.</result>
+<usage><subagent_tokens>88055</subagent_tokens><tool_uses>19</tool_uses><duration_ms>150949</duration_ms></usage>
+</task-notification>
