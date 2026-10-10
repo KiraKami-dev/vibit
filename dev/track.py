@@ -2,9 +2,9 @@
 Experiment log: one JSON line per run in experiments/runs.jsonl, rendered to docs/experiments.md.
 
 Usage (stdlib only, Python 3.9+, from the repo root):
-    python3 dev/track.py local [--trace PATH] [--version v1] [--note "..."]
+    python3 dev/track.py local [--trace PATH] [--version v1] [--experiment NAME] [--note "..."]
         Summarise a local run from its trace (default: newest run-*.jsonl in $TRACE_DIR, else agent/traces/).
-    python3 dev/track.py platform <run_|reh_|sub_ id> [--version v1] [--note "..."]
+    python3 dev/track.py platform <run_|reh_|sub_ id> [--version v1] [--experiment NAME] [--note "..."]
         Record a test run or scored submission as `atira status <id> --json` reports it (needs `atira login`).
     python3 dev/track.py report
         Rewrite docs/experiments.md from runs.jsonl; text below the marker line is kept.
@@ -290,13 +290,21 @@ def outcome_text(run: dict) -> str:
     return ", ".join(parts)
 
 
+# Environment switches that change how the agent behaves; recorded with every run so variants stay comparable.
+OVERRIDE_PREFIXES = ("AGENT_", "LLM_", "THINKING", "MAX_STEPS")
+
+
+def overrides() -> dict[str, str]:
+    return {key: value for key, value in sorted(os.environ.items()) if key.startswith(OVERRIDE_PREFIXES)}
+
+
 def report() -> None:
     latest: dict[str, dict] = {}
     for run in load_runs():
         latest[run["id"]] = run  # a later record of the same id wins
     runs = sorted(latest.values(), key=lambda run: run.get("started_at") or "", reverse=True)
     rows = [
-        "| Date (UTC) | Kind | Version | Commit | Duration | Tokens in/out | Quality | Outcome | Note |",
+        "| Date (UTC) | Kind | Version · experiment | Commit | Duration | Tokens in/out | Quality | Outcome | Note |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for run in runs:
@@ -316,7 +324,7 @@ def report() -> None:
                 for value in (
                     date,
                     f"{run['kind']} `{run['id']}`",
-                    run.get("version"),
+                    " · ".join(part for part in (run.get("version"), run.get("experiment")) if part),
                     commit,
                     (f"{duration / 60:.1f} min" if duration >= 60 else f"{duration:.0f} s") if duration else "",
                     tokens,
@@ -345,6 +353,7 @@ def main() -> None:
         else:
             command.add_argument("run_id", help="run_, reh_ (test run) or sub_ (submission) id")
         command.add_argument("--version", help="agent version label, e.g. v1")
+        command.add_argument("--experiment", help="what this run varies on top of the version, e.g. thinking-off")
         command.add_argument("--note", help="free-form note: what changed, what to look at")
         command.add_argument("--commit", help="record this commit instead of the current HEAD")
         command.add_argument("--force", action="store_true", help="record an id that is already recorded")
@@ -360,6 +369,8 @@ def main() -> None:
         "started_at": record.pop("started_at", None),
         "recorded_at": utc_iso(dt.datetime.now(UTC)),
         "version": args.version,
+        "experiment": args.experiment,
+        "overrides": overrides(),
         **git_info(args.commit),
         "note": args.note,
     }

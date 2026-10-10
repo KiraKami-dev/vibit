@@ -13,7 +13,7 @@ Commit is the repo HEAD when the run was recorded (`*` = uncommitted changes und
 input/output tokens summed over workers (local) or as the platform reports them. Quality is the platform score
 (0 to 100); local runs are not scored.
 
-| Date (UTC) | Kind | Version | Commit | Duration | Tokens in/out | Quality | Outcome | Note |
+| Date (UTC) | Kind | Version · experiment | Commit | Duration | Tokens in/out | Quality | Outcome | Note |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-10 15:52 | test-run `run_8cdaf09699ca1a66` | v1 | c493495 | 10 s |  |  | failed, $0.000, Run exited with code 1 without submitting an answer | crashed at import: llm.py used httpx, openai 3.x ships httpx2 (local venv had a stale httpx); fixed |
 | 2026-10-10 15:40 | local `local-20261010-174027` | v1 | c493495* | 7.4 min | 247k / 5.0k |  | signed, 5 omitted, 2 stops, 1 errors/refusals | first signed bid, all positions omitted, TAN loop |

@@ -24,10 +24,15 @@ Every local run, test run and submission goes into `experiments/runs.jsonl` (app
 `docs/experiments.md`. Use the wrappers, which run and record in one go, from the repo root:
 
 ```sh
-dev/run-local.sh v1 "what changed"      # local run on the scouting sites, headless; needs `atira models proxy`
-dev/test-run.sh v1 "what changed"       # sandbox test run, followed to the end, score recorded
-python3 dev/track.py platform <sub_id> --version v1 --note "..."   # after `atira submit`
+dev/run-local.sh v1 "what changed" [experiment]   # local, headless; needs `atira models proxy`
+dev/test-run.sh v1 "what changed" [experiment]    # sandbox test run, followed to the end, score recorded
+python3 dev/track.py platform <sub_id> --version v1 --experiment NAME --note "..."   # after `atira submit`
 ```
+
+`version` is the base being measured (v1, v2, ...); `experiment` names what a run varies on top of it (e.g.
+`thinking-off-forms`, `model-<name>`, `4-browsers`), so variants of one version compare side by side. Environment
+overrides (`AGENT_*`, `LLM_*`, `THINKING*`, `MAX_STEPS*`) are recorded with every run. Bigger experiments go on an
+`exp/<name>` branch; the recorded commit pins the exact code.
 
 Commit `experiments/runs.jsonl` and `docs/experiments.md` with the code change they measured. After a run that taught
 something (a failure mode, a speed-up, a score change), add a bullet under "What we tried and learned" in
