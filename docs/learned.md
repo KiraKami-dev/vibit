@@ -94,3 +94,10 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   `choices` (numbers must now match exactly; `choices` only for worded attributes, remembered per position).
 - Live on the shared scouting login, a re-login mid-run reset the wizard to its first step; the worker re-entered
   the form from the start. Another reason to verify signing only in test runs.
+- Live, thinking off, the model still entered its own "all positions" net total after one position failed and
+  clicked "omit" instead of "next" right after a successful fill (that position was lost). Now every
+  configure_position() result states the running net total of the positions entered, and the tool saves the
+  position with the next button the model named once. Mock after that: signed and fully correct in 64 s,
+  13 requests.
+- Local live runs twice hung before the briefing finished: one site's start (the webmail) never returned while the
+  sites answered curl at once. solve() gathers every site start without a timeout; worth a guard.

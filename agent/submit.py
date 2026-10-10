@@ -18,7 +18,7 @@ import llm
 from briefing import Briefing
 from browser_tools import Deps, SiteSession
 from calc import position_key
-from configurator import FillPlan, complete_positions, fill_position, german, position_on_page
+from configurator import FillPlan, complete_positions, fill_position, find_control, german, position_on_page
 from extract import locate
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
@@ -165,18 +165,22 @@ class PositionDesk:
         self.failures: dict[str, int] = {}
         self.entered: set[str] = set()
         self.choices: dict[str, dict[str, str]] = {}
+        self.next_button = ""
 
     @property
     def tools(self) -> tuple:
         return (self.configure_position, self.net_total) if self.entries else ()
 
     async def configure_position(self, ctx: RunContext[Deps], position: str, fields: dict[str, str] | None = None,
-                                 confirm_button: str = "", choices: dict[str, str] | None = None) -> str:
+                                 confirm_button: str = "", next_button: str = "",
+                                 choices: dict[str, str] | None = None) -> str:
         """
-        Enter all values of the position the form shows now. `position`: its number as the page shows it.
-        `fields`: control label (exactly as in your view) -> value name; needed on the first call, later calls reuse
-        it. `confirm_button`: label of the button that applies a choice so the next choice opens. `choices`: only
-        when a call reported that no option equals an attribute: control label -> the option that means the same.
+        Enter all values of the position the form shows now and, once all are in, save it and go on with the form's
+        next/continue button. `position`: its number as the page shows it. `fields`: control label (exactly as in
+        your view) -> value name; needed on the first call, later calls reuse it. `confirm_button`: label of the
+        button that applies a choice so the next choice opens. `next_button`: label of the button that saves the
+        position and goes on (never the one that omits or adds a position); needed once. `choices`: only when a
+        call reported that no option equals an attribute: control label -> the option that means the same.
         """
         session, plan, position = ctx.deps.session, self.plan, position.strip()
         known = set().union(*self.entries.values()) - {"position"}
@@ -189,15 +193,20 @@ class PositionDesk:
             plan.fields.update(given)
         if confirm_button:
             plan.confirm = confirm_button
+        if next_button:
+            self.next_button = next_button
         entry = self.entries.get(position)
         if entry is None:
-            return f"No values for position {position!r}: leave it out with the form's option to omit a position."
+            return (f"No values for position {position!r}: leave it out with the form's option to omit a position. "
+                    + self.so_far(session))
         if not plan.fields:
             return "Give fields (control label -> value name) for the controls of this form first."
         if self.failures.get(position, 0) >= 3:
-            return f"Position {position} failed three times: leave it out with the form's option to omit a position."
+            return (f"Position {position} failed three times: leave it out with the form's option to omit a "
+                    f"position. {self.so_far(session)}")
         if time.monotonic() > self.deadline - SIGNING_RESERVE:
-            return "Time is short: leave this and every remaining position out and go on to signing."
+            return ("Time is short: leave this and every remaining position out and go on to signing. "
+                    + self.so_far(session))
         async with session.lock:
             if not position_on_page(await session.look(), position):
                 return (f"Position {position} is not on the page now. Configure the position the page shows, by "
@@ -209,17 +218,36 @@ class PositionDesk:
                 error = await fill_position(session, entry, plan, log, remembered)
             except Exception as exc:  # a slow or changed page: the model decides to retry or omit
                 error = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
-            session.trace.event(session.name, "configure_position", position=position, done=log, error=error)
+            moved = ""
+            if not error and self.next_button:  # the model named the button; clicking it is the mechanical part
+                view = await session.look()
+                ref, why = find_control(view, self.next_button, ("button",))
+                target = await locate(session.page, ref) if ref else None
+                if target is None:
+                    moved = f" Could not save it: {why}; click the form's next/continue button yourself."
+                else:
+                    await target.click(timeout=5000)
+                    await session.settle()
+                    moved = f" Saved with {self.next_button!r}; the page below is the form's next step."
+            session.trace.event(session.name, "configure_position", position=position, done=log, error=error,
+                                moved=moved)
             view = await session.look()
         if error:
             self.failures[position] = self.failures.get(position, 0) + 1
             self.entered.discard(position)
             return (f"Position {position} not fully entered: {error}. Entered so far: {'; '.join(log) or 'nothing'}. "
                     "Fix the mapping and call again, or leave the position out with the form's option to omit "
-                    f"it.\n\n{view}")
+                    f"it. {self.so_far(session)}\n\n{view}")
         self.entered.add(position)
-        return (f"Position {position} entered: {'; '.join(log)}. Check it, then save and continue with the form's "
-                f"next/continue button.\n\n{view}")
+        then = moved or " Check it, then save and continue with the form's next/continue button."
+        return f"Position {position} entered: {'; '.join(log)}.{then} {self.so_far(session)}\n\n{view}"
+
+    def so_far(self, session: SiteSession) -> str:
+        """The running net total, told after every position so the totals step needs no arithmetic."""
+        total = german(self.total())
+        session.seen += "\n" + total  # our own figure: let the worker's result mention it
+        entered = ", ".join(sorted(self.entered, key=position_key)) or "none"
+        return f"Net total of the positions entered so far: {total} ({entered}); enter the latest such figure."
 
     def entry_total(self, position: str) -> Decimal:
         entry = self.entries[position]
@@ -275,20 +303,21 @@ def _positions(answer: dict | None, desk: PositionDesk, filled: bool) -> str:
     names = sorted({key for entry in desk.entries.values() for key in entry} - {"position"})
     return head + f"""- enter exactly these positions: {', '.join(sorted(desk.entries))}. The form shows one position
   at a time, in its own order. On every position page, first call configure_position() with the number the page
-  shows: it enters all values of a position of this bid, or tells you to omit it. Then save and continue with the
-  form's next/continue button. Never pick options or type position values yourself;
+  shows: it enters all values of a position of this bid and saves it with the next/continue button you name, or
+  tells you to omit it. Never pick options or type position values yourself;
 - configure_position() needs, once, which control takes which value: map each control's label (as your view shows
   it) to one of these value names: {', '.join(names)}. Choices that open further choices (attributes of the
   material) map to the attribute with the same meaning; the material/catalogue number control to material_number;
   unit price, base price, surcharge, packaging and the bonus or rebate for the whole position to unit_price,
   base_unit_price, surcharge_per_unit, packaging_per_unit and rebate_total; lead time to lead_time_weeks. Leave out
-  controls with no matching value. Also name the button that applies a choice so the next one opens;
+  controls with no matching value. Also name the button that applies a choice so the next one opens, and the
+  button that saves the position and goes on to the next step (not the ones that omit or add a position);
 - leave out, with the form's option to omit a position, every other position and any position where
   configure_position() reports a problem it cannot resolve. Never use options that add positions; if the form
   shows an extra position you did not ask for, remove it or leave it out;
-- discount {discount}; net total {german(sum((desk.entry_total(p) for p in desk.entries), Decimal(0)))} when every
-  position above was entered, otherwise what net_total() returns. Enter both exactly as written here (German number
-  format), never a sum you work out yourself, a gross amount or a sum the page proposes;"""
+- discount {discount}; net total: the latest figure configure_position() reports for the positions entered so
+  far (net_total() repeats it; pass positions you entered but left out after all). Enter both exactly as given
+  (German number format), never a sum you work out yourself, a gross amount or a sum the page proposes;"""
 
 
 def _requirements(briefing: Briefing, email: str, answer: dict | None = None, desk: PositionDesk | None = None,
