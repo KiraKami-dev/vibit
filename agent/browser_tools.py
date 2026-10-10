@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlparse
 
-from extract import changes, locate, observe, select_options
+from extract import FRAME_SECONDS, changes, locate, observe, select_options
 from playwright.async_api import BrowserContext, Dialog, Page
 from pydantic_ai import RunContext
 from tracing import Trace
@@ -268,7 +268,7 @@ class SiteSession:
         done = []
         for frame in page.frames:
             try:
-                done += await frame.evaluate(HUMAN_CHECK_JS)
+                done += await asyncio.wait_for(frame.evaluate(HUMAN_CHECK_JS), FRAME_SECONDS)
             except Exception:
                 continue
         if not done:
@@ -297,7 +297,8 @@ class SiteSession:
     async def _collect_closed(self, page: Page) -> None:
         for frame in page.frames:
             try:
-                closed = await frame.evaluate("(window.__arClosed || []).splice(0)")
+                closed = await asyncio.wait_for(frame.evaluate("(window.__arClosed || []).splice(0)"),
+                                                FRAME_SECONDS)
             except Exception:
                 continue
             for title in closed:
@@ -321,8 +322,15 @@ class SiteSession:
                 self.view = await observe(page, str(self.stamp))
             except Exception as error:
                 await asyncio.sleep(1.0)
-                self.view = await observe(page, str(self.stamp)) if not page.is_closed() else f"(page error {error})"
-        title = await page.title()
+                try:
+                    self.view = (await observe(page, str(self.stamp)) if not page.is_closed()
+                                 else f"(page error {error})")
+                except Exception as again:  # e.g. a script on the page hangs: the tab does not answer at all
+                    self.view = f"(the page does not respond: {type(again).__name__} {str(again)[:160]})"
+        try:
+            title = await asyncio.wait_for(page.title(), FRAME_SECONDS)
+        except Exception:
+            title = ""
         header = [f"URL: {page.url}", f"Title: {title}"]
         notes = []
         if len(self.pages) > 1:
@@ -516,16 +524,20 @@ async def read_more(ctx: RunContext[Deps], offset: int) -> str:
     return await ctx.deps.session.look(offset)
 
 
-VALUE = re.compile(r"[\w/.:,+-]*\d[\w/.:,+-]*")
+# A run of value characters; those with a digit are values. (The former single pattern, [..]*\d[..]*, retried
+# every start of a long run without a digit: quadratic, minutes on one long token.)
+VALUE_RUN = re.compile(r"[\w/.:,+-]+")
+DIGIT = re.compile(r"\d")
 
 
 def unseen_values(text: str, seen: str) -> list[str]:
     """The values in `text` (anything with a digit: numbers, references, dates) that `seen` does not contain."""
-    haystack = " ".join(seen.split())
-    missing = []
-    for token in VALUE.findall(text):
+    missing = []  # a value holds no whitespace, so searching `seen` as is matches its whitespace-normalised form
+    for token in VALUE_RUN.findall(text):
+        if not DIGIT.search(token):
+            continue
         token = token.strip(".,:;/-+")
-        if token and token not in haystack and token not in missing:
+        if token and token not in seen and token not in missing:
             missing.append(token)
     return missing
 
