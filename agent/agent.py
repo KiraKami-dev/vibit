@@ -8,11 +8,10 @@ import asyncio
 import json
 import sys
 
-from playwright.async_api import async_playwright
-
 import browsers
 import models  # noqa: F401  models.ask_qwen, models.ask_clef: see models.py
 import run as contract
+from playwright.async_api import async_playwright
 
 
 async def solve(task: dict, page) -> dict | None:

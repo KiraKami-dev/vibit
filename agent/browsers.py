@@ -29,3 +29,18 @@ async def connect(playwright, number: int = 0):
         context = await browser.new_context()
     page = context.pages[0] if context.pages else await context.new_page()
     return browser, page
+
+
+async def contexts(playwright, count: int) -> list:
+    """`count` browser contexts to work websites in, spread over the run's browsers (round robin). Locally they are
+    separate contexts of one Chromium of its own, at the sandbox's 1280×800."""
+    urls = cdp_urls()
+    if urls:
+        browsers = [await playwright.chromium.connect_over_cdp(url) for url in urls[:count]]
+        found = []
+        for i in range(count):
+            browser = browsers[i % len(browsers)]
+            found.append(browser.contexts[0] if browser.contexts else await browser.new_context())
+        return found
+    browser = await playwright.chromium.launch(headless=os.environ.get("HEADLESS") == "1")
+    return [await browser.new_context(viewport={"width": 1280, "height": 800}) for _ in range(count)]

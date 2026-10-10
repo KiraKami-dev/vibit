@@ -1,0 +1,43 @@
+"""
+The model behind the workers: the hosted Qwen through the run's metering proxy by default.
+
+AGENT_MODEL picks another model on the same OpenAI-compatible endpoint (QWEN_BASE_URL). Thinking is off for
+navigation steps, which makes a step about three times faster, and on where a worker has to weigh evidence.
+"""
+import os
+import time
+
+import httpx
+from openai import AsyncOpenAI
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
+
+QWEN_MODEL = "qwen3.8-flash-next"
+
+
+async def _sent(request: httpx.Request) -> None:
+    request.extensions["sent_at"] = time.monotonic()
+
+
+async def _answered(response: httpx.Response) -> None:
+    """Log each model call's status and seconds, so slow or hanging calls show in the run logs."""
+    seconds = time.monotonic() - response.request.extensions.get("sent_at", time.monotonic())
+    print(f"[model] {response.status_code} {seconds:.1f}s {len(response.request.content or b'')} bytes", flush=True)
+
+
+def model() -> OpenAIChatModel:
+    # The run waits for the hosted models to warm up, so a step answers in seconds; now and then a call hangs
+    # until the proxy drops it minutes later, so give up early and retry instead.
+    client = AsyncOpenAI(base_url=os.environ["QWEN_BASE_URL"], api_key=os.environ["QWEN_API_KEY"],
+                         timeout=float(os.environ.get("LLM_TIMEOUT", "30")), max_retries=6,
+                         http_client=httpx.AsyncClient(event_hooks={"request": [_sent], "response": [_answered]}))
+    return OpenAIChatModel(os.environ.get("AGENT_MODEL", QWEN_MODEL), provider=OpenAIProvider(openai_client=client))
+
+
+def settings(thinking: bool = False) -> ModelSettings:
+    return ModelSettings(
+        temperature=0.2,
+        parallel_tool_calls=False,  # one tab per worker: actions must run in order
+        extra_body={"chat_template_kwargs": {"enable_thinking": thinking}},
+    )
