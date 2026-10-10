@@ -2,3 +2,5 @@ docs/experiments.md
 experiments/local-runs.jsonl
 docs/dashboard.html
 experiments/run-cache.json
+# recorded website content for the local mirror: site text and values, local only
+sim/captured/
