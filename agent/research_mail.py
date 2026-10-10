@@ -49,7 +49,12 @@ from research_tender import (
 )
 from worker import run_worker
 
-KIND_SECONDS = 150.0  # one record kind's search; a stuck tab must not hold up the others
+KIND_SECONDS = 150.0  # one record kind's search at most; a stuck tab must not hold up the others
+MIN_KIND_SECONDS = 50.0  # a search shorter than this rarely gets through one folder
+KEEP_GRACE = 60.0  # after the first kept hit, the other folders get this long before the search ends
+READ_RESERVE = 25.0  # the kind returns this long before the mail deadline, so its records are not lost
+RETRY_SECONDS = 60.0  # a search that kept nothing is tried once more if this much of its budget is left
+FIRST = ("approval",)  # searched first: the approval moves every position's price
 
 # ---------------------------------------------------------------- record contents per kind
 
@@ -167,6 +172,7 @@ class MailRecord(BaseModel, Generic[C]):
     subject: str
     sender: str = Field(description="The sender's email address as shown")
     sender_name: str = Field(default="", description="The sender's display name, if shown")
+    recipient: str = Field(default="", description="The recipient's email address (To) as shown; '' if not shown")
     number_format: str = Field(default="", description="The number format the message uses or states: 'de' "
                                                        "(decimal comma), 'en' (decimal point) or '' if unclear")
     sent_at: datetime = Field(description="When the message was sent, ISO 8601; prefer the UTC timestamp shown")
@@ -260,7 +266,8 @@ async def plan_searches(brief: str, sites: dict[str, str], findings: str = "") -
     # Thinking off: the brief states the kinds outright, and a long thinking answer outlasts the client timeout.
     agent = Agent(llm.model(), output_type=SearchPlan, instructions=PLAN_INSTRUCTIONS,
                   model_settings=llm.settings(thinking=False), retries=3)
-    flat = " ".join(brief.split()).casefold()
+    raw = " ".join(brief.split())
+    flat = raw.casefold()
 
     @agent.output_validator
     def _from_brief(plan: SearchPlan) -> SearchPlan:
@@ -276,11 +283,12 @@ async def plan_searches(brief: str, sites: dict[str, str], findings: str = "") -
             raise ModelRetry(f"Sites {wrong} are not among the run's websites {sorted(sites)}.")
         umlauts = {"ae": "ä", "oe": "ö", "ue": "ü", "ss": "ß"}
         for p in plan.searches:
-            spelled = p.subject.casefold()
+            spelled = p.subject.lower()
             for plain, umlaut in umlauts.items():
                 spelled = spelled.replace(plain, umlaut)
-            if p.subject.casefold() not in flat and spelled in flat:
-                raise ModelRetry(f"Write the subject {p.subject!r} exactly as the brief spells it.")
+            at = raw.lower().find(spelled)
+            if p.subject.lower() not in raw.lower() and at >= 0:  # the brief's own spelling, without a retry
+                p.subject = raw[at:at + len(spelled)]
         return plan
 
     listing = "\n".join(f"- siteId {k}: {v}" for k, v in sites.items())
@@ -297,11 +305,15 @@ async def plan_searches(brief: str, sites: dict[str, str], findings: str = "") -
         kinds.append(Kind(name=p.schema_name, subject=p.subject.strip(), sender=p.sender, sender_form=p.sender_form,
                           site=p.site, what=f"{p.purpose} (subject or topic: {p.subject}; sender: {p.sender})",
                           schema=SCHEMAS[p.schema_name]))
-    return kinds
+    # The approval first (it moves every position's price); the rest in the order the brief names them.
+    return sorted(kinds, key=lambda k: k.name not in FIRST)
 
 
-def _goal(kind: Kind, reference: str) -> str:
-    return f"""Find every message on this website that is this record, for tender {reference}: {kind.what}
+def _goal(kind: Kind, reference: str, again: bool = False) -> str:
+    retry = (f"""
+A first search for this record kept nothing. Search for {reference} alone (or for the topic word alone) in every
+folder and look for a subject that names this record; another word for the topic may be used.""" if again else "")
+    return f"""Find every message on this website that is this record, for tender {reference}: {kind.what}{retry}
 - Search for the exact reference {reference} together with the word {kind.subject!r}.
 - Each time a result list shows hits whose subject is this record for exactly {reference}, call keep_results
   RIGHT AWAY with those exact subjects (as the list shows them). A subject whose reference has any extra suffix
@@ -354,19 +366,93 @@ async def read_message(view: str, kind: Kind, reference: str) -> MailRecord | No
         return None
 
 
+class _Reading(list):
+    """The kept message views; each is read as soon as it is kept, while the search goes on in other folders."""
+
+    def __init__(self, kind: Kind, reference: str):
+        super().__init__()
+        self.kind, self.reference = kind, reference
+        self.reads: dict[str, asyncio.Task] = {}
+        self.first: float | None = None  # when the first message was kept
+
+    def append(self, view: str) -> None:
+        super().append(view)
+        if self.first is None:
+            self.first = time.monotonic()
+        if view not in self.reads:
+            self.reads[view] = asyncio.create_task(read_message(view, self.kind, self.reference))
+
+
+def kind_budget(now: float, deadline: float | None) -> float:
+    """
+    One kind's search time: KIND_SECONDS while the mail deadline is far, less as it nears (half of what is left,
+    so a later kind still gets its turn), and never past the point where its reads could not finish.
+    """
+    if deadline is None:
+        return KIND_SECONDS
+    left = deadline - READ_RESERVE - now
+    return max(0.0, min(KIND_SECONDS, max(MIN_KIND_SECONDS, left / 2), left))
+
+
+async def _usable(session: SiteSession) -> None:
+    """A tab that lost its page or shows the browser's error page gets the website again before a search."""
+    try:
+        await session.revive()
+        if session.page.url.startswith("chrome-error:") or not session.view.strip():
+            await asyncio.wait_for(session._goto(session.site["url"]), 60)
+    except Exception as error:
+        session.trace.event(session.name, "helper_error", helper="mail_tab", error=str(error)[:160])
+
+
+async def _search(session: SiteSession, kind: Kind, reference: str, kept: _Reading, until: float,
+                  again: bool) -> None:
+    """One worker run; it ends at `until`, or KEEP_GRACE after its first kept message (the other folders)."""
+    worker = asyncio.create_task(run_worker(
+        session, _goal(kind, reference, again), Summary, deadline=until, max_steps=20, thinking=True,
+        grounded=False, tools=(paging_tool(Collected()), keep_results_tool(kept))))
+    while not worker.done():
+        stop = until if kept.first is None else min(until, kept.first + KEEP_GRACE)
+        if time.monotonic() >= stop:
+            worker.cancel()
+            session.trace.event(session.name, "mail_search_ended", record_kind=kind.name, kept=len(kept),
+                                reason="grace after the first hit" if kept.first else "budget")
+            break
+        await asyncio.wait({worker}, timeout=min(2.0, max(0.1, stop - time.monotonic())))
+    try:
+        await worker
+    except (asyncio.CancelledError, Exception):
+        if not worker.cancelled():
+            raise
+
+
 async def research_kind(session: SiteSession, kind: Kind, reference: str, *, deadline: float | None = None
                         ) -> KindResult:
+    """
+    Search one record kind on the tab and read what the worker keeps. Each kept message is read right away
+    (alongside the search); a search that keeps nothing gets one more try with a hint while its budget allows.
+    Returns READ_RESERVE before `deadline` at the latest, with whatever was read by then.
+    """
     started = time.monotonic()
     result = KindResult(kind)
-    budget = time.monotonic() + KIND_SECONDS
-    await run_worker(session, _goal(kind, reference), Summary, deadline=min(deadline or budget, budget),
-                     max_steps=20, thinking=True,
-                     grounded=False, tools=(paging_tool(Collected()), keep_results_tool(result.kept)))
-    views = list(dict.fromkeys(result.kept))
-    records = await asyncio.gather(*(read_message(v, kind, reference) for v in views))
-    result.records = [r for r in records if r is not None]
+    until = started + kind_budget(started, deadline)
+    kept = _Reading(kind, reference)
+    await _usable(session)
+    for again in (False, True):
+        if again and (kept or until - time.monotonic() < RETRY_SECONDS):
+            break
+        await _search(session, kind, reference, kept, until, again)
+    result.kept = list(dict.fromkeys(kept))
+    reads = list(kept.reads.values())
+    if reads:
+        limit = None if deadline is None else max(1.0, deadline - 5 - time.monotonic())
+        await asyncio.wait(reads, timeout=limit)
+    for task in reads:
+        if not task.done():
+            task.cancel()
+    result.records = [t.result() for t in reads if t.done() and not t.cancelled() and t.result() is not None]
     result.seconds = round(time.monotonic() - started, 1)
-    session.trace.event(session.name, "mail_kind", record_kind=kind.name, seconds=result.seconds, kept=len(views),
+    session.trace.event(session.name, "mail_kind", record_kind=kind.name, seconds=result.seconds,
+                        kept=len(result.kept), read=len(result.records),
                         records=[r.model_dump(mode="json") for r in result.records])
     return result
 
@@ -374,36 +460,61 @@ async def research_kind(session: SiteSession, kind: Kind, reference: str, *, dea
 # ---------------------------------------------------------------- the mailbox address
 
 
-class Address(BaseModel):
-    address: str = Field(description="The signed-in mailbox's own email address, exactly as shown")
-
-
-async def mailbox_address(session: SiteSession) -> str:
-    """The bidder's own address as the webmail shows it (its domain authorises the senders, rule 21)."""
-    view = session.view or await session.look()
-    agent = Agent(llm.model(), output_type=Address, model_settings=llm.settings(thinking=False), retries=3,
-                  instructions="You read a webmail page and report the address of the mailbox that is signed in.")
-
-    @agent.output_validator
-    def _seen(found: Address) -> Address:
-        if "@" not in found.address or found.address not in view:
-            raise ModelRetry("Return an email address that the page shows as the signed-in mailbox.")
-        return found
-
-    try:
-        return (await agent.run(f"Page:\n{view}")).output.address.strip()
-    except Exception:
-        return ""
-
-
-# ---------------------------------------------------------------- selection (rule 21)
-
-
 ZW = re.compile(r"[\u200b-\u200d\u2060\ufeff\u00ad]")
 
 
 def _norm(text: str) -> str:
     return " ".join(ZW.sub("", text).split()).casefold()
+
+
+class Address(BaseModel):
+    address: str = Field(description="The signed-in mailbox's own email address, exactly as shown")
+
+
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+ADDRESS_TRIES = 3
+ADDRESS_WAIT = 15.0  # between tries: the tab may still be signing in or showing a check
+
+
+async def mailbox_address(session: SiteSession) -> str:
+    """
+    The bidder's own address as the webmail shows it (its domain authorises the senders, rule 21). Read by a model
+    from what the tab has shown so far (its sign-in page and every page since, not only the current view), tried
+    again while the tab is still loading. '' if no page showed it; resolve_mail then falls back to the recipients.
+    """
+    agent = Agent(llm.model(), output_type=Address, model_settings=llm.settings(thinking=False), retries=3,
+                  instructions="You read webmail pages and report the address of the mailbox that is signed in "
+                               "(the account the pages show as signed in, not a sender or another person).")
+    candidates: list[str] = []
+
+    @agent.output_validator
+    def _seen(found: Address) -> Address:
+        if _norm(found.address) not in {_norm(c) for c in candidates}:
+            raise ModelRetry(f"Return one of the addresses the pages show: {candidates[:20]}.")
+        return found
+
+    for attempt in range(ADDRESS_TRIES):
+        text = ZW.sub("", "\n".join(dict.fromkeys(p for p in (session.seen, session.view) if p)))
+        candidates[:] = list(dict.fromkeys(EMAIL.findall(text)))
+        if candidates:
+            try:
+                return (await agent.run(f"Pages:\n{text[:20000]}")).output.address.strip()
+            except Exception as error:
+                session.trace.event(session.name, "helper_error", helper="mailbox_address", error=str(error)[:160])
+        if attempt + 1 < ADDRESS_TRIES:
+            await asyncio.sleep(ADDRESS_WAIT)
+    return ""
+
+
+def bidder_domain(mailbox: str, records: list[MailRecord]) -> str:
+    """The mailbox's domain; without the address, the domain most kept messages were addressed to."""
+    if "@" in mailbox:
+        return _norm(mailbox.split("@", 1)[1])
+    domains = [_norm(r.recipient).split("@", 1)[1] for r in records if "@" in r.recipient]
+    return max(set(domains), key=domains.count) if domains else ""
+
+
+# ---------------------------------------------------------------- selection (rule 21)
 
 
 def _aware(value: datetime) -> datetime:
@@ -556,6 +667,9 @@ def resolve_mail(results: list[KindResult], reference: str, domain: str, scenari
                  ) -> MailFacts:
     facts = MailFacts(mailbox=mailbox)
     scenario = _aware(scenario)
+    if not domain:  # never drop what was read for a missing address: the messages name their recipient
+        domain = bidder_domain(mailbox, [r for res in results for r in res.records])
+        facts.problems.append(f"mailbox address not shown; bidder domain from the recipients: {domain or 'none'}")
     for res in results:
         kind = res.kind
         facts.seconds[kind.name] = res.seconds
@@ -590,7 +704,7 @@ async def research_mail(sessions: list[SiteSession], reference: str, scenario: d
     results: list[KindResult] = []
 
     async def tab(session: SiteSession) -> None:
-        while not queue.empty():
+        while not queue.empty() and (deadline is None or time.monotonic() < deadline - 20):
             kind = queue.get_nowait()
             try:
                 results.append(await research_kind(session, kind, reference, deadline=deadline))
@@ -600,8 +714,7 @@ async def research_mail(sessions: list[SiteSession], reference: str, scenario: d
 
     await asyncio.gather(*(tab(s) for s in sessions))
     mailbox = await address
-    domain = mailbox.split("@", 1)[1] if "@" in mailbox else ""
-    facts = resolve_mail(results, reference, domain, scenario, mailbox)
+    facts = resolve_mail(results, reference, bidder_domain(mailbox, []), scenario, mailbox)
     facts.problems += [f"{k.name}: planned on website {k.site}, not researched here" for k in elsewhere]
     return facts
 
