@@ -1,0 +1,2514 @@
+Again, do you want to use some more browsers or subagents or does this currently not help?
+
+---
+
+What do you run for v1? Local, a test on their platform or a submission?
+
+---
+
+Could I see the browser it drives?
+
+---
+
+<task-notification>
+<task-id>a609bf392cbd7c913</task-id>
+<tool-use-id>toolu_01HjbabLNax2J9jEVW6dm9hV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a609bf392cbd7c913.output</output-file>
+<status>completed</status>
+<summary>Agent "Build calc.py pricing rules" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I built `calc.py` and its tests. All 34 tests pass (0.001 s) and ruff is clean at line length 120. I only created those two files: nothing else was touched, nothing was committed, and no browser or agent was run.
+
+**Input models**
+- `BidInput` holds the whole bid: `tender_reference`, `scenario_date`, the positions, an optional `approval`, `fx_rates` (FX key to EUR per unit), `metal_indices` (code to dated rates), an optional `setup_pool` and an optional `project_bonus`.
+- `PositionInput` carries one position:
+  - its id and final quantity in the stated unit, with `unit` and `pieces_per_set` for Satz;
+  - `material`, where `None` means no matching material and leads to `no_bid`;
+  - the candidate price `conditions`, the Konditionsgruppe rule (`discount_scope`: base only, base plus surcharge, or none), the ordinary `setup_fee`, the `packaging` tariff and the delivery `commitment`.
+- `Material` has stock, both lead times, carton size, allocation mass, surcharge mass and the metal index code.
+- The smaller records are `PriceCondition` / `PriceScale`, `MetalIndexRate`, `PackagingTariff`, `DeliveryCommitment`, `SetupPool`, `BonusBand` / `ProjectBonus` and `Approval` (percent plus optional threshold).
+
+**Public functions**
+- `calculate(bid) -&gt; BidResult` does the whole calculation. `BidResult.answer(notes=None)` turns it into the answer-schema dict. The result also keeps `order_value`, `bonus_total`, `missing_materials` and a per-position `debug` list of unrounded intermediates.
+- Selection helpers for the rules the spec defines exactly:
+  - `resolve_quantity` and `to_pieces` / `parse_unit` (rules 1, 13, 17);
+  - `apply_amendments`, `nominal_stroke` and `matching_materials` (rules 14, 20, 3);
+  - `latest_authoritative` (rule 21);
+  - `valid_condition` and `reached_scale` (rule 4), `metal_rate` (rule 28).
+- Calculation helpers: `effective_discount`, `bonus_credit`, `allocate_cents`, `lead_time`, `money`, `position_key`.
+
+**Assumptions to check**
+- **Setup pool cent rule (25):** the mail states the rule, so it is a parameter. The default is largest remainder. The other options are rounding each share, or giving the leftover cent to the largest, first or last member. The base can be half-up or floor, and ties go by ascending or descending position.
+- **Position order** for ties is "natural", so "2" comes before "10".
+- **Project bonus (26):** a position's goods value is final pieces × the EUR base price, undiscounted. A flag `include_surcharge` adds the mass surcharge if the mail says so. The bonus is split by largest remainder with ties by ascending position.
+- **Base price:** it is rounded to cents even for EUR prices. This matters when the price unit is 100.
+- **Discount threshold (16):** the order value is final pieces × rounded EUR base, summed over all positions. On `no_bid`, a conditional approval gives 0 % but an unconditional one keeps its percent.
+- **Metal index:** rates are taken as EUR per kg. If a material has no index code and exactly one index exists, that one is used. A single rate without a window applies as is.
+- **Packaging:** a tariff is a flat EUR price per carton. A position with no tariff reports packaging as 0.00.
+- **Other matching details:**
+  - Q&amp;A changes and amendments dated after the scenario date are ignored.
+  - Numeric attributes match as numbers ("50.0" equals 50); text matches ignore case and extra whitespace.
+  - If several price conditions are valid on the date, the one with the latest start wins.
+- **Missing facts:** a missing FX rate, metal rate, scale, valid condition or carton size raises `CalcError` rather than guessing. The orchestrator needs to catch it, for example to leave that field blank or skip the position.
+
+The tests use only invented values (T-0001, M-100, example.com) with the hand calculations in comments. They cover rules 1, 3–8, 12–17, 20–28 and the answer format, including the case where rounding each component first would give a different price.
+
+Files are in /Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/agent:
+- calc.py
+- tests/test_calc.py</result>
+<usage><subagent_tokens>93468</subagent_tokens><tool_uses>15</tool_uses><duration_ms>286233</duration_ms></usage>
+</task-notification>
+
+---
+
+What is the issue with the TAN?
+
+---
+
+Still if you have open work etc. you can spin up subagent(s), local sessions etc.
+
+---
+
+<task-notification>
+<task-id>bb9100fgt</task-id>
+<tool-use-id>toolu_01TUet5EtkAG6CTsuwsRLcS9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bb9100fgt.output</output-file>
+<status>failed</status>
+<summary>Background command "Guard helpers against errors, rerun v1" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>baiuut351</task-id>
+<tool-use-id>toolu_016vMB8GQU8yeicB334M5BTc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/baiuut351.output</output-file>
+<status>failed</status>
+<summary>Background command "Rerun v1 locally with a visible browser" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+Put them in the background for the next time. And how long is v1 taking approximately?
+
+---
+
+<task-notification>
+<task-id>bj3ccjd1q</task-id>
+<tool-use-id>toolu_011t7MA1GbYibXHoPkhVi6xm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bj3ccjd1q.output</output-file>
+<status>failed</status>
+<summary>Background command "Rerun v1 locally with a visible browser" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+Should we decrease / turn of thinking for it? Or make it dynamic? Or rather later?
+
+---
+
+<task-notification>
+<task-id>bdnws6wmx</task-id>
+<summary>Monitor event: "v1 local run: notes, TAN, results, errors"</summary>
+<event>[Monitor expired after 20m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+Can you task a subagent or so to think of how to track changes between versions? Or what we tried etc. Either as json, markdown, website submodule (not submitted but for us to track), db etc.? Or you think of it?
+
+---
+
+<task-notification>
+<task-id>ba0naet1o</task-id>
+<tool-use-id>toolu_01U52oXjPPusP7mFsNMRsFDW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/ba0naet1o.output</output-file>
+<status>completed</status>
+<summary>Background command "Rerun v1 locally, headless" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Do we get scores if we don't submit (but only on test runs)? And does test use different data than the leaderboard?
+
+---
+
+Are you still monitoring? Esp v1?
+
+---
+
+<task-notification>
+<task-id>a6e181ecdb1556fe7</task-id>
+<tool-use-id>toolu_01Q7R14j2ABsd4QyTGoYTXrs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6e181ecdb1556fe7.output</output-file>
+<status>completed</status>
+<summary>Agent "Build run/experiment tracking" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I built the tracker and seeded it with the two runs you named. Nothing is committed, and I didn't touch `agent/` or `CLAUDE.md`. Recording, the report, the hand-written section surviving a rewrite, and lookups by `sub_` and `reh_` ids all work; ruff passes at line length 120.
+
+**Files**
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/dev/track.py`: the CLI, stdlib only. Usage is at the top of its docstring.
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/experiments/runs.jsonl`: two seed records.
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/docs/experiments.md`: usage header, the table, and a marker line; everything below the marker is kept when the file is regenerated.
+
+**Commands** (from the repo root)
+```sh
+python3 dev/track.py local [--trace PATH] [--version v1] [--note "..."]
+python3 dev/track.py platform &lt;run_|reh_|sub_ id&gt; [--version v1] [--note "..."]
+python3 dev/track.py report
+```
+Both recording commands also take `--commit SHA` (record that commit instead of HEAD; the dirty flag then becomes unknown) and `--force` (record an id again; the report shows the newest record per id).
+
+**Generated table**
+
+| Date (UTC) | Kind | Version | Commit | Duration | Tokens in/out | Quality | Outcome | Note |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-10-10 15:40 | local `local-20261010-174027` | v1 | c493495* | 7.4 min | 247k / 5.0k |  | signed, 5 omitted, 2 stops, 1 errors/refusals | first signed bid, all positions omitted, TAN loop |
+| 2026-10-10 14:00 | test-run `run_561a4b180b6341fa` | v0-starter | 27f3dcb | 4 s |  | 0 | failed, $0.000, Run exited with code 0 without submitting an answer | starter kit stub before the harness; exits without an answer |
+
+I also wrote four starter bullets under "What we tried and learned", based on the traces: the TAN loop (mail worker started 6 times, 2 hit the 8-request limit), the tender worker using 36 requests and 433 s, and the token use.
+
+**Things that differ from the brief or that you should check**
+- **Where the result is:** no trace has an event of kind `result`. The final result is logged by the worker named `result` with kind `done`, and `track.py` reads that. The newest trace that has it is `run-20261010-174027.jsonl`, so that is what I recorded as v1. The newer-looking `run-20261010-173715.jsonl` has no result.
+- **The seed test run predates our code:** `run_561a4b180b6341fa` ran at 14:00 UTC, before the starter-kit commit at 14:04 UTC. I labelled it `v0-starter` and set its commit to `27f3dcb`, which is only approximate.
+- **Settings are limited:** traces don't record the model, thinking or step limits. A local record only has `models`/`browsers` from `agent/agent.json` plus any request limits that were hit (8), along with a breakdown per worker.
+- **`atira` quirks:**
+  - `atira status --json` hung until I gave it an empty stdin, so the script does that and uses a 120 s timeout.
+  - `atira status reh_...` returns nothing, so `reh_` ids are looked up in the team's test-run list.
+  - Test-run JSON has no token counts; submission JSON does.
+  - Every score breakdown so far is `null`, so it is stored as-is and the shape is still unknown.
+  - `atira logs` isn't used.
+- **Site values in `runs.jsonl`:** the local record includes the confirmation text you asked for, which contains the public-1 tender reference and receipt number. The markdown table leaves it out. Remove it if you'd rather the repo hold no site values.
+- **Python 3.9:** the system `python3` is 3.9, so the script avoids newer syntax.
+- **Not recorded:** two teammate submissions (`sub_394612e901042cdf`, `sub_4a78e252f841b4c4`) and a queued test run `run_8cdaf09699ca1a66` exist. Record them with `platform &lt;id&gt;` once they're relevant or finished.</result>
+<usage><subagent_tokens>90024</subagent_tokens><tool_uses>21</tool_uses><duration_ms>347179</duration_ms></usage>
+</task-notification>
+
+---
+
+"What it built:" can you or a subagent set this up as claude md or sth or hook or so (that are committed as pushed). then comit?
+
+---
+
+<task-notification>
+<task-id>bl6lsaxoa</task-id>
+<tool-use-id>toolu_019RwMb8qbagD26ymi13NkiG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bl6lsaxoa.output</output-file>
+<status>completed</status>
+<summary>Background command "Follow the test run logs until it ends" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bo417qj0b</task-id>
+<tool-use-id>toolu_01YEtYPMC7LTpzoh2Gmc1TyR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bo417qj0b.output</output-file>
+<status>completed</status>
+<summary>Background command "Check test run log and status" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Yes, but from the versions / experiments also others without that v2 to v4 but also other experiments? Is that possible?
+
+---
+
+Can you ask another agent if this even makes sense to commit this? Is this usable for others?
+
+---
+
+<task-notification>
+<task-id>a6d6f18cc58d1c5d9</task-id>
+<tool-use-id>toolu_01Ut67YAtPyiPKu5GsNMdQwc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6d6f18cc58d1c5d9.output</output-file>
+<status>completed</status>
+<summary>Agent "Review experiment tracking setup" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: keep it, with changes.** Labelling each test run and submission with a version, an experiment name and a note is useful, and the platform doesn't do it. Three parts cost more than they give for a one-day, five-person repo: the committed generated table, committed local runs, and the "always" rule.
+
+What I checked: `bash -n` passes on both wrappers. `python3 dev/track.py report` reproduces `docs/experiments.md` byte for byte. `atira test-run ./agent --dry-run` showed that `.gitignore` keeps `traces/` out of the uploaded package. I edited nothing.
+
+**Top changes, ranked**
+
+1. **Stop committing `docs/experiments.md`'s table.** Every regeneration rewrites the whole table, so two people who both record will conflict on every merge. Gitignore the generated table, or print it to stdout, and move "What we tried and learned" into its own hand-written file such as `docs/learned.md`. That file is the most valuable piece of the setup.
+2. **Add `experiments/runs.jsonl merge=union` to `.gitattributes`.** Two teammates appending lines always conflict at end of file. With union, git keeps both sides' lines.
+3. **Commit only test runs and submissions; keep local runs local.** Local runs are frequent and unscored, and they score nothing that would show what works. Record them to a gitignored file, or only when they taught something.
+4. **Weaken "Tracking runs (always)" in CLAUDE.md.** Make it: record every test run and submission, and add a bullet to the learned file when a run taught something. As written, another person's Claude session will churn the log on every debug run.
+5. **Don't rely on the git commit to pin the code.** `atira test-run` packs untracked files too: right now `agent/evidence.py`, `research*.py` and others are uploaded but in no commit. Both the commit and the `dirty` flag are taken when you record, not when the run started; for `test-run.sh` that is after `--follow` ends, so a pull in between records the wrong commit. `atira package &lt;id&gt;` already returns the exact uploaded package, so record that (the sha256) instead.
+
+**Redundancy with the platform:** `atira status`, `atira package` and the run pages already hold the score, breakdown, cost, error and code. What the setup adds is labels and notes. That supports the 90% version: a roughly 30-line `track.py platform`, the union-merged jsonl, and the hand-written learnings file.
+
+**Bugs and fragile spots**
+
+- `run-local.sh` uses `uv run --no-sync`, so it won't install dependencies on a fresh clone. It also brings back the stale-venv problem already in the log (the httpx crash). Drop `--no-sync` or run `uv sync` first.
+- `local` takes the newest trace by modification time. If the agent dies before creating a trace, the duplicate-id check aborts the recording instead of saving the wrong run. If two runs overlap, the wrong trace is recorded. Pass `--trace` explicitly.
+- A relative `TRACE_DIR` resolves against `agent/` in the agent but against the repo root in `track.py`, so they look in different places.
+- In `test-run.sh`, Ctrl-C during `--follow` loses the record with no hint, while the run keeps going on the platform.
+- Windows: these are POSIX `sh` scripts calling `python3`, so they need WSL or Git Bash. They work on macOS and Linux, and `track.py` works on the system Python 3.9.
+- `atira models proxy` is only mentioned in a comment. If it isn't running, the run fails late instead of the wrapper checking first.
+
+**Privacy and fair play**
+
+- `overrides()` records every variable starting with `AGENT_`, `LLM_`, `THINKING` or `MAX_STEPS` into a committed file. Today's `QWEN_API_KEY` and `CLEF_API_KEY` don't match, but a future `LLM_API_KEY` would be committed. Use an explicit allowlist or redact anything matching `KEY|TOKEN|SECRET`.
+- Local `outcome.confirmation` is model text read from the site and could carry site values.
+- Fair play looks fine: `dev/`, `experiments/` and `docs/` are outside `agent/`, the packer honours `.gitignore`, and the current notes contain no credentials or site values.
+
+The files involved are `dev/track.py`, `dev/run-local.sh`, `dev/test-run.sh`, `experiments/runs.jsonl`, `docs/experiments.md` and the "Tracking runs" section of `CLAUDE.md`, all under `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/`.</result>
+<usage><subagent_tokens>54982</subagent_tokens><tool_uses>6</tool_uses><duration_ms>59443</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bibbj04o1</task-id>
+<summary>Monitor event: "v1 visible run: TAN, notes, results, errors"</summary>
+<event>[Monitor expired after 25m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>byrvy2ss2</task-id>
+<tool-use-id>toolu_0171KDCZAut5aDKHy1jnqruc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/byrvy2ss2.output</output-file>
+<status>completed</status>
+<summary>Background command "Run and record the v1 test run via the wrapper" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Ok. Can we submit a scoring of v1 then?
+
+---
+
+<task-notification>
+<task-id>bhwbghowl</task-id>
+<summary>Monitor event: "v1 headless run: TAN, results, errors, exit"</summary>
+<event>[Monitor expired after 25m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>baiztpjar</task-id>
+<tool-use-id>toolu_01KoXo97R3Q7Vcb9zvbxM9Ec</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/baiztpjar.output</output-file>
+<status>completed</status>
+<summary>Background command "Retry the v1 submission without a timeout" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Can you enable all entire features, e.g. see here: https://hack.entire.io/ehl-munich-2026/ (I should have access)
+
+---
+
+<task-notification>
+<task-id>byfmg3xx3</task-id>
+<tool-use-id>toolu_01XsJRVe7TgNaQMmvcRN2bYh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/byfmg3xx3.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the v1 submission to finish" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+What subagents / what improvements are running right now? And can you kick off more to improve? Also with reasoning etc. we discussed earlier.
+
+---
+
+Can you start more, maybe also on using the Clef etc.? Or are we already using this?
+
+---
+
+Anything else to check out or improve while we are at it?
+
+---
+
+<task-notification>
+<task-id>a8272e1e3d757fdae</task-id>
+<tool-use-id>toolu_01PpEgpMVpN5rds8s97gCUWi</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a8272e1e3d757fdae.output</output-file>
+<status>completed</status>
+<summary>Agent "Fair-play pre-review of package" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: likely pass for the package committed at HEAD.** I found no scenario values, no fixed click path, no crawler and no secrets. It only talks to the platform, the run's sites and the model proxy, and in the sandbox it attaches to the provided browsers rather than starting its own. The real risks are in the untracked work-in-progress files.
+
+**Committed package at HEAD, ranked by severity**
+
+1. **Low to medium flag risk: the answer strategy is fixed in code** (`submit.py:63`, `81-91`). The bid goal hardcodes `decision: bid`, every position left out (Position auslassen), discount 0 and total 0,00. None of these are copied scenario values, but rule 11 says a model must "make the important decisions", and here the decision and the money fields are fixed. A reviewer may read this as a stub or a pre-decided answer. Fix: once v2 lands, let a model choose bid or no_bid from the evidence. Until then the docstring's frank "v1" wording is fine; don't add notes arguing it is compliant.
+2. **Low: the local browser launch has a weak guard** (`browsers.py:28`, `45-46`). `chromium.launch` is skipped only when `CDP_URLS`/`CDP_URL` are set, so if they were ever missing in the sandbox it would start an own browser. Fix: also refuse to launch when `CHALLENGE_RUN_TOKEN` is set.
+3. **Low: the generic helpers in `browser_tools.py` all look fine.**
+   - Auto login (`:173`) fills the run's own credentials.
+   - Cookie handling (`:196`) prefers the necessary-only answer.
+   - The popup closer (`:25-57`) only presses close buttons and never follows links.
+   - The error-page reload (`:229`) is a retry.
+   - These all fit "helpers may retry and fill forms". The human-check helper (`:61-83`, `:215`) sets sliders and ticks robot checkboxes by script. That is the one thing a strict reviewer could call circumventing a site control. It is narrowly scoped (other checkboxes are left to the model) and reported to the model. Optionally drop it and let the model use `fill` on the slider.
+   - `_on_dialog` (`:137`) accepts every browser confirm. Acceptable, because the model triggered the action.
+4. **Cosmetic:**
+   - `tests/test_kit.py:24` uses the public-1 siteId `tender-portal` in a fixture. Rename it to something like `site-a`.
+   - `tests/` launches a local Chromium, but only as tests, never in the run.
+   - `README.md` is still the starter-kit text and steers nothing.
+   - `calc.py` holds only rule mechanics and placeholder data.
+
+**Untracked files (risky once committed)**
+
+1. **Medium (likely flagged): text copied from site pages into prompts.** These phrases are not in the brief, so they most likely come from public-1 pages:
+   - `research_tender.py:270-271`: "Kein Rüstpool", "kein Projektbonus".
+   - `research_mail.py:208`: decoy labels "Entwurf", "nicht versandt", "Keine Freigabe".
+   - Fix: describe these generically ("statements of non-membership", "draft or unsent previews").
+2. **Medium (flag risk under rule 11): code decides what to investigate and what to choose.**
+   - `research_mail.py:173-189` plus `research_kind` send nine search tasks from a fixed list. Models still drive each search, but the plan itself is code.
+   - `research.py` `select_material` picks the material in code.
+   - Fix: let an orchestrating model decide which kinds of record to pursue from the brief and Q&amp;A, and let the model choose the material while code only validates the exact match.
+3. **Low to medium: sender names and subjects hardcoded from the public brief** (`research_mail.py:174-188`). Strings like `leitung`, `kalkulation` and the subject words do appear in the brief, so they are allowed. But they are copied from public-1's brief, and the private run may phrase them differently. Fix: have `briefing.py` pull the sender-to-subject mapping out of the run's brief.
+4. **Low: off-site navigation without a host check** (`research.py:667`, `718`). `_goto(urljoin(site url, link))` follows links reported by the model and does not check the host, unlike `goto` and `open_pages`. Fix: reuse the same-host check.
+
+German words from the brief (Hauptangebot, Position auslassen, Kataloggruppe, Werkpost) are used as the brief intends, so they are fine.</result>
+<usage><subagent_tokens>113949</subagent_tokens><tool_uses>19</tool_uses><duration_ms>113941</duration_ms></usage>
+</task-notification>
+
+---
+
+What score should we expect once we have v2? And when do you think it is ready? And how did one team get score 100?
+
+---
+
+Ok would it help to have more subagents to speed it up. Or do more runs (not submission) on the system or on ours? Or anything?
+
+---
+
+"The real bottleneck is the shared scouting account." could we improve that somehow? Like with an additional machine, login, etc. I guess the challenge providers have thought about this somehow?
+
+---
+
+Yes, definitely add this.
+
+---
+
+And have you notified subagents to use it? And for local can we also use more? or by using one of my ssh machines or so?
+
+---
+
+"every machine would use the same global scouting login" what is the issue there? What collides there?
+
+---
+
+<task-notification>
+<task-id>aca9e958470992e7f</task-id>
+<tool-use-id>toolu_01FkAiZC5FiFMnhbLf9GUbiT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/aca9e958470992e7f.output</output-file>
+<status>completed</status>
+<summary>Agent "Cut tokens in page views" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Waiting for the runs to complete.</result>
+<usage><subagent_tokens>153674</subagent_tokens><tool_uses>79</tool_uses><duration_ms>1037821</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aca9e958470992e7f</worktreePath><worktreeBranch>worktree-agent-aca9e958470992e7f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+"What doesn't collide: reading tender documents and Q&A, spec revisions, ERP materials and prices, and approval mails. Those are plain reads; each browser has its own session cookie and the data doesn't change. That's why the research agents can run in parallel without problems." so subagents could work on this independent? And can you ask an agent if we really cannot have more states of this at least for parts of it?
+
+---
+
+Also the challenge providers says one needs like multi agents to get good scores. Not sure if we explore this already.
+
+---
+
+<task-notification>
+<task-id>aca9e958470992e7f</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/aca9e958470992e7f.output</output-file>
+<status>completed</status>
+<summary>Agent "Cut tokens in page views" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Base run 1 is done. Waiting for the rest.</result>
+<usage><subagent_tokens>152873</subagent_tokens><tool_uses>79</tool_uses><duration_ms>1157711</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aca9e958470992e7f</worktreePath><worktreeBranch>worktree-agent-aca9e958470992e7f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Yeah just schedule some more exploration or testing agents if needed.
+
+---
+
+<task-notification>
+<task-id>a713df6b02283c882</task-id>
+<tool-use-id>toolu_01E1bmoxVcyJ8S17sGrwzu52</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a713df6b02283c882.output</output-file>
+<status>completed</status>
+<summary>Agent "Investigate isolated site state options" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Isolated state on the challenge sites: findings
+
+The platform gives teams no isolated scouting state, but most of it isn't needed: the bid wizard is already private to each browser session. The only shared state is the webmail, which holds the TAN mails.
+
+**1. What the docs and API offer: nothing per team.**
+- `api.md`: scouting returns "the logins the organizers publish… These are demo logins without a run token… nothing done with them counts." The response has `until_revoked: true` and never expires.
+- The OpenAPI spec has no reset endpoint, no extra accounts and no per-team scouting. The only related endpoint is `POST /v1/challenges/{id}/practice-runs`, marked "Deprecated and internal: organizers' demo access… participants never need it" (llms-full: "Organizers only"). I did not call it.
+- `faq.md`: "Can I run my agent outside the sandbox? While you develop, yes, anywhere, with the scouting logins."
+- The two announcements say nothing about this. One raised concurrent test runs to 4, but our learned.md says 5; worth checking.
+
+**2. Experiment (two separate headless browser contexts, no other agent running):**
+- **Bid wizard: tied to the session cookie, not the account.** Fresh contexts A and B both opened an empty step 1 (Bieterdaten). A filled in the bidder data once (the brief's company name and VAT id, plus the mailbox address read from the webmail) and pressed Weiter. After a reload, A showed step 2 (Angebotsart) and B still showed an empty step 1. The leftover state we saw earlier came from reusing our own session.
+- **Webmail: one mailbox shared by everyone.** Both contexts saw exactly the same list: 66 messages, the newest being TAN mails numbered "Anforderung 66, 65, 64…". So the TAN mails and their numbering are shared across all teams.
+- **Untested:** whether one TAN request cancels TANs requested from other sessions, because I was not allowed to request one. The shared numbering and the jumps we saw make account-wide cancellation likely.
+
+**3. Using a test run's logins from my laptop: technically possible, not advisable. I did not try it.**
+- A past test run's log shows the same public hostnames as scouting (`atira-rfq-*.kyora.run`). Runs get separate logins on the same public sites, so they would probably be reachable from outside.
+- The rules work against it:
+  - run-contract: "Site logins are issued per run and only work while that run is live."
+  - fair-play forbids "trying to get data out of the sandbox" and says "Nobody helps it during a run."
+- Our own agent would also share those accounts while the run is live, and code that prints `CHALLENGE_SITE_ACCESS` is exactly what the package reviewer flags.
+- Recommendation: don't do it without written permission from the organizers.
+
+## Options, best first
+
+1. **Use the session isolation we already have (no risk).** Run the bid form locally up to step 6, in separate browser contexts per developer. Add a stop before the TAN request, and test TAN signing only in test runs (up to 4–5 at once).
+2. **Ask the organizers (one message, low risk).** Ask for per-team scouting logins or a mailbox reset, and whether using a live test run's logins from outside is allowed. Mention that TAN requests from different teams collide in the shared mailbox.
+3. **Read the TAN by request number right after our own request.** This keeps local signing mostly working, but we still cancel other teams' TANs and they cancel ours. Use it sparingly.
+4. **Leak a test run's logins to a laptop (not recommended).** It risks a fair-play violation and collides with our own running agent.
+
+I appended one bullet with these results to `docs/learned.md` and committed nothing. The probe script and its logs are in `/Users/jonasstenglein/.claude/jobs/064ce75e/tmp/iso/`: `observe.py`, `obs1.log` and `obs2.log`.</result>
+<usage><subagent_tokens>88055</subagent_tokens><tool_uses>19</tool_uses><duration_ms>150949</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1a8b2c8cd6aff30f</task-id>
+<tool-use-id>toolu_01LqZ4FmEicKtd1kjKfnarjP</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a1a8b2c8cd6aff30f.output</output-file>
+<status>completed</status>
+<summary>Agent "v2 spec and ERP research workers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I built the spec and ERP research workers. On public-1 the last three runs gave correct records for all five requirements, but end-to-end time is 188 to 318 s against your ~3 min (180 s) target. Nothing is committed; I only created new files.
+
+**Files**
+- `agent/research.py`: both workers, the two read-only tools, and the `Erp` class (runs requirements and materials in parallel, one tab each).
+- `agent/evidence.py`: the record models, deterministic parsers, the exact-match validator `check_choice`, and the mapping to calc (`to_position_input` builds `calc.PositionInput` with `calc.Material` and `calc.PriceCondition` inside).
+- `dev/research_check.py`: the local runner.
+
+**How to run:** `eval "$(atira scout --env)"; HEADLESS=1 uv run --project agent python dev/research_check.py [--reserve KEY=MM ...] [--only A-3]`. Without `--reserve`, the two "nutzbarer Weg" requirements stay pending (their research is still collected).
+
+**How it works**
+- **Which site is which:** a model reads the brief (`research_sites`); nothing branches on siteId or URL.
+- **Spec:**
+  - With thinking off, a worker finds the document, passes the access gate and lists the revisions with their statuses.
+  - A thinking-on call picks the current revision; a validator checks it is one of the listed revisions.
+  - The worker then opens that revision and calls `read_document` with the "next page" control it chose. That tool pages through and stops when a page repeats.
+  - Each page is extracted in parallel and checked against the page text. Requirements are handed to the ERP stage as soon as they are parsed.
+- **ERP:**
+  - A warm-up worker signs in during the spec stage and runs again if the session sat idle too long.
+  - Per requirement, a worker searches the Kataloggruppe and lists every hit with its attributes. Every hit is then inspected.
+  - Per material, a worker opens the views it chooses (`open_pages` only opens links it has already seen). A reader turns the kept views into one record, checked against the view text. If facts are missing, it does a second pass that keeps what was already read.
+  - A thinking-on model chooses the material. `check_choice` (active status plus `calc.matching_materials`) sends a wrong choice back with the reason.
+
+**Coordinator's fair-play points, all addressed:** the model now chooses the material and code only validates it; links followed from model reports go through the same host check as `goto`; site wording is out of the prompts, and docstring examples use invented values.
+
+**Records produced on public-1 (match what I checked by hand):**
+- Current revision R-6156 ("gültig" in a tooltip), not R-4034, which opens first. All five requirements read correctly; A-2 and A-4 are "nutzbarer Weg" with keys ER-4001 and ER-9526; A-5 is 1 Satz = 5 Stück.
+- A-1 → HZ-1609 (HZ-8405 is blocked): free 31 (blocked 68 not counted), lead time 2 weeks from stock / 7 production, 11 per carton, allocation 3.1 kg, surcharge 2.125 kg, MET-4607, EUR per 1: 25+ 2743.58, 10+ 2930.65, 1+ 3117.71.
+- A-3 → HZ-9275 (HZ-9704 is 220 bar). A-5 → HZ-6932 (HZ-3567 has stroke 325), price unit 100 with en-US numbers parsed correctly.
+- A-2 → HZ-2170 holds two condition records (2026 and 2027), USD with FX-6282, price unit 100 vs 1. A-4 → HZ-3916, price unit 100, de-DE numbers.
+- The A-2/A-4 choices only came out because I passed reserves 5.5 and 12 on the command line. Those are invented values that fit the ERP strokes, used only to exercise the choice step; the real values must come from the Technikfreigabe mail.
+
+**Timings (end to end, with brief reading):**
+
+| Run | Total | Spec | ERP stage | Notes |
+| --- | --- | --- | --- | --- |
+| 4 | 188 s | ~73 s | 96 s | no session drops |
+| 6 | 318 s | ~93 s | 216 s | ERP session dropped mid-run |
+| 7 (final code) | 252 s | ~70 s | 169 s | one search retry |
+
+Model steps take about 2 s at the median, but hosted calls sometimes hang.
+
+**Accuracy and speed problems seen**
+- **ERP session drops:** the ERP ended the whole session mid-run twice, after about 85 s and about 130 s, and every tab then signed in again at once and failed ("Formular abgelaufen"). The scouting account is shared, so a sign-in from another process probably causes this; a real run has its own logins. The retry pass recovered every fact.
+- **Wasted steps:** without thinking, navigation workers sometimes keep refining a search that already has hits, or guess record pages that don't exist. Step limits (14 for search, 12 for detail) and one retry contain this, but it costs 30 to 60 s.
+- **Gap filling:** without data, the reader once filled in 0 or "unknown"; the prompt now forbids that and the completeness check retries.
+- **Spec dates:** the revision dates flip between day-first and month-first on every load, so I don't report them and the decision goes by the status the site marks.
+- **Earlier hang:** one early run had a 97 s stall, which looked like proxy hangs plus the 30 s client timeout.
+
+**Harness changes I recommend (not made)**
+1. **llm.py:** a per-call timeout. Thinking calls run 16 to 35 s and get killed at 30 s and retried. I work around it in `_slow_model()` by raising `LLM_TIMEOUT` (default 90 s) while the model is built.
+2. **browser_tools.py:** serialise sign-in per site, one lock per site shared by all tabs of a context, so a dropped session doesn't trigger N parallel logins.
+3. **browser_tools.py:** a public `SiteSession.goto(url)` with the host check, and a hook that records each view, so I can stop wrapping `session.look` and calling `_goto`.
+4. **worker.py:** a `validators=` parameter on `run_worker`, and recording the grounding refusals (`output_refused`) the workers hit.
+
+**Hooks for the other workers**
+- `effective_requirement(req, amendments, reserves, scenario_date)` applies scoped amendments and the nominal-stroke rule.
+- `await reselect(effective_reqs, erp_result)` re-runs the model's choice without browsing, so the material can be decided once reserves arrive.
+
+I stopped my scouting daemon by PID. On the processes the coordinator raised: my only pattern kill was `pkill -f rscout/daemon.py`, which only matches that daemon's path.</result>
+<usage><subagent_tokens>313625</subagent_tokens><tool_uses>111</tool_uses><duration_ms>3792963</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0f71dbdbb8caf177</task-id>
+<tool-use-id>toolu_01L1vrXf2bDHsCxn7WwMYQpq</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a0f71dbdbb8caf177.output</output-file>
+<status>completed</status>
+<summary>Agent "Evaluate and integrate Clef decisions" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>I ran an offline comparison of Clef and Qwen on real page views, and Clef only wins at one decision: spotting an error or dead-end page after an action. I added that one check behind a switch that is off by default. It hasn't been tested inside a full agent run: our only end-to-end flow asks for a TAN, which I was told not to do.
+
+## How I measured
+I hand-labelled 68 decisions on 55 distinct page views from the trace files, ran each model on them 3 times, and scored accuracy, latency and simulated cost. The labelled data contains site text, so it stays local and gitignored in `dev/clef_eval/data/`. Only the eval script and a results summary are committed.
+
+| Decision type | Model | Accuracy | Median / p90 s | $ per decision |
+| --- | --- | --- | --- | --- |
+| Which link or control to use (14 items) | Clef | 79 % | 1.4 / 2.0 | 0.00028 |
+| | Qwen, thinking off | **93 %** | 1.3 / 2.0 | 0.00013 |
+| | Qwen, thinking on | 86 % | 6.4 / 106 (one call hung) | 0.00044 |
+| Right document / revision / record (16 items) | Clef | 88 % | 1.1 / 1.6 | 0.00028 |
+| | Qwen, thinking off | 92 % | 1.1 / 2.0 | 0.00013 |
+| | Qwen, thinking on | **98 %** | 5.2 / 10.5 | 0.00044 |
+| Did the action work / error or decoy page (20 items) | Clef | **100 %** | 1.1 / 1.6 | 0.00015 |
+| | Qwen, thinking off | 93 % | 1.4 / 2.4 | 0.00008 |
+| | Qwen, thinking on (first 14 items only) | 100 % | 4.3 / 10.3 | 0.00044 |
+| Pre-filtering list rows (5 lists, 18 rows) | All three | 100 % | Clef 1.1, Qwen off 1.2, Qwen on 5.7 | per list |
+
+All the costs are tiny next to a worker step, so accuracy and speed are what matter.
+
+## Where Clef helps and where it doesn't
+- **Error or dead-end pages: Clef wins.** It got all 60 right, and its yes/no probabilities were well apart (at least 0.68 for dead ends, at most 0.09 for real pages), at the same ~1 s as Qwen without thinking. Qwen without thinking missed an empty reading pane every time and once misjudged a "TAN requested" page. Qwen with thinking is also exact but about 4x slower.
+- **Choosing a link: Clef loses.** It fails when the choice depends on order or a row's tooltip, such as the highest request number, the newest mail being on the previous page, or the revision marked valid only in a tooltip.
+- **Right document or record: Clef loses.** It took a `&lt;ref&gt;-A` look-alike for the exact tender reference and misread a stated quantity. Qwen without thinking also fell for the look-alike.
+- **Pre-filtering lists: no gain.** All three were perfect. Clef can answer many yes/no questions in one call, but Qwen already handles short lists in one step.
+- Clef gives the same answers on every repeat; Qwen without thinking varies between repeats.
+
+## What I integrated
+- **Switch:** `AGENT_CLEF=1` turns it on (`USE_CLEF=1` also works). I used the `AGENT_` prefix because `dev/track.py` already records those variables, so `AGENT_CLEF=1 dev/run-local.sh v1 "&lt;note&gt;" clef-pagecheck` would log the A/B run.
+- **New module `agent/clef.py`:** the Clef call with retries, a concurrency cap and token counting. It also has:
+  - a `page_check(last_action)` tool that workers can call to ask whether the current page is a dead end;
+  - an `outcome_hint(view, action)` helper for an automatic check after actions, not wired in yet;
+  - the link-choice and yes/no helpers the eval uses.
+- **Hook already in place:** `agent/worker.py` gets the import plus `tools=[*browser, *tools, *clef.tools()]` in `run_worker`. With the switch off this adds nothing.
+- **Hooks I only describe:** those files belong to the other agents.
+  - `browser_tools.py`: in `SiteSession.act` and `goto`, after `look()`, put `await clef.outcome_hint(self.view, f"{kind} {ref}")` above the view. This costs about 1 s per action, so it's better limited to searches, opening messages and submits.
+  - `submit.py`: `await clef.dead_end(view, "entered the TAN and submitted")` would catch a rejected TAN quickly.
+- **`agent.json`:** still lists only `"qwen"`. Add `"clef"` to `"models"` before shipping with the switch on. The sandbox can't take run variables, so a sandbox A/B also needs the default flipped in code.
+
+**Branch and commit:** `worktree-agent-a0f71dbdbb8caf177`, one commit `c0b62bf` "Add Clef page check behind AGENT_CLEF" (author josteng, nothing under `.claude/`, not pushed). The repo's Entire hook added an `Entire-Checkpoint` line to the commit message; I left it. The 55 unit tests pass. I added one bullet to `docs/learned.md`.
+
+Files:
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177/agent/clef.py`
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177/agent/worker.py`
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177/dev/clef_eval/eval.py`
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177/dev/clef_eval/RESULTS.md`
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177/docs/learned.md`
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177/.gitignore`</result>
+<usage><subagent_tokens>172858</subagent_tokens><tool_uses>67</tool_uses><duration_ms>2043554</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177</worktreePath><worktreeBranch>worktree-agent-a0f71dbdbb8caf177</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Entire should stay enabled. What are the subagents going? Is there anything to act on or add to it?
+
+---
+
+<task-notification>
+<task-id>b0z0ejyg2</task-id>
+<tool-use-id>toolu_015JibVgyybsYSo5zQ2kesVG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/b0z0ejyg2.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for v1 run result and show the end" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bgq96t4ne</task-id>
+<tool-use-id>toolu_01CBCgrFnvm3tURpNDo7DF8A</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bgq96t4ne.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for the old v1 run to end" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a546a7d5cb47e8948</task-id>
+<tool-use-id>toolu_0118CCdNxgXPgM8CFCu4p4M6</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a546a7d5cb47e8948.output</output-file>
+<status>completed</status>
+<summary>Agent "Hand-derived answer and local scorer" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>I've built the local scorer and the hand-derived public-1 answer, all under `checks/` (now in `.gitignore`; nothing committed, `agent/` untouched). On the v1-style answer the scorer gives 10.00, the same as the platform. Points: decision 5 and reference 5. Discount, total, consistency, both extra checks and all position fields score 0.
+
+## Expected answer
+VG-2027-7093, bid, EUR, discount 5 %, total_net **356949.62**.
+
+| Pos | Material | Qty | Base | Surcharge | Packaging | Rebate | Unit price | Lead time (weeks) |
+|---|---|---|---|---|---|---|---|---|
+| 01.01 | HZ-1609 | 25 | 2743.58 | 6.69 | 1.59 | 0.00 | 2614.68 | 2 |
+| 01.02 | HZ-2170 | 29 | 705.15 | 5.91 | 4.57 | 0.00 | 680.37 | 3 |
+| 01.03 | HZ-2170 | 16 | 753.23 | 12.57 | 4.97 | 580.41 | 734.49 | 11 |
+| 01.04 | HZ-3916 | 21 | 2107.18 | 5.25 | 1.26 | 2131.11 | 1906.85 | 3 |
+| 01.05 | HZ-6932 | 130 | 1866.15 | 8.06 | 1.94 | 11683.58 | 1692.74 | 3 |
+
+The traps this answer depends on:
+- **01.01 quantity:** Q&amp;A 3916 is dated after 8148, so 25 (not 26), even though its number is lower.
+- **01.01 material:** HZ-8405 matches too but is blocked (status 03).
+- **01.05 quantity:** Q&amp;A 8152 (32 Satz) is withdrawn by 8153, so 26 Satz × 5 = 130 pieces.
+- **A-2 stroke:** the latest amendment gives 482 usable; adding 2 × 9 mm reserve gives 500 nominal.
+- **A-4 stroke:** 576 usable plus 2 × 12 mm reserve gives 600 nominal.
+- **Price units and locales:** the USD and EUR conditions are per 100 pieces, and "64,853 (en-US)" means 64853.
+- **Valid records:** the FX rate is 1.0873 (the 1.25 mail is future-dated) and the metal index is 3.15, the window containing 25.01.
+- **01.01 delivery:** pooled demand 25 exceeds the commitment ceiling of 24, so stock delivery applies (2 weeks).
+- **01.03 delivery:** pooled HZ-2170 demand is 45 against a ceiling of 44, so production (11 weeks).
+- **01.02 delivery:** the ceiling is 45, inclusive, so the 3-week commitment applies.
+
+## Fields I'm unsure about
+- **01.05 surcharge_per_unit:** rounding the whole per-piece sum once gives 8.06, which I used. Rounding each component separately gives 8.05. This is the only field where the two readings differ; `--alt` accepts 8.05.
+- **How the two extra checks map to fields (guess):** I scored `withdrawn_answer` as the 01.05 quantity, and `index_window` as the surcharge_per_unit of all five positions.
+- **Arithmetic consistency (guess):** I required every position to be present and total_net to equal the sum of quantity × unit price. v1 rules out a plain sum check: an empty answer with total 0 would pass it, yet the platform gave 0.
+- **Extra or duplicate positions:** each costs one position share (13 points), with position points floored at 0.
+
+## agent/calc.py
+I fed it the same facts and its output matches my independent Decimal derivation on every field. I found no bug that changes public-1. Three risks for other scenarios:
+- **Day-only date checks** (`calc.py:263`, `:294`, `:338`): records are compared by date only. A record dated the same day but later than the scenario time (for example 25.01 at 10:00 when the scenario is 09:00) would be accepted.
+- **Undated withdrawals** (`calc.py:259-266`): `resolve_quantity` honours a withdrawal even if the withdrawal itself is future-dated.
+- **Overlapping metal-index windows** (`calc.py:365`): if two windows contain the date, the last-listed rate wins.
+
+## Using the scorer
+```sh
+uv run --project agent python checks/derive.py         # rebuilds expected_public1.json, cross-checks calc.py
+python3 checks/score.py &lt;answer.json&gt; [--alt] [--json]  # per-field table and quality out of 100
+```
+It accepts the plain answer object or one wrapped as `{"answer": {...}}`, and money as numbers or German-format strings. Blank or missing fields score 0.
+
+Scouting was read-only: no bid form, no TAN requests. The browsing scripts and raw dumps are in `/Users/jonasstenglein/.claude/jobs/064ce75e/tmp/expect/`.
+
+Files are in `checks/`:
+- `expected_public1.json`
+- `derivation.md`
+- `score.py`
+- `derive.py`
+- `v1_answer.json`</result>
+<usage><subagent_tokens>232102</subagent_tokens><tool_uses>58</tool_uses><duration_ms>981975</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>affb9add17bc3753b</task-id>
+<tool-use-id>toolu_01RUSxJxCorefaXRdHv4fJvJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/affb9add17bc3753b.output</output-file>
+<status>completed</status>
+<summary>Agent "Speed up bid flow: thinking by phase" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The v1 bid now takes 87 to 105 s in sandbox test runs instead of 201 s, across 4 runs of the final variant. Every run scored quality 10, was eligible, had no extra positions, and signed with all 5 positions omitted. Cost per run fell from $0.019 to $0.008 to $0.010. Nothing was pushed, merged or submitted.
+
+Branch `worktree-agent-affb9add17bc3753b`, commits:
+- `7770963` Split bid worker into form and review phases
+- `dc42886` Check the summary once, then sign thinking off
+- `caf0c1c` Log fill_in actions and reject empty selects
+- `4ce4c18` Add bid speed-up lessons to learned.md
+- `3765615` Record final-variant test runs
+
+## Why most timing came from test runs, not local runs
+After your update about shared scouting logins I moved the full sign-and-TAN measurements to test runs. Local runs had shown a correct TAN being rejected because another team's request invalidated it.
+- Local runs now only cover the form phase. `AGENT_STOP_BEFORE_SIGN=1` stops before any TAN request, so we don't invalidate other teams' TANs.
+- One of my earlier full local runs did request TANs on the shared webmail before your warning.
+
+## Timings per variant (test runs)
+
+| Variant | Duration | Quality | Cost |
+|---|---|---|---|
+| Baseline (all thinking on) | 201 s | 10 | $0.019 |
+| A: form thinking off, review thinking on | 271 s (1 run) | 10 | $0.019 |
+| B: thinking off in both phases | 171 s (1 run) | 10 | $0.012 |
+| **Final variant** (4 runs) | **94, 96, 105, 87 s** | 10 each | $0.008 to $0.010 |
+
+Run A was slow because of three problems, all fixed in the final variant:
+- The model went off to read every tender document (35 s). The goal now says to tick the acknowledgement without opening them.
+- The mail lookup hit its 8-step limit once. It now reloads the inbox first, gets a hint to open the message's own page, and has 10 steps.
+- Some thinking-on steps took 20 to 34 s.
+
+On the local scouting sites, the form phase alone (stopping before the TAN) took 41 to 52 s with the final code, against about 126 s before.
+
+## What changed
+- **`briefing.py` and `llm.py`:** the briefing runs with thinking off and is still validated against the brief: 6 to 10 s instead of 17 to 45 s. `llm.thinking(phase, default)` reads `THINKING_BRIEF`, `THINKING_FORM`, `THINKING_REVIEW` and `THINKING_SIGN`, so experiments are recorded.
+- **`agent.py`:** all sites are signed in while the brief is being read.
+- **Bid worker in `submit.py`**, which now runs in three steps:
+  - **Form phase:** thinking off, up to the review/signing page. The contact email is looked up first and put straight into the goal.
+  - **Summary check:** one model call compares the review page with the requirements.
+  - **Signing phase:** thinking stays off when the check passes, and turns on if the check fails or finds problems.
+- **TAN hand-off:** a new `request_signing_tan(ref)` tool clicks the button the model chose, then fetches the TAN. It also passes the portal's reply (e.g. "Anforderung N") to the mail worker so it picks that exact message. The bid worker can't request another TAN while a lookup runs.
+- **Fewer steps:** a new `fill_in(actions)` tool lets the model do several fills, selects, ticks or clicks on one page in one step; switch it off with `AGENT_FILL_IN=0`. I did not turn on parallel tool calls: element refs are renumbered after every view, so batched clicks could hit the wrong button.
+- **Clean exit:** once the bid is in, the platform closes the run's model token and the last model call gets a 401. That error is now caught; the score was never affected.
+
+## Correctness checks
+- **Summary check accuracy:** I tested it offline on 6 edited copies of a real review page: one correct, plus an alternative offer, a 5 % discount, a position not omitted, an extra position and a transposed VAT id. With thinking off it judged all 6 correctly in 2 to 5 s; with thinking on, also all 6, but in 4 to 27 s. So it defaults to off.
+- **Wrong clicks:** with thinking off, the form phase sometimes clicks "Position hinzufügen" (add position) instead of "Weiter". It recovered in every run and the scores show no extra positions, but it costs steps.
+
+## Recommended defaults (already in the code)
+- `THINKING_BRIEF=0`, `THINKING_FORM=0`, `THINKING_REVIEW=0`, `THINKING_SIGN` on only when the check doesn't pass.
+- `AGENT_FILL_IN=1`.
+
+No changes to `worker.py`, `browser_tools.py` or `extract.py` were needed; the new tools live in `submit.py`. Lessons are added as bullets in `docs/learned.md`, and all test runs are recorded in `experiments/runs.jsonl`.</result>
+<usage><subagent_tokens>188842</subagent_tokens><tool_uses>95</tool_uses><duration_ms>2324344</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-affb9add17bc3753b</worktreePath><worktreeBranch>worktree-agent-affb9add17bc3753b</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Is ther more thing to explore etc. as I have some tokens next for the next 33min. Maybe also fable etc. Maybe still submit this sped up v1 as some in-btween to check performance does  not degenerate.
+
+---
+
+<task-notification>
+<task-id>aca9e958470992e7f</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/aca9e958470992e7f.output</output-file>
+<status>completed</status>
+<summary>Agent "Cut tokens in page views" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Waiting for the 3-rep series to finish.</result>
+<usage><subagent_tokens>175163</subagent_tokens><tool_uses>99</tool_uses><duration_ms>2583706</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aca9e958470992e7f</worktreePath><worktreeBranch>worktree-agent-aca9e958470992e7f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Also: Could we supply tools or so to the agent that do some of the comment steps our agents struggle with? Like without spending time and tokens on it? Or are the websites behaving too random?
+
+---
+
+<task-notification>
+<task-id>bfe5vat66</task-id>
+<tool-use-id>toolu_01GU1E9fWgrC3cuLmiSZANpr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bfe5vat66.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the faster v1 submission and record it" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1517d68c93e50e27</task-id>
+<tool-use-id>toolu_01DmhpDUDSHgDFVSxmFYvjE5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a1517d68c93e50e27.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix calc.py date edge cases" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Committed and green. Nothing more is needed; here is the report.
+
+## Result
+
+Branch `worktree-agent-a1517d68c93e50e27`, commit `2a5267d` ("Compare record times, not days, in calc rules"), author `josteng &lt;jonas@stenglein.dev&gt;`, `Entire-Checkpoint:` trailer kept by the hook, nothing pushed, nothing under `.claude/` staged. Only `agent/calc.py` and `agent/tests/test_calc.py` changed. `uv sync -q &amp;&amp; uv run --no-sync python -m unittest discover -s tests`: 65 tests, OK (was 55).
+
+All paths below are under `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a1517d68c93e50e27/`.
+
+### Fixes in `agent/calc.py`
+
+**Shared timestamp semantics (lines 31-72).** New helpers `_instant` (naive stamps count as UTC), `_order` (total order over dates and timestamps, a date sorts as its UTC midnight), `_not_later(value, cutoff)` (two timestamps compare as instants; anything involving a date-only value compares by calendar day), and a `Stamp = Annotated[date | datetime, BeforeValidator(_parse_stamp)]` field type. The validator keeps `"2026-05-15"` a `date` and `"2026-05-15T09:00:00Z"` an aware `datetime` (plain pydantic would turn a midnight `T00:00:00Z` string into a date). `BidInput.scenario_date`, `QuantityChange.date`, `Amendment.date`, `DatedRecord.date`, `PriceCondition.valid_from/valid_to` and `MetalIndexRate.valid_from/valid_to` are now `Stamp`; existing `date`/`datetime` callers work unchanged.
+
+1. **Same-day-but-later records (risk 1)**: `resolve_quantity` (line 129-144), `apply_amendments` (line 160-178) and `latest_authoritative` (line 196-208) now filter with `_not_later(record.date, scenario_date)` and pick the latest with `_order(...)`, so a 10:00Z record does not apply to a 09:00Z scenario, a `+02:00` offset is honoured, and a date-only record on the scenario day still applies. `latest_authoritative` covers approvals (16/21), FX fixing, packaging, commitments, setup pool, bonus and metal-index mails; `Approval`/`fx_rates` carry no dates themselves, so no further change was needed there.
+2. **Future-dated withdrawals (risk 2)**: new `Withdrawal(number, date, withdraws)` model (line 122). `resolve_quantity` accepts `Iterable[str | Withdrawal]` for `withdrawn`; a `Withdrawal` only removes its target when `_not_later(w.date, scenario_date)`; bare strings keep the old meaning (already dated by the caller), so the `set[str]` API is backward compatible.
+3. **Overlapping metal windows (risk 3)**: `metal_rate` (line 233-256) no longer takes the last listed hit. Among windowed hits the latest `valid_from` wins (a missing start is the oldest); if the remaining candidates (equally late windows, or several unwindowed rates) carry different rates it raises `CalcError("ambiguous metal index rates ...")`. Windows are inclusive whole days against a scenario timestamp.
+4. **Rule 4 conditions**: `valid_condition` (line 213-219) uses `_not_later` on both inclusive endpoints; a scenario at 23:30Z on the `valid_to` day is still inside, and it no longer raises `TypeError` when the scenario is a `datetime` (previously `date &lt;= datetime` would have crashed once a timestamp was passed).
+
+### Tests added in `agent/tests/test_calc.py` (invented values: `T-0001`, `M-100`, `IDX`, `example.com`)
+
+- `Quantity.test_same_day_change_after_scenario_time_ignored`, `test_same_day_change_with_offset`, `test_date_only_change_on_scenario_day_applies`, `test_future_withdrawal_does_not_apply`
+- `Requirement.test_amendment_after_scenario_time_ignored`
+- `Pricing.test_condition_valid_on_timestamp`, `test_scenario_timestamp_in_bid` (end-to-end `calculate()` with `scenario_date="2026-05-15T09:00:00Z"`)
+- `Discount.test_record_after_scenario_time_is_future` (rule 21 helper with UTC, offset and date-only records)
+- `MetalIndex.test_overlapping_windows_latest_start_wins`, `test_ambiguous_windows_raise`, plus an inclusive-end-day assertion in `test_window_contains_date`
+
+One design note for the caller: a naive `datetime` from a site is treated as UTC. If a worker ever extracts local wall-clock times without an offset, it should attach the offset before handing them to calc.</result>
+<usage><subagent_tokens>97442</subagent_tokens><tool_uses>32</tool_uses><duration_ms>330256</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a1517d68c93e50e27</worktreePath><worktreeBranch>worktree-agent-a1517d68c93e50e27</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0f71dbdbb8caf177</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a0f71dbdbb8caf177.output</output-file>
+<status>completed</status>
+<summary>Agent "Evaluate and integrate Clef decisions" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The monitor that just expired was a leftover watch on the eval run, which had already finished. Nothing new came in and nothing needs doing; the results and the commit `c0b62bf` from my last message still stand.</result>
+<usage><subagent_tokens>172378</subagent_tokens><tool_uses>67</tool_uses><duration_ms>3011281</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177</worktreePath><worktreeBranch>worktree-agent-a0f71dbdbb8caf177</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0f71dbdbb8caf177</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a0f71dbdbb8caf177.output</output-file>
+<status>completed</status>
+<summary>Agent "Evaluate and integrate Clef decisions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>That notice was another leftover background wait on the same eval run, which had already finished. It adds no new results; the table and commit `c0b62bf` from my report still stand.</result>
+<usage><subagent_tokens>173053</subagent_tokens><tool_uses>67</tool_uses><duration_ms>3015418</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177</worktreePath><worktreeBranch>worktree-agent-a0f71dbdbb8caf177</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4138905529ccb8b3</task-id>
+<tool-use-id>toolu_01BaUK4AKhtPJLFqjKPhgtZ4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a4138905529ccb8b3.output</output-file>
+<status>completed</status>
+<summary>Agent "Robustness check with renamed sites" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The role mapping survives a mutated run: in all 4 runs, `briefing.py` mapped the bid and mail sites to the renamed ids. The worker checks are weaker: the tender read passed 3 of 3 final runs, but the mail lookup passed only 1 of 3, and both fail for reasons other than the mutation. The static audit of the committed `agent/` code found no site ids, URL paths or branching on siteId; the brief-specific wording sits mostly in the work-in-progress `research*.py`.
+
+## Robustness results
+Each run renames the site ids to site-a..d (shuffled) and replaces the product names. The model rewords the intro and submission paragraphs with every value kept, and the sections and bullets are reordered. A second variant also hides the URLs from the briefing step. Final script, seeds 2–4:
+
+| Check | Seed 2 | Seed 3 | Seed 4 |
+|---|---|---|---|
+| Briefing, renamed ids (roles, reference, company, VAT id) | PASS 27s | PASS 86s | PASS 79s |
+| Briefing, masked URLs (roles from the brief text alone) | PASS 17s | PASS 22s | PASS 51s |
+| Mail address (`Mailbox.address`) | PASS 4s | PASS 2s | PASS 4s |
+| Mail lookup, no TAN (director approval) | PASS 70s | FAIL 75s | FAIL 74s |
+| Tender positions (5, same each run) | PASS 89s | PASS 44s | PASS 77s |
+| Read-only guard | 0 blocked | 0 blocked | 0 blocked |
+
+Whole runs took 139–200s.
+
+- **Mail lookup failures:** both ran out of the 20-step budget. The mailbox needs a narrowed search behind gates that lock again on every page. Workers only see the siteId as a label, so this is a capability gap, not a mutation effect.
+- **Seed 1** ran with vaguer goals: both briefing variants passed, while the mail lookup and tender read ran out of steps.
+- **A hang:** in one attempt, starting the mail session hung for over 10 minutes after the cookie click timed out. `agent.solve()` starts the sessions with no time limit, so the same hang would block the real run.
+
+## Audit, highest risk first
+**HIGH**
+1. `research_mail.py:210, 377-382, 448, 525`: a sender counts only if it is exactly a role name from the brief at the bidder's own mail domain. A brief that names people or outside addresses rejects every record without saying so. Accept the sender identity the brief states.
+2. `research_mail.py:270-273`: the prompt states public-1's search behaviour as fact (AND search, nothing above 20 hits, separate archive search), which is close to a fixed click path. Say "search every folder; narrow the search if nothing shows".
+3. `research_tender.py:263-272` and `research_mail.py:181-224`: which facts live on which site is fixed in code. Map facts to sites from the brief through a model.
+4. `research_mail.py:283` and `research_tender.py:81-84`: the model converts numbers itself ("5,15 → 5.15"), so en-US "1,250" becomes 1.25. Keep the raw strings and parse them with `evidence.parse_number`.
+
+**MED**
+- The `research.py` goals describe public-1 traps: "Verbindliche Unterlagen", Originalwortlaut, one record per page, "search help".
+- `evidence.py` defaults to German formats: a lone comma is a decimal, slashed dates are day-first, and the "none" words are German.
+- `submit.py:52-53`: TAN messages assumed "newest first, highest request number".
+- `submit.py:86`: "German number format" is hardcoded. Use the format the brief's submission steps name.
+- `briefing.py` assumes exactly one bid site and one mail site, and ignores `submission.siteId` from the run contract.
+- `browser_tools.py:85-91, 173-194`: the sign-in, cookie and error-page helpers only know German and English wording and one-step password forms.
+- `calc.py:333-336`: the same sender-at-bidder-domain assumption as finding 1.
+
+**LOW:** the German hints in prompts (`worker.py:21` "German industrial company", USt-IdNr., Konditionsgruppe), rule numbers in comments, the `## Site access` split in `research.py:152`, and `dev/smoke.py` goals keyed on public-1 site ids.
+
+## Recommended fixes
+- Give `solve()` a time limit on session start, with one retry.
+- Use `task["submission"]["siteId"]` to confirm the bid site the briefing returns.
+- Make mail lookups take the search hints from the brief, and give them a budget that allows for gates locking again.
+- Parse every number through one locale-aware parser.
+- Treat sender rules and fact locations as data read from the brief, not code.
+
+## Branch and commit
+Branch `worktree-agent-a4138905529ccb8b3`, one commit `a4961c4` "Add robustness check against mutated runs". Not pushed, nothing under `agent/` changed. Run it from the repo root:
+
+`HEADLESS=1 uv run --project agent python dev/robustness.py --runs 3 [--seed N] [--json out.jsonl]`
+
+The script reads the scouting logins from `atira scout --env` itself, because this environment blocks `eval`. On the tender site it blocks submission, TAN and any other state-changing requests, and it never sends the logins to the model.
+
+Files are in /Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a4138905529ccb8b3:
+- dev/robustness.py</result>
+<usage><subagent_tokens>146146</subagent_tokens><tool_uses>49</tool_uses><duration_ms>1984683</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a4138905529ccb8b3</worktreePath><worktreeBranch>worktree-agent-a4138905529ccb8b3</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aab59b204c79e220a</task-id>
+<tool-use-id>toolu_0122Bg7cJ9jw1QFyiYyfmkHt</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/aab59b204c79e220a.output</output-file>
+<status>completed</status>
+<summary>Agent "Generic efficiency tools for workers" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Both tool variants are already past the list stage (mail: 7 rows over 3 pages in one call; spec: 4 rows over 4 pages). Waiting for the run to finish before I write up the numbers.</result>
+<usage><subagent_tokens>214652</subagent_tokens><tool_uses>95</tool_uses><duration_ms>1145508</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aab59b204c79e220a</worktreePath><worktreeBranch>worktree-agent-aab59b204c79e220a</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6463a61263f3c79d</task-id>
+<tool-use-id>toolu_01D7qVf6ahKZj2D2uZ6j6T2V</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6463a61263f3c79d.output</output-file>
+<status>failed</status>
+<summary>Agent "v2 configurator position filling" failed: Agent terminated early due to an API error: You've hit your session limit · resets 7:30pm (Europe/Berlin) (error type rate_limit, HTTP 429, request id req_011CftwwoEhkDnYZUd9di3Zo, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now write the integration with a script (replacing `_requirements` and patching `submit_bid`).</result>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a6463a61263f3c79d</worktreePath><worktreeBranch>worktree-agent-a6463a61263f3c79d</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Can you continue now that the session limits reset, just maybe more Opus and not Fable?
+
+---
+
+<task-notification>
+<task-id>aca9e958470992e7f</task-id>
+<tool-use-id>toolu_01HGwuB3G7cTV9QMknE438qB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/aca9e958470992e7f.output</output-file>
+<status>completed</status>
+<summary>Agent "Cut tokens in page views" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've committed the view changes on branch `worktree-agent-aca9e958470992e7f`, rebased onto current main. All 73 tests pass. The biggest finding was a bug rather than a token saving: the old history trim removed the page the model was on. Token savings are clear on form pages (about 25% fewer input tokens) and small on read-only browsing.
+
+**What changed**
+- **Latest view kept (bug fix, `worker.py`).** The old trim kept the page only in the newest request. So after any `note()` call the model had no page in front of it and invented values. Traces show refused notes with made-up dates and prices, and pages reopened over and over. Now the newest page view stays until a newer one arrives. The first prompt's page view is cut to its URL once a newer view exists.
+- **Same-page diffs (`extract.py`, `browser_tools.py`).** After click, fill, select, check, goto or back on the same page, the model gets only the changed parts, or "unchanged". Each control counts as its own piece, so a changed field is one short line, and refs in unchanged parts stay valid. Navigating to another page, or a change bigger than 40% of the page, still sends the whole view. The full view stays in context, so it stays in the cached prefix.
+- **Long selects.** Option lists over 600 characters show the count, the first 8 and the last 2. A new `options(ref, contains)` tool lists or searches them. A failed `select` now names close matches instead of waiting 10 s for a timeout. Option text the model looks up counts as seen, so the grounding check still covers it.
+- **Grounding check unchanged in behaviour.** `session.seen` still gets every whole view.
+- **Stopped workers now report usage.** Workers that hit the step limit used to log no token counts; now they record requests, input, cached and output tokens.
+- **Prompt caching** needed no change: the instructions and tools never vary between steps.
+
+**Main moved, one fix needed.** The new `agent/research.py` reads `session.look()` text directly to extract content. So diffs only come from the browser tools (`look(brief=True)`). Every other caller still gets the whole view, and such a read resets the diff baseline. I did not touch `research.py`.
+
+**Before/after**
+
+Read-only smoke goals, 3 runs each. All runs used the same scouting account, alternating base and new:
+
+| site | variant | done | requests | input tokens | cached | seconds | tokens/request |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| tender-portal | base | 0/3 | 26.3 | 117,915 | 68,469 | 134 | 4,478 |
+| tender-portal | new | 1/3 | 24.0 | 94,524 | 55,403 | 119 | 3,938 |
+| customer-portal | base | 3/3 | 26.7 | 97,077 | 56,971 | 126 | 3,640 |
+| customer-portal | new | 2/3 | 26.3 | 88,180 | 51,221 | 105 | 3,349 |
+| erp | base | 3/3 | 6.7 | 16,199 | 6,795 | 23 | 2,430 |
+| erp | new | 3/3 | 7.3 | 18,391 | 9,931 | 33 | 2,508 |
+| mail | base | 3/3 | 2.7 | 8,584 | 1,045 | 24 | 3,219 |
+| mail | new | 3/3 | 6.3 | 18,848 | 9,408 | 42 | 2,976 |
+
+- **Mail costs more, but the answers are correct.** The inbox shows 3 messages per page. Base returned "5 newest" after 1 to 3 requests by guessing items 4 and 5, or saying it couldn't see them. New opens page 2 and returns the right five.
+- **Model wandering dominates the noise.** The model often keeps going after it has the answer, so read-only results vary a lot between runs.
+- **Diffs barely fired on read-only sites**, since those runs mostly navigate between pages.
+
+To test diffs where they matter, I made an invented local form (fill quantity and reference, pick 1 of 61 options, tick terms, save). This proxies the bid configurator, which I never opened:
+
+| variant | runs | correct | requests | input tokens | seconds |
+| --- | --- | --- | --- | --- | --- |
+| base | 7 | 7/7 | 6 to 7 | ~27,700 | 19 to 28 |
+| new | 13 | 13/13 | 7 to 8 | 17,700 to 21,900 | 20 to 38 |
+
+The configurator spends most of its steps on same-page actions, so this is where the 217k-token bid worker should save most. That is an estimate; I could not measure it under the read-only rule.
+
+**Evaluated and dropped**
+- **Repeated boilerplate removal.** Limited to lines that can't hide content, it saved only 1 to 4% of view text. Without that limit it would hide status words that are traps ("gültig", "ersetzt", table headers).
+- **Path-only URLs in old history stubs.** Tiny gain, and that part is mostly cached anyway.
+
+Per request, about 5k characters are fixed instructions and tools, about 3k history and 1.5 to 2.5k the current view. 40 to 55% of input tokens were reported as cached. Browser actions take 0.3 to 0.7 s and a model step 1 to 4 s, so the number of steps drives both tokens and time.
+
+**Accuracy risks**
+- The model must combine a diff with its last full view. On the form it did so correctly every time (20/20 runs), but the real configurator hasn't been tested.
+- With a long select, the model sometimes calls `options()` even when it knows the exact text, which costs one extra request. It never picks an option automatically, so look-alike entries like "&lt;ref&gt;-A" can't be chosen by mistake.
+- If the model never calls `options()`, it can't see the hidden options in a long list.
+
+**Branch and commits**
+- `660d2ec` Trim page views and keep the latest one (includes the `docs/learned.md` lessons)
+- `622a81e` Send view diffs only from browser tools
+
+Not pushed or merged.
+
+My measurement scripts are outside the repo, in `/tmp/rfqbench/`. `bench.py` is a smoke variant whose tender goal forbids the bid area, and `formbench.py` is the invented form. Two run-time notes:
+- One early run hung for over 15 minutes during site start-up and did not happen again. The bench now has a timeout there; `SiteSession.start()` in the agent still has none.
+- One ERP run hit the site's "guest_unavailable" error.</result>
+<usage><subagent_tokens>207148</subagent_tokens><tool_uses>15</tool_uses><duration_ms>162070</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aca9e958470992e7f</worktreePath><worktreeBranch>worktree-agent-aca9e958470992e7f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae228d7357caa804d</task-id>
+<tool-use-id>toolu_011dPRW2A6KwPTtgoSheNcQc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/ae228d7357caa804d.output</output-file>
+<status>completed</status>
+<summary>Agent "v2 tender Q&amp;A and mail authority workers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The tender worker is correct on public-1, but the mail worker is not done: in the last full run it got 4 of its 9 record kinds, and the run took 471 s against the ~3 min target. Nothing is committed, and I didn't open the bid form or request TANs. One incident first: my early `pkill -f "atira scout"` very likely killed your other local `agent.py` run, because its shell command line contained that text. Since then I only stopped my own processes by PID.
+
+**Files (new, none existing edited):**
+- `agent/research_tender.py`: tender worker (positions + bidder Q&amp;A) and its records. It also holds the helpers the mail side reuses: `collect_pages`, `keep_pages`, `keep_results`, the grounding check and `reader_model()`.
+- `agent/research_mail.py`: model-planned mail research, the rule-21 selection and `bid_clauses()`, which maps everything onto calc's inputs. I kept my models here because `agent/evidence.py` belongs to the spec/ERP agent; I only use its `parse_number`/`parse_int`/`parse_date`.
+- `dev/research_check_records.py`: run with `eval "$(atira scout --env)"; HEADLESS=1 uv run --project agent python dev/research_check_records.py [tender|mail]`. `MAIL_TABS` defaults to 5; the runs below used 9.
+
+**Fixes you asked for, all applied:**
+- **Prompt wording:** prompts no longer contain text copied from public-1 pages.
+- **No fixed search list or senders:** `plan_searches()` has a model read the brief and return each record kind with its subject, its sender in the form the brief states it (local part at the bidder's domain, full address, or name) and the siteId that holds it. Code only lists the calc content types it can fill.
+- **Sender check:** a sender counts if it matches that brief-stated form.
+- **Search instructions:** now generic ("search every folder; change the words if nothing shows").
+- **Numbers:** readers copy numbers and dates as written, and parsing is locale-aware through `evidence` (the page's number format is reported too).
+- **Time checks:** use full timestamps, and `resolve_quantity` now gets the scenario datetime.
+- **Not fully done (your point 3):** the tender worker still runs on `briefing.bid_site`, which a model chose, but no model maps Q&amp;A facts to sites one by one.
+
+**Tender results (public-1, checked against the pages by hand):** all correct, about 50 to 120 s per run.
+- **Quantities:** 01.01 24→25 (answer 3916 is dated later than 8148, so it wins). 01.05 22→26 Satz, because answer 8153 withdraws 8152.
+- **Condition groups:** 01.02 K-3650, 01.03 K-2264, 01.05 K-9018.
+- **Keys:** packaging VP-1134 on all positions; delivery keys per position; pool RP-5730 and bonus PB-1474 on 01.03 to 01.05.
+- **Setup fees:** 85,00 (01.03) and 57,50 (01.05).
+- **Amendments:** R-6156 A-2 stroke 485, then 482 (the later one wins).
+
+**Mail results:** every record it did return was right, and the decoys were rejected:
+
+| Record | Value | Decoy avoided |
+|---|---|---|
+| Approval | 5 %, minimum order value 1.00 | the 4 % mail is older, the `-A` one is a look-alike |
+| Metal index MET-4607 | three windows: 2.75 / 3.15 / 3.95 | |
+| Packaging VP-1134 | 13.25 per carton | |
+| Setup pool RP-5730 | 517.25, largest remainder, ascending ties | |
+| Delivery commitments TZ-* | correct (earlier run) | |
+| FX FX-6282 | 1.0873 (earlier run) | future-dated 1.25 dropped |
+| End reserves ER-4001 / ER-9526 | 9 and 12 mm (earlier run) | |
+| Condition rules | correct (earlier run) | |
+
+In the last run, condition rules, end reserves, commitments, FX and project bonus timed out. The bonus has never been found in any run.
+
+**Why mail is slow and unreliable:**
+- **Proxy latency:** model calls were taking 30 to 36 s, so they hit the 30 s client timeout and retried. Several kinds made only 1 or 2 model calls in their 150 s budget, and the planner alone took about 230 s in that run.
+- **Navigation model:** with thinking off, Qwen invented message ids and subjects and lost track of which folder it was in. `keep_results` now only opens links the worker has actually seen. With thinking on it is more reliable but too slow for 20 steps.
+- **Site:** actions on the mail site sometimes stall for 30 s.
+- **Fragile reading:** the director's approval needs a subject the brief never names, so it depends on the planner's guess (it usually picks Rabattfreigabe, but has used other words that find nothing).
+
+**Harness changes I recommend:**
+1. Give `back()` a `reason: str = ""` parameter, as `submit.py`'s tools have. Qwen calls it with arguments, its retries run out and the worker stops.
+2. Add a timeout parameter to `llm.model()`. Thinking readers need about 180 s, so I built `reader_model()` with `with_options`.
+3. Let `run_worker` drop `note()` and the "record every fact with note()" instruction. Refused notes waste a lot of steps.
+4. Cap `SiteSession.settle()`/`act()` time: a cookie click that never returned once hung a tab for minutes, and form presses take 30 s.
+5. Read nested optional objects tolerantly: Qwen sends them as JSON strings. `MailRecord` decodes them; other typed outputs may need the same.
+6. Mail search: the planned `site_tools.py` search tool should take my `collect_pages` and `keep_results` helpers. My view is that mail search won't hit the time target until searches cost one step each.
+7. calc takes only one setup pool and one bonus plan; `bid_clauses` reports a problem if there are several.
+
+The tender records feed calc directly (quantity changes, withdrawals, amendments). End reserves are returned per key with their revision for the spec matcher.</result>
+<usage><subagent_tokens>435772</subagent_tokens><tool_uses>12</tool_uses><duration_ms>759095</duration_ms></usage>
+</task-notification>
+
+---
+
+So what quality are we at? And how far are we now?
+
+---
+
+"depending on how much mail finishes within the 20 minutes." what does this mean? Others are getting a score of 100 in under 10 minutes apparently.
+
+---
+
+Also: why do the other teams to so many test runs and we don't?
+
+---
+
+What is in v2?
+
+---
+
+And how much longer are you expecting this to take? And why does it take so long?
+
+---
+
+<task-notification>
+<task-id>a670012d2c04fc860</task-id>
+<tool-use-id>toolu_01LoCWGFdEfjSLf3XZiBQNNa</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a670012d2c04fc860.output</output-file>
+<status>completed</status>
+<summary>Agent "Finish site tools measurement (Opus)" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The site tools work is finished in the worktree and rebased onto the latest main (d9ee047), with 5 commits on the branch. All 95 tests pass. With the tools, two of three read-only tasks came back correct; without them, none did. The measurement is uneven, though, because the mail site was gating and hanging logins during the runs (details below). Nothing was pushed or merged.
+
+**What each tool does** (`agent/site_tools.py`; each acts only on what the model points at)
+- **`search(field_ref, query, submit_ref="")`**: types the model's query into the model's field, submits, and returns the numbered result rows over every next or load-more page. Each row comes with its link refs and targets. It also passes on what the site says about the result set ("N Treffer", "Seite X von Y", too many hits, no hits).
+- **`collect(list_ref="page", next_ref="")`**: pages through the list the model points at, or the page's main list, and returns each row once. It stops when no new row shows, with a cap of 25 pages or 200 rows.
+- **`extract(fields)`**: one model call (thinking off) over the current view. Each field comes back with its value as written and the exact quote it came from. A field whose quote is not on the page is dropped, and numbers and dates are annotated with their possible readings.
+- **Number, price and date readers**: these settle locale and day/month order only when the text does; otherwise they return every reading.
+- All controls are found by role and position, never by site labels, URLs or values. Every page is read the normal way, so the grounding check sees each row.
+
+**Measured** (local, scouting sites, read-only, no bid form, no TANs)
+
+| Task | Variant | Correct answer | Steps | Seconds | Input tokens |
+| --- | --- | --- | --- | --- | --- |
+| ERP search the site refuses as too broad | with tools | yes, "too many hits" reported | 10 | 46 | 34k |
+| same | plain | no (step limit) | 30 | 153 | 112k |
+| Mailbox search, inbox and archive | with tools | yes, 10 messages, newest right | 18 | 105 | 93k |
+| same | plain | no (step limit in run 1; hung on the site's gates in run 4) | 30 / 3 | 137 / 277 | not recorded / 9k |
+| Spec revision list | both | no (step limit) | 30 | 126 to 135 | not recorded |
+
+- The mail comparison is not clean, so treat it as "tools succeeded, plain failed" rather than a ratio.
+- In the spec task, `collect` read the 4-page document register in one call. The spec document was not in it, which is a problem with the task wording, not the tool.
+- ERP search the site accepts: not measured (I had no query I knew would list hits).
+- One combined run had a worker stuck at sign-in for 14 minutes. Sign-in (`session.start`) has no time limit. That is a harness issue, not part of this branch.
+
+**Two bugs found and fixed after rebasing** (new commit 892e098)
+- **The collected list disappeared.** `worker.py` cut every older tool result to one line as soon as a newer page view arrived. The model then paged back by hand to see the list it had just collected. Results of search, collect and extract now stay in the history, up to 12k characters.
+- **The next page came as a diff the model could not use.** Main's new diff-only views would have shown the model changes against a page it never saw, since `paginate` clicks through pages without showing them. `paginate` now resets that baseline, so the next view comes whole.
+- The list output also now says its refs hold only until the next action.
+
+**Fair play (rule 11)**
+- **search**: the model picks the site, field, query and when to search; the tool only fills, submits and pages through that one result set. This is the "paginate a model-selected result set" case.
+- **collect**: paginates only the list the model points at and opens no rows. Which rows matter, and what to open next, stays with the model, so it is not a crawler.
+- **extract**: parses a page the model chose, for fields the model names. Values must quote the page and nothing is computed or decided.
+- **Readers**: deterministic calculation and validation. They return every reading instead of guessing.
+- No site values are in code, tests or prompts. The test pages are invented, and the check script takes its query words on the command line.
+
+**For the coordinator (mail research)**: yes, `search` and `collect` can cover the mail worker's paging. Every page they click through is added to the text `keep_results` already checks for seen links, so `keep_results` still only opens links the worker actually saw.
+- **What changes in `research_mail.py`**: in `research_kind`, pass `tools=(search, collect, keep_results_tool(result.kept))` instead of `paging_tool(Collected())`.
+- **Goal wording**: per folder, call `search(field_ref, "&lt;reference&gt; &lt;subject word&gt;")` once; it returns every hit over all pages in one step. Then call `keep_results` with the exact subjects. For a list already on screen, use `collect("page")`.
+- **Cost per search**: one step instead of three (fill, submit, `collect_pages`). The return is compact rows rather than up to 30k characters of raw page views.
+- **Tender Q&amp;A**: keep `collect_pages` there for now, because its reader needs the whole page views, which `collect` does not keep.
+
+**Commits on `worktree-agent-aab59b204c79e220a`**: 5ecdb61 → 0aec6ae (search, collect, extract), 8fd6e38 → 0d4d2bc (extract usage, single-row lists), e832ed4 → 4e90bf6 (list controls after the list only), a8e8c08 → 974a897 (pagination inside nav, counts), and the new 892e098 "Keep list tool results; whole view after paging", which also adds the `docs/learned.md` bullet. All are authored by josteng. The Entire-Checkpoint lines are kept, and nothing under `.claude/` is staged. I deleted the measurement traces from the worktree.
+
+Files are in `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aab59b204c79e220a/`:
+- `agent/site_tools.py`
+- `agent/worker.py`
+- `agent/tests/test_site_tools.py`
+- `agent/tests/test_extract.py`
+- `dev/site_tools_check.py`
+- `docs/learned.md`</result>
+<usage><subagent_tokens>123685</subagent_tokens><tool_uses>44</tool_uses><duration_ms>2352959</duration_ms></usage>
+</task-notification>
+
+---
+
+Ok, what is the state of the subagents? Which ones are done, which ones are running and for how long?
+
+---
+
+<task-notification>
+<task-id>a8dbd5d3b3a7a21da</task-id>
+<tool-use-id>toolu_01HKrqY4azpDhyrzyNR96fJf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a8dbd5d3b3a7a21da.output</output-file>
+<status>completed</status>
+<summary>Agent "Finish model timeouts (Opus)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've finished the task in the worktree and found a real bug along the way: the per-mode timeouts the previous agent added never fired on slow calls. The test it was fixing was already correct in commit 55fc457. All 108 tests pass after the rebase, and there's one commit, `90c0cc4` "Use per-mode model timeouts with retry logging", on branch `worktree-agent-a78d2a106642d0cc6`. Nothing was pushed or merged.
+
+**The bug.** When the model takes longer than about 35 s, the proxy sends the response headers and then a newline every ~15 s until it finishes or gives up at 300 s. The client's read timeout only measures the gap between chunks, so it never fired. In a raw curl check, one thinking-on call ran 300 s and received only 18 newline bytes. With the commit as it was, a thinking-on call hung for over 275 s with no retry.
+
+**What changed:**
+- **`agent/llm.py`:**
+  - **Whole-call deadline:** `model()` now uses a small HTTP client subclass that turns the per-request timeout into a deadline for the whole call. When it expires it raises `ReadTimeout`, and the OpenAI client then retries. The call log marks cut-off calls as `incomplete`.
+  - **Defaults:** thinking-off is now 45 s instead of 30 s. Thinking-on stays at 90 s.
+  - **Retries:** `LLM_RETRIES=0` now turns retries off.
+  - **`env_seconds()`:** the old `_positive()` is now public.
+- **`agent/research.py`:** `_slow_model()` set `LLM_TIMEOUT` temporarily to get a longer timeout on the client. The per-request timeout from `settings()` overrides that, so it didn't work. It's replaced by `_read_settings(thinking)`, which passes `LLM_READ_TIMEOUT` (default 90 s) through `llm.settings(..., timeout=...)`.
+- **`agent/tests/test_llm.py`:** three new tests check that a slow trickling body times out, that late headers time out, and that a normal call is read in full.
+
+**Measured against the proxy on 127.0.0.1:8765.** `atira scout --env` hung, so I read the proxy address from the proxy's log instead.
+
+| Call | Duration | Notes |
+|---|---|---|
+| Thinking-off, 12 at once | 2.3 to 4.3 s | 2 of the 12 hung until the proxy returned 502 at 300 s, which is the case the deadline now cuts off |
+| Thinking-on, 8 at once | 26 to 41 s | All finished within the 90 s deadline with no retry |
+| Short thinking-on | 6 to 8 s | No retry |
+| Long thinking-on, 45 s deadline | 45 s | Cut off as expected, retried once, then failed |
+| Thinking-off copying 80 table rows | ~85 s | Shows that time grows with the length of the answer, not only the mode |
+
+I chose 45 s for thinking-off because steps take 2 to 5 s and it leaves room for the 30 to 36 s calls the mail agent saw. Calls that write long answers should pass their own timeout.
+
+**For the mail and tender agents (please pass this on):** the `reader_model()` workaround in `research_tender.py`, which `research_mail.py` imports, no longer works on this branch. The per-request timeout from `llm.settings()` beats the client timeout set with `with_options(timeout=180)`, so those readers currently get 90 s. They should use `llm.model()` and pass the timeout per call:
+```python
+Agent(llm.model(), ..., model_settings=llm.settings(thinking=True, timeout=180))
+```
+Setting `LLM_TIMEOUT_THINKING` or `LLM_TIMEOUT` changes the default for every call in that mode. I left both files alone, as the coordinator asked.
+
+**Rebase:** it applied cleanly onto the current main (now at `65f4aa9`). Main's `llm.thinking(phase, default)` and the `THINKING_*` switches had already been in the base, and the briefing and submit code still use them.
+
+**Commit message:** reworded as you specified, keeping the `Entire-Checkpoint:` line. Only `agent/` files are in the commit; nothing under `.claude/` was staged.</result>
+<usage><subagent_tokens>91641</subagent_tokens><tool_uses>42</tool_uses><duration_ms>2542273</duration_ms></usage>
+</task-notification>
+
+---
+
+"Now every call has a deadline for the whole call (45 s with thinking off, 90 s with thinking on), so hung calls get cut and retried quickly. That was probably a large part of why the research ran so slowly." is that the best way to detect this?
+
+---
+
+<task-notification>
+<task-id>a6463a61263f3c79d</task-id>
+<tool-use-id>toolu_01QJSSTET2FcfJBwsnaW61c4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6463a61263f3c79d.output</output-file>
+<status>completed</status>
+<summary>Agent "v2 configurator position filling" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Position filling for v2 is built on top of main's phased bid flow. On my offline mock of the bid wizard it enters, signs and submits a fully correct bid. Live on the scouting tender portal it filled a position correctly in an earlier run, but the most reliable version hasn't had a clean live run yet: my last attempts hung at startup, before reaching the bid form.
+
+Branch `worktree-agent-a6463a61263f3c79d`, rebased on main `e05fb7f`, 6 commits, nothing pushed or merged. All 118 unit tests pass.
+
+**Design**
+- **Input:** `solve()` and `submit_bid()` now take the answer dict (`BidResult.answer()`) plus an `attributes` map: per position, the material's attributes (bore, stroke, mounting, certification). The answer dict has no attributes, but the cascading selects need them before the catalogue-number list appears. The research code on main already produces them (`evidence.py`'s `Requirement.attributes()`), so wiring is one dict per position.
+- **Incomplete positions** (any of material, quantity, unit price or lead time missing) are omitted. Without an answer, every position is omitted, as in v1.
+- **What the model decides:** in the form phase it says which position is on screen, maps each control label to a value name once, and names the confirm button and the next button.
+- **What the helper does (`agent/configurator.py`, `configure_position()`):** it sets each cascade level and clicks the confirm, checks the choice survived the round trip, picks the catalogue number, fills German-format numbers, sets the lead time, then clicks the model-named next button. After every position it reports the running net total of the positions actually entered.
+- **Failures:** if a position can't be filled, the tool says so and the model omits it; after 3 failures it refuses. Close to the deadline it tells the model to omit the rest. The signature is always reached.
+- **Summary check and signing pass** now receive the expected values of each entered position, the "all others omitted" rule and the computed net total.
+- No site names, labels, URLs or values are in `agent/`.
+
+**Traps**
+
+| Trap | Handling |
+| --- | --- |
+| Bogus extra position | The tool never clicks "add". It answers "no values, omit it" for any position not in the answer. The goal says never add; the summary check flags extra positions. |
+| Shuffled order | The model reads the position number on the page; the tool checks it appears in the heading or above the first control before filling. |
+| Text-sorted options | Matching is by value, never by list position: same number, or the catalogue number as a whole token, so a prefix like 120 never picks 1200. |
+| Worded attributes | If an attribute is worded differently from the options ("none" vs "without certification"), the model may pick the option itself. Numbers must match exactly. |
+| Alternative offer as default | The goal requires a main offer, or the no-bid declaration when the decision is no_bid; the summary check checks it. |
+| Gross vs net | The model enters only the running net total the tool reports, never a gross amount, its own sum or a sum the page proposes. |
+
+**Results**
+- **Offline mock** (invented values, deliberately different labels): signed and fully correct in 64 to 92 s with about 13 model requests. That covers 2 positions entered, 1 incomplete one omitted, a worded-attribute fallback, a look-alike catalogue number, main offer, total 9390,70 and terms unticked.
+- **Live on scouting** (always stopped before the TAN request):
+  - **Earlier flow, thinking on:** one position fully entered via the fallback, a position with an impossible bore failed and was omitted, and net total 259,14 was correct. 202 s.
+  - **Phased flow, thinking off:** several slips, each fixed:
+    - The model typed its own total.
+    - It clicked "omit" right after a successful fill, which is why the tool now presses the model-named next button.
+    - A partial field map replaced the first one.
+    - It picked bore 50 for an impossible 51.
+    - Once, a re-login on the shared login reset the wizard to step 1.
+  - **Latest version:** no clean live run. Three attempts hung before the bid form because one site's startup (the webmail) never finished inside `solve()`, while the sites answered curl instantly. That start step has no timeout and could use one.
+- **Sandbox test run `run_e7312a942ed0a3e4`** (all positions omitted, before the phased flow): quality 10, eligible, 202 s, $0.021. A filled-position test run isn't possible until research and calc are wired into `solve()`.
+
+**Files**
+- `agent/configurator.py`, `agent/tests/test_configurator.py` (new)
+- `agent/submit.py`, `agent/agent.py`
+- `dev/configurator_check.py`: offline mock mode, and a live mode with `AGENT_STOP_BEFORE_SIGN=1`
+- `.gitignore` adds `dev/local/`, where the hand-made answer with site values lives
+- `docs/learned.md` (lessons added), `experiments/runs.jsonl`
+- The mock server and scouted pages stay in `/tmp/cfgdev` and are not committed.
+
+I took main's `worker.py`, which fixes the same "newest page view lost after a short tool result" bug I had fixed separately.
+
+**Next:** wire research and calc into `solve()`, run a sandbox test run to verify filling and signing together, and decide whether the form phase should think when positions are being filled.</result>
+<usage><subagent_tokens>332365</subagent_tokens><tool_uses>216</tool_uses><duration_ms>3562937</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a6463a61263f3c79d</worktreePath><worktreeBranch>worktree-agent-a6463a61263f3c79d</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1d0cca4a7d0d81f7</task-id>
+<tool-use-id>toolu_01HZNSop2LCBd5HMhhakWPSg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a1d0cca4a7d0d81f7.output</output-file>
+<status>completed</status>
+<summary>Agent "Streaming watchdog for hung model calls" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I added the watchdog behind `LLM_STREAM_WATCHDOG` (off by default) and committed it on branch `worktree-agent-a1d0cca4a7d0d81f7`; nothing is pushed or merged. The proxy does stream, but only text and thinking come token by token: tool-call arguments arrive all at once at the end. So hangs before the first chunk are caught in 20 s, but a hang inside a tool call can't be told apart from a long legitimate one. The test suite passes (117 tests). Hedging is implemented and unit-tested, but I didn't measure it live.
+
+**1. Does the proxy stream?** (raw byte-level checks against 127.0.0.1:8765)
+- **Text and reasoning:** they arrive token by token in both modes, with gaps under 1.5 s. Thinking deltas come as `reasoning_content`.
+- **Tool calls:** the arguments are held back until they are complete. A 60-row output tool sent nothing for 64 s, then everything at once; with thinking on, reasoning streams and then the tool part goes quiet for up to 58 s. With `tool_choice=required`, which is what our agents' output tools use, even the tool name only comes at the end. Asking for more frequent usage stats doesn't help.
+- **Keep-alives:** quiet stretches carry `: keepalive` comments every 10 s. The OpenAI SDK drops these, so they never count as progress.
+- **First chunk:** the response headers arrive together with the first chunk, within 9.4 s in 179 of 180 calls (p90 5.9 s, either mode).
+- **What a hang looked like:** I caught one hang in 180 calls (thinking off). It sent no headers and no bytes at all for 200 s, so with streaming a hang looks like "no first chunk".
+- **No 300 s cutoff when streaming:** the proxy doesn't cut streamed answers. One runaway thinking-on answer ran 814 s and 32k tokens.
+
+**2. Design** (`agent/llm.py`)
+- `llm.model()` now returns a subclass of pydantic-ai's OpenAI model. With the switch on, it streams each call internally and hands back one normal response, so `run_worker`, briefing, submit and the readers run unchanged. With the switch off, behaviour is exactly as before.
+- **First-chunk limit:** no first chunk within `LLM_FIRST_TOKEN_TIMEOUT` (20 s) means the call is dropped and retried.
+- **Idle limit:** a pause in text or reasoning longer than `LLM_IDLE_TIMEOUT` (15 s) is retried. This only applies to requests without tools. Requests with tools (almost all of ours) instead get their existing per-call timeout (45, 90 or 180 s) as allowed silence, counted from the last token rather than from the start of the call.
+- **Overall cap:** `LLM_MAX_CALL` (300 s).
+- **Retries:** up to `LLM_RETRIES`, with the same backoff as today; each one is logged as `[model] stalled ...`.
+- **Hedging:** `LLM_HEDGE_AFTER` sends a second copy if the first hasn't started by then, keeps whichever starts first and cancels the other. The cancelled copy may still be counted in the simulated cost.
+- **Tests:** `agent/tests/test_llm_watchdog.py` uses fake streamed answers: a normal stream, a call that never starts, a keep-alive trickle, a slow but progressing stream, thinking deltas, a held-back tool call, giving up after the retries, hedging, and the switch off.
+
+**3. Measured** (the same 30 agent calls per mode, both modes run at the same time)
+
+| Calls | Mode | Median | p90 | Max | Retries | Failures |
+|---|---|---|---|---|---|---|
+| 22 calls (off short/tool/long, on long) | current deadlines | 14.4 s | 81 s | 268 s | several 90 s timeouts | 0 |
+| | watchdog | 13.2 s | 74 s | 89 s | 2 (no first chunk, caught at 20 s) | 0 |
+| 8 thinking-on calls with very long reasoning | current deadlines | 257 s | 511 s | 497 s | 23 (90 s timeouts) | 2 of 8 |
+| | watchdog | 422 s | 832 s | 811 s | 6 (300 s cap) | 0 |
+
+On the second group, the old deadline repeatedly killed answers that were still coming, failing 2 of 8. The watchdog finished all 8 but let the runaway answers run to 300 s each.
+
+**4. Recommended defaults**
+- **Settings:** turn on `LLM_STREAM_WATCHDOG=1` with first chunk 20 s and idle 15 s, but lower `LLM_MAX_CALL` to about 150 s. A safer alternative is to limit output tokens for thinking-on calls. As the bench shows, progress checks alone never stop runaway reasoning.
+- **Hedging:** leave it off for now. Hangs are rare (about 0.6% here), the 20 s retry already handles them, and hedging can double the cost.
+- **Next step:** A/B it with `dev/test-run.sh`; the `LLM_*` settings are recorded automatically.
+
+**Commits**
+- `7b2a144` Add opt-in stream watchdog for model calls
+- `e75e8c9` Record stream and watchdog measurements (two bullets in `docs/learned.md`)
+
+My worktree had been created from an older commit, so I first moved the branch to current main (`e05fb7f`, the 180 s reader deadline); it had no commits of its own. The probe and bench scripts are outside the repo in `/tmp/rfqprobe/`, along with a temporary private file holding the model keys (`/tmp/rfqprobe/qwen.env`), which you can delete.</result>
+<usage><subagent_tokens>174240</subagent_tokens><tool_uses>79</tool_uses><duration_ms>2718849</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a1d0cca4a7d0d81f7</worktreePath><worktreeBranch>worktree-agent-a1d0cca4a7d0d81f7</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Why is the one agent take so long and doing so many runs? Why is it taking so long and can't we parallize something?
+
+---
+
+What score do you expect overall?
+
+---
+
+The sandbox ones are free btw (so the test runs on atira) so this would be possible? Or is it already doing test runs on atira?
+
+---
+
+How are the runs doing?
+
+---
+
+<task-notification>
+<task-id>bpf61syjh</task-id>
+<tool-use-id>toolu_01TXsTqs3VT7UWBQf66ijCBo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bpf61syjh.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for both v2 test runs with a correct check" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Are the other two still running?
+
+---
+
+"The team now has a submission scoring quality 100 and ranked #2 overall (sub_9bd976b00673121a), but since I didn't submit it, I'll investigate where it came from." my team pressured me to promote the one really good one to the leaderboard :/ Still we need the fixes for the other two runs
+
+---
+
+You can also see to have just some of them always running as test runners maybe to find errors etc.
+
+---
+
+<task-notification>
+<task-id>bexi6n78h</task-id>
+<tool-use-id>toolu_0166m1SitSZoVAfYWic4UXqi</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bexi6n78h.output</output-file>
+<status>failed</status>
+<summary>Background command "Run the soak runner with one slot" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+"The system python3 is 3.9" mine or the ones from Atira? Mine should be higher
+
+---
+
+Can you change it so it is 3.14 by default and also use this?
+
+---
+
+Are there any other fixes? Or improvements? And what did we plan for v3 and further?
+
+---
+
+<task-notification>
+<task-id>bg0y07i9x</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>22:15 run_9371dffa1ac79744 3f5d6b6 quality=0 11.1min $0.075 no bid
+tender problem: text='TimeoutError: tender-portal:tender: the site could not be opened in 2 attempts'
+run_9371dffa1ac79744 3f5d6b6 quality=0 11.1min $0.075 no bid
+tender problem: text='TimeoutError: tender-portal:tender: the site could not be opened in 2 attempts'</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bg0y07i9x</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>[Monitor expired after 30m with 1 event delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+So maybe we also have to split work or parallelize for this?
+
+---
+
+<task-notification>
+<task-id>bv438pg21</task-id>
+<tool-use-id>toolu_01HcVRFY7qVZy799rUWsQg6z</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bv438pg21.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the two signing-fix test runs" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a546a7d5cb47e8948</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a546a7d5cb47e8948.output</output-file>
+<status>completed</status>
+<summary>Agent "Hand-derived answer and local scorer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>That background mail search had already finished, and I used its results in the report above. It changes nothing.
+
+The three archive mails that search added are noise: two travel-expense reminders and a test-certificate notice. The inbox turned up no further discount, key or tariff mails beyond the ones in `derivation.md`. The expected answer, the scorer and the v1 check (10.00, same as the platform) all stand.</result>
+<usage><subagent_tokens>232947</subagent_tokens><tool_uses>58</tool_uses><duration_ms>14164484</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6e9ece93fe436042</task-id>
+<tool-use-id>toolu_01RUVteVvLR4kjh7rYCeere6</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6e9ece93fe436042.output</output-file>
+<status>completed</status>
+<summary>Agent "Find and fix the event-loop hang" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>I'll wait for the run's events.</result>
+<usage><subagent_tokens>118516</subagent_tokens><tool_uses>37</tool_uses><duration_ms>366566</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a6e9ece93fe436042</worktreePath><worktreeBranch>worktree-agent-a6e9ece93fe436042</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6e9ece93fe436042</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6e9ece93fe436042.output</output-file>
+<status>completed</status>
+<summary>Agent "Find and fix the event-loop hang" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Waiting for the run's log events.</result>
+<usage><subagent_tokens>121775</subagent_tokens><tool_uses>42</tool_uses><duration_ms>745343</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a6e9ece93fe436042</worktreePath><worktreeBranch>worktree-agent-a6e9ece93fe436042</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6e9ece93fe436042</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6e9ece93fe436042.output</output-file>
+<status>completed</status>
+<summary>Agent "Find and fix the event-loop hang" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Continuing to wait.</result>
+<usage><subagent_tokens>122051</subagent_tokens><tool_uses>42</tool_uses><duration_ms>749191</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a6e9ece93fe436042</worktreePath><worktreeBranch>worktree-agent-a6e9ece93fe436042</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6e9ece93fe436042</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6e9ece93fe436042.output</output-file>
+<status>completed</status>
+<summary>Agent "Find and fix the event-loop hang" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Waiting for the run to finish or show a watchdog line.</result>
+<usage><subagent_tokens>125044</subagent_tokens><tool_uses>45</tool_uses><duration_ms>1184530</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a6e9ece93fe436042</worktreePath><worktreeBranch>worktree-agent-a6e9ece93fe436042</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b19ro1dda</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6e9ece93fe436042</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6e9ece93fe436042.output</output-file>
+<status>completed</status>
+<summary>Agent "Find and fix the event-loop hang" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>I couldn't pin down the exact cause of the hang from the log. The fixes for every likely blocker are committed, along with a watchdog that will dump stacks if it happens again. The sandbox run of the branch did not hang, but it also failed (score 0) for a different reason, described below.
+
+**Most likely cause.** "Nothing at all for 20+ min, and no deadline ever fired" fits a blocked event loop better than a hung await. The log shows nothing that blocks for that long, so the candidates are:
+- **Frozen page plus unbounded calls.** I reproduced this locally: on a tab running an endless JS loop, `page.evaluate`, `frame.evaluate`, `page.title()` and `locator.count()` hang forever with no timeout. Other tabs keep working, and `asyncio.wait_for` does cut these calls. `observe()`, `look()`, `locate()`, `_human_check` and `_collect_closed` had no bound. `look()` is also called outside any `wait_for` in many places, including the first view in `run_worker`. The two `Locator.evaluate: Timeout 30000ms exceeded` errors on mail tabs, and the 45 s settle timeout on the ERP tab, show pages becoming unresponsive just before the silence. On its own this explains a stuck worker, not the missed deadlines.
+- **Quadratic regex in the grounding check.** `unseen_values()` used `[\w/.:,+-]*\d[\w/.:,+-]*`, which is quadratic on any long run of those characters with no digit. Measured: 20k characters take 1.1 s, so 200k would take about 110 s and 1M about 45 min, all on the loop. It only runs on model output and notes, and the mail workers run with `grounded=False`, so it probably isn't what hung at 362 s.
+- **Ruled out:**
+  - The diff in `changes()` is only run on views of 14k characters or less, and stays around 10 ms on a worst-case table.
+  - I found no `SiteSession.lock` re-entrance. Mailbox lock then session lock is always taken in that order, never reversed.
+  - Nothing swallows `CancelledError`.
+- **Infra possibility.** If the sandbox stopped reading stdout, `print(flush=True)` would block the whole loop and give exactly this picture. I can't verify that from our side.
+
+**Fixes (commit `630849a`):**
+- **Watchdog:** new `agent/loopwatch.py`, started in `agent.solve()`.
+  - A daemon thread watches a 1 s heartbeat. If the loop is stale for more than 20 s, it prints a `[watchdog]` line and dumps every thread's stack to stdout with `faulthandler`, at most once a minute.
+  - If the loop still runs but no trace event has appeared for 300 s, it dumps all asyncio task stacks. That catches the deadlock case too.
+  - `tracing.py` now records the time of the latest event (two lines).
+- **`extract.py`:** the page walk is capped at 20 s. Per-frame evaluates, `locate()`'s `count()` and `select_options` are capped at 5 to 20 s. `changes()` returns None (send the whole view) when the two views together exceed 40k characters.
+- **`browser_tools.py`:**
+  - The human-check and popup-collect frame evaluates have timeouts, and so does `page.title()`.
+  - `look()` now returns "(the page does not respond …)" instead of hanging when its retry also fails.
+  - `unseen_values()` uses a linear regex that gives the same results. It also searches `seen` directly instead of rebuilding a whitespace-normalised copy on every call; values contain no whitespace, so the result is the same.
+
+**Tests.** The new `agent/tests/test_hang.py` checks that:
+- a 250k-character diff and the grounding check (200k-character token against about 2 MB of history) each finish in under 1 s;
+- a frozen page is cut off and `look()` returns a note, while another tab still works;
+- the Python side of `look()` on a 100k+ character page takes under 1 s;
+- the watchdog dumps on a blocked loop and on a silent run.
+
+The full suite passes: 142 tests.
+
+**Sandbox run `run_a27e8c91f74fdb41`:** failed with score 0.
+- tender-portal, which is the bid site, never opened (repeated 45 s settle timeouts), so research had nothing to build on.
+- There was no hang and no watchdog dump: the research deadline fired at 630 s as designed.
+- The run then crashed with `IndexError` in `SiteSession.page` (`open_pages[-1]` on an empty list), reached from `look()` when `submit_bid()` started the bid worker on a session with no tab.
+- That crash is an existing bug, and the fix belongs in `submit.py` or `agent.py`, which I left alone. Someone should make `submit_bid` reopen the bid site, or exit cleanly, when its session has no tab.
+- The website's log stream timed out twice while I followed the run; I recorded the result with `dev/track.py --force`. `experiments/runs.jsonl` now has two lines for this run, an early "running" one and the final "failed" one.
+
+**Branch:** `worktree-agent-a6e9ece93fe436042`, with commits `630849a` (the fixes) and `1374502` (the run record). The `Entire-Checkpoint` line is kept and there is no session trailer. Nothing was pushed or merged.</result>
+<usage><subagent_tokens>132030</subagent_tokens><tool_uses>50</tool_uses><duration_ms>1591008</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a6e9ece93fe436042</worktreePath><worktreeBranch>worktree-agent-a6e9ece93fe436042</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Why do the sandboxes hang? Is it our fault or is the server overload? That would be bad as we couldn’t fix it.
+
+---
+
+Can you push the current commits?
+
+---
+
+<task-notification>
+<task-id>b5l5pde24</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>23:07 run_6a01d429127aebb6 3f5d6b6 quality=0 45.5min $0.095 signed
+run_6a01d429127aebb6 3f5d6b6 quality=0 45.5min $0.095 signed</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b5l5pde24</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>started run_3d85ba8d0e7c8267 at b8f76fa</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6e9ece93fe436042</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6e9ece93fe436042.output</output-file>
+<status>completed</status>
+<summary>Agent "Find and fix the event-loop hang" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>That alert can be ignored: it came from my first log watcher, which was following the test script's output after the script had already exited. My earlier report stands. The sandbox run `run_a27e8c91f74fdb41` did not hang and the watchdog never fired. It still failed (score 0) because tender-portal, the bid site, never opened, and the run then crashed on the session with no tab.</result>
+<usage><subagent_tokens>132654</subagent_tokens><tool_uses>50</tool_uses><duration_ms>2170562</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a6e9ece93fe436042</worktreePath><worktreeBranch>worktree-agent-a6e9ece93fe436042</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+We need to pick up the slack and consistently reach score 100. even if it’s means more Opus subagents.
+
+---
+
+What is the rate that we get 100 points currently?
+
+---
+
+<task-notification>
+<task-id>b5l5pde24</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>23:29 run_3d85ba8d0e7c8267 b8f76fa quality=10 17.7min $0.070 no bid
+mail:mail1 stopped: reason='TimeoutError: ' seconds=150.0 requests=2 input_tokens=5418 cached_tokens=3136 output_tokens=156
+mail:mail2 stopped: reason='TimeoutError: ' seconds=150.0 requests=6 input_tokens=18514 cached_tokens=9408 output_tokens=775
+mail:mail3 stopped: reason='TimeoutError: ' seconds=150.0 requests=17 input_tokens=68350 cached_tokens=40768 output_tokens=1427
+mail:mail4 stopped: reason='TimeoutError: ' seconds=150.0 requests=0 input_tokens=0 cached_tokens=0 output_tokens=0
+mail:mail1 stopped: reason='TimeoutError: ' seconds=104.0 requests=6 input_tokens=25974 cached_tokens=10976 output_tokens=479
+mail:mail4 stopped: reason='TimeoutError: ' seconds=150.0 requests=0 input_tokens=0 cached_tokens=0 output_tokens=0
+mail:mail2 stopped: reason='TimeoutError: ' seconds=99.0 requests=1 input_tokens=2306 cached_tokens=1568 output_tokens=77
+mail:mail4 stopped: reason='TimeoutError: ' seconds=150.0 requests=10 input_tokens=36219 cached_tokens=20384 output_tokens=1305
+mail:mail1 stopped: reason='TimeoutError: ' seconds=99.0 requests=2 input_tokens=5559 cached_tokens=3136 output_tokens=270
+run_3d85ba8d0e7c8267 b8f76fa quality=10 17.7min $0.070 no bid
+mail:mail1 stopped: reason='TimeoutError: ' seconds=150.0 requests=2 input_tokens=5418 cached_tokens=3136 output_tokens=156
+mail:mail2 stopped: reason='TimeoutError: ' seconds=150.0 requests=6 input_tokens=18514 cached_tokens=9408 output_tokens=775
+mail:mail3 stopped: reason='TimeoutError: ' seconds=150.0 requests=17 input_tokens=68350 cached_tokens=40768 output_tokens=1427
+mail:mail4 stopped: reason='TimeoutError: ' seconds=150.0 requests=0 input_tokens=0 cached_tokens=0 output_tokens=0
+mail:mail1 stopped: reason='TimeoutError: ' seconds=104.0 requests=6 input_tokens=25974 cached_tokens=10976 output_tokens=479
+mail:mail4 stopped: reason='TimeoutError: ' seconds=150.0 requests=0 input_tokens=0 cached_tokens=0 output_tokens=0
+mail:mail2 stopped: reason='TimeoutError: ' seconds=99.0 requests=1 input_tokens=2306 cached_tokens=1568 output_tokens=77
+mail:mail4 stopped: reason='TimeoutError: ' seconds=150.0 requests=10 input_tokens=36219 cached_tokens=20384 output_tokens=1305
+mail:mail1 stopped: reason='TimeoutError: ' seconds=99.0 requests=2 input_tokens=5559 cached_tokens=3136 output_tokens=270</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b5l5pde24</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>started run_49b0c1c26ae53ac6 at b8f76fa</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b5l5pde24</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>[Monitor expired after 30m with 4 events delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad9edaed8b5839ae8</task-id>
+<tool-use-id>toolu_01N6CrFhocgKWfAGJm15WFN9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/ad9edaed8b5839ae8.output</output-file>
+<status>completed</status>
+<summary>Agent "Research robustness: spec redundancy" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Both scored sandbox runs of the reworked branch got quality 100, in about 12.5 and 13.5 minutes. The spec, the tender and the deadline handling are now redundant or keep partial results. Tests pass (151), nothing is pushed or merged, and `agent/submit.py` and `agent/configurator.py` are untouched.
+
+**Branch:** `worktree-agent-ad9edaed8b5839ae8`, rebased on main `b8f76fa`.
+
+**Commits:**
+- `9b56339` Run spec attempts in parallel, keep partial bids
+- `5d82861` Close the second spec context when attempts end
+- `4ded0ef` Record spec-redundancy test run 1: no bid
+- `f8c19d6` Keep partial tender and ERP work at the deadline
+- `ffd1deb` Leave ERP class and mail module to their owners
+- `421072d`, `604bce8`, `f094843` Run records and a `docs/learned.md` bullet
+
+All are authored by josteng with the `Entire-Checkpoint:` line and no other trailers.
+
+**Changes**
+1. **Spec, two attempts at once** (`orchestrator.py` and the spec part of `research.py`):
+   - A fast attempt (thinking off, 25 steps) and a careful one (thinking on, 35 steps) start together, each in its own browser context so they don't share a sign-in or an access choice.
+   - The first attempt with a revision and requirements wins and the other is cancelled. Its context is closed straight away so it doesn't slow the ERP tabs.
+   - Requirements go to the ERP as soon as either attempt reads them, all from one revision. If the winner picked a different revision, the ones already sent are replaced.
+   - The spec worker's instructions are now generic: find the buyer's specification document, open its revision history, identify the revision marked current. It uses `collect` for the document list and the revision list.
+   - If the spec worker stops early, the revisions are still read from the page it ended on.
+   - Requirement pages it showed but didn't read in full still count, only if the page names the chosen revision and only for requirements not already read. Requirements read before an attempt stops are kept.
+2. **Partial answers:**
+   - With no complete position the agent still answers: decision, tender reference, the discount from the approval if it was read (a conditional approval with nothing to meet its threshold gives 0) and total 0.
+   - `agent.py` falls back to that answer if the research step crashes.
+   - With some positions complete, the threshold is judged on those positions, else 0.
+3. **Tender, documents and Q&amp;A in parallel:** they are read in two tabs side by side. Positions with their original quantities go on the board as soon as they are read and are replaced once the Q&amp;A resolves them, so a deadline in between still leaves positions to bid.
+4. **Deadline and budgets** (after your scope note):
+   - ERP research that finished by the deadline is kept.
+   - The final material choice runs per requirement, so one slow model call doesn't cost the others.
+   - Step limits grow with the time left (new `steps_for()` in `worker.py`) for the spec and tender steps.
+   - The overall research deadline is unchanged.
+5. **Mail, orchestrator scheduling only** (worth telling the mail agent): the approval kind runs first.
+   - A kind that ran out of its budget without reading anything gets one more try if the mail deadline allows. Results from both tries are merged.
+   - Each kind's budget is the mail time left shared over the waiting kinds (120 to 240 s).
+   - It only uses a `stopped` flag or a `seconds=` option on `research_kind` if `research_mail.py` offers them, so it works with main as it is.
+   - `research_mail.py` itself is back to main.
+
+**Left to the ERP agent:** I removed my changes to the `Erp` class and `reselect`. The useful idea from them: a requirement whose search finished but whose materials weren't all read by the deadline could keep its hits, marked unfinished, so a later choice can still find the exact match among the materials read. If no match is found the position is left out, never turned into a no_bid.
+
+**Local run** (1 run, stopped before signing, no TAN; sites were slow, with tabs failing to open from 75 s, before the spec step):
+- Spec worked: both attempts found the revision marked current and the fast one won with all 5 requirements after 104 s.
+- The answer still scored 10: the ERP detail tabs timed out, so no position had material data by the deadline.
+- The approval mail search ran out of its budget without reading a message.
+- The fallback answer (reference, decision, total 0) worked as intended.
+
+**Sandbox runs:**
+
+| Run | Code | Result | Time | Cost |
+| --- | --- | --- | --- | --- |
+| `run_3004bcfff400c254` | `b656c59`, before rebase | No bid | about 19 min | $0.125 |
+| `run_8e5c821bd8154825` | `3c7d25c`, rebased on `bb75ad1` | 100, eligible | 12.5 min | $0.177 |
+| `run_4b941a571eb74fd8` | `421072d`, final scope, on `b8f76fa` | 100, every part full | 13.5 min | $0.184 |
+
+- **No-bid run:** research gave all 5 positions and a 5 % discount, which would score about 82 offline; only the project bonus mail was missed. Signing then went back into the wizard and timed out. That is the failure fixed on main by the signing reserve.
+- **Stuck run:** `run_164e147bcc6bb8f9`, the second run of the old pre-rebase code, has shown "running" for over 100 minutes. I did not record or cancel it; you may want to cancel it.
+
+**Platform:** the platform kept timing out (5-minute header timeouts), so `dev/test-run.sh` lost the follow twice and recorded runs before they had a score. I threw those records away and recorded the runs again by hand after scoring.</result>
+<usage><subagent_tokens>241844</subagent_tokens><tool_uses>134</tool_uses><duration_ms>6161514</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-ad9edaed8b5839ae8</worktreePath><worktreeBranch>worktree-agent-ad9edaed8b5839ae8</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad9edaed8b5839ae8</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/ad9edaed8b5839ae8.output</output-file>
+<status>completed</status>
+<summary>Agent "Research robustness: spec redundancy" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>One update to my report: the stuck run `run_164e147bcc6bb8f9` has now ended. It shows as failed with "Cancelled by @josteng" and quality 0, so it was cancelled from your account; you don't need to cancel it.
+
+It ran the old code from before the rebase and has no score, so I'm leaving it out of `experiments/runs.jsonl`. Nothing else has changed: the two scored runs of the current branch are still 100 and 100.</result>
+<usage><subagent_tokens>241571</subagent_tokens><tool_uses>135</tool_uses><duration_ms>6221594</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-ad9edaed8b5839ae8</worktreePath><worktreeBranch>worktree-agent-ad9edaed8b5839ae8</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0i3a1z2z</task-id>
+<summary>Monitor event: "second soak runner summaries"</summary>
+<event>started run_c5b033c608e32478 at de33a85</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0i3a1z2z</task-id>
+<summary>Monitor event: "second soak runner summaries"</summary>
+<event>started run_7d02b63f45fd7746 at de33a85</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad9edaed8b5839ae8</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/ad9edaed8b5839ae8.output</output-file>
+<status>completed</status>
+<summary>Agent "Research robustness: spec redundancy" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>That notification was my last background watcher on `run_164e147bcc6bb8f9` finishing. It only confirms what I already reported: the run was cancelled from your account and has no score.
+
+My report stands: both scored runs of the branch got 100. Nothing more is running from my side.</result>
+<usage><subagent_tokens>242039</subagent_tokens><tool_uses>135</tool_uses><duration_ms>6389472</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-ad9edaed8b5839ae8</worktreePath><worktreeBranch>worktree-agent-ad9edaed8b5839ae8</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b51b3yliv</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>23:43 run_49b0c1c26ae53ac6 b8f76fa quality=10 11.6min $0.066 no bid
+run_49b0c1c26ae53ac6 b8f76fa quality=10 11.6min $0.066 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad9edaed8b5839ae8</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/ad9edaed8b5839ae8.output</output-file>
+<status>completed</status>
+<summary>Agent "Research robustness: spec redundancy" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>That was another background watcher on `run_164e147bcc6bb8f9` finishing, so there's nothing new. That run was cancelled from your account and has no score. The two scored runs of the branch are still both 100. No more watchers or runs are going from my side.</result>
+<usage><subagent_tokens>242800</subagent_tokens><tool_uses>135</tool_uses><duration_ms>6727731</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-ad9edaed8b5839ae8</worktreePath><worktreeBranch>worktree-agent-ad9edaed8b5839ae8</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b51b3yliv</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>started run_3e4ff5d97d2166c3 at de33a85</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+How is it going?
+
+---
+
+<task-notification>
+<task-id>a8687a95aa506b084</task-id>
+<tool-use-id>toolu_01Q3dWM4MwQxodaecdqPRibc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a8687a95aa506b084.output</output-file>
+<status>completed</status>
+<summary>Agent "Mail research reliability" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The mail research is now more reliable and faster locally: 8 of 9 record kinds in 401 s, against 7 of 9 in 515 s before. The one sandbox run proves nothing about the mail phase: the tender portal and ERP never opened, so it failed without an answer. Tests pass (143 existing plus a new `agent/tests/test_research_mail.py`).
+
+**Changes (all in `agent/research_mail.py`; `orchestrator.py` and `site_tools.py` untouched):**
+- **Missing mailbox address:** the address lookup now reads every page the tab has shown, not only the current view, and tries 3 times. If it still finds nothing, records are authorised by the domain most kept messages were sent to (new `recipient` field), instead of all being dropped. This works with the orchestrator's existing `resolve_mail(..., domain="")` call.
+- **Reads run alongside the search:** each kept message is read as soon as it is kept, while the worker checks other folders.
+- **Shorter waits:** a search ends 60 s after its first hit. Stalled model calls are retried sooner: reads after 60 s (was 180 s), the planner after 30 s (was 45 s), the address lookup after 20 s.
+- **Hung tabs:** a tab with no new page view for 45 s is closed and replaced, and the kind tries again on the fresh tab. This addresses the hung tabs you saw in `run_3d85ba8d0e7c8267`.
+- **Session expiry:** a message whose tab was redirected to sign-in is opened once more. In the local run this had given the reader a sign-in page and an empty project-bonus record.
+- **Budgets and retries:** a kind's time shrinks as the mail deadline nears, and it always returns before the deadline, so its records are no longer lost to cancellation. A kind that kept nothing gets one more try, with a hint.
+- **Planner:** the approval is planned first. A misspelled subject (e.g. "ue" for "ü") is now corrected in place instead of costing a model retry.
+- **Orchestrator hook (your request):** `research_kind(..., seconds=)` sets the kind's whole budget, and `KindResult.stopped` is True when it ran out of time with nothing kept. Main's orchestrator detects both, so I made no orchestrator change.
+
+**Before/after (local, `research_check_records.py mail`, 4 tabs):**
+
+| | Kinds found | Mail phase | Planner ready | Approval |
+|---|---|---|---|---|
+| Before | 7 of 9 (condition_rules, metal_indices missing) | 515 s | 97 s | 330 s |
+| After | 8 of 9 (fx missing) | 401 s | 20 s | 106 s |
+
+A middle run had a degraded model proxy (502s and timeouts): 6 of 9 kinds kept in 347 s, but two records read empty, which led to the session-expiry fix. The approval read in both before and after was the same message.
+
+**Sandbox run `run_487200a8fb67d1ca`** used commit e6f5216, before the hung-tab detection and the `seconds=` hook. The tender portal and ERP failed every start, so mail began only at about 478 s with about 150 s left. Budgets shrank to about 50 s per kind, and 4 kinds were read (condition_rules, end_reserves, fx, metal_indices). The approval and packaging searches kept nothing in that window. The address was found. It is recorded in `experiments/runs.jsonl`. A rerun on the current head would be needed to judge the newer changes.
+
+**Not done:**
+- **Fewer parallel mail sign-ins:** not measured; that is the orchestrator's `MAIL_TABS` setting.
+- **Search tools:** mail still uses its paging and keep tools rather than `site_tools.search`. The session-expiry handling covers the failure you saw there.
+- **Worker stalls:** worker steps still wait the global 90 s per-call timeout when a model call stalls. Setting `LLM_HEDGE_AFTER` or `LLM_STREAM_WATCHDOG` would cut that, but they are global settings.
+- **Approval grace:** in one local run the approval kept 2 messages instead of 5 because of the 60 s grace. The governing record was still found. If that worries you, a longer grace for the approval alone is a one-line change.
+
+Branch `worktree-agent-a8687a95aa506b084`, rebased on main de33a85, not pushed:
+- f347f53 Make mail research robust to a missing address
+- c27b46c Retry stalled mail plan and read calls sooner
+- 3363a4c Reopen mails lost to a session expiry
+- 9e45584 Replace a mail tab that stops making progress
+- 7a0ec77 Let the orchestrator set a mail kind's budget
+- 3e914a4 Record mail reliability runs (runs.jsonl plus a `docs/learned.md` bullet)
+
+The commits keep the hook-added `Entire-Checkpoint:` line. I left out the `Claude-Session` trailer because your CLAUDE.md forbids session links in commits.</result>
+<usage><subagent_tokens>199961</subagent_tokens><tool_uses>117</tool_uses><duration_ms>2540835</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a8687a95aa506b084</worktreePath><worktreeBranch>worktree-agent-a8687a95aa506b084</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8687a95aa506b084</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a8687a95aa506b084.output</output-file>
+<status>completed</status>
+<summary>Agent "Mail research reliability" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>That notification is only my status poll for sandbox run `run_487200a8fb67d1ca` finishing, and it adds nothing new. The run failed without an answer because the tender portal and ERP never opened, as my earlier report says. Nothing has changed since that report.</result>
+<usage><subagent_tokens>199282</subagent_tokens><tool_uses>117</tool_uses><duration_ms>2547368</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a8687a95aa506b084</worktreePath><worktreeBranch>worktree-agent-a8687a95aa506b084</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b51b3yliv</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>23:57 run_c5b033c608e32478 de33a85 quality=None 0.0min $0.000 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0i3a1z2z</task-id>
+<summary>Monitor event: "second soak runner summaries"</summary>
+<event>run_c5b033c608e32478 de33a85 quality=None 0.0min $0.000 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0i3a1z2z</task-id>
+<summary>Monitor event: "second soak runner summaries"</summary>
+<event>could not start a run:</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b0i3a1z2z</task-id>
+<summary>Monitor event: "second soak runner summaries"</summary>
+<event>started run_5ed811c867e7f67f at d15f2e7</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<agent-message from="a61a1dc566d4dd696">
+Priority answer (sites never opened): the site was very slow but still alive, and our start sequence threw away each attempt that was making progress.
+
+Evidence (a27e, 9371, 487200 all show the same pattern; no recordings exist, so this is from traces and platform inputs):
+- Each attempt is goto (30 s domcontentloaded cap), then settle (45 s cap), then look(), all inside START_SECONDS=90. The first settle timeout always lands at exactly 75.2 s (30+45), and start_failed fires at 90.0 / 180.0 / 270 / 360. So the navigation never fired domcontentloaded within 30 s, and no helper (login, cookies, human_check) found anything for 45 s.
+- On attempt 1 browser 1 (tender) records ZERO inputs, so the login form never rendered. The page was not a chrome-error page: no ConnectionError and no reload of an error page; the errors are bare TimeoutError.
+- The sites were intermittently alive. In 487200 the tender login page did render on attempt 2 after 5.8 s (login typed at 95.8 s), but the post-login page then hung: settle timed out at 135 s and look() timed out at 180 s. In a27e the tender login rendered on the 5th attempt (372.7 s) and the post-login page hung again (settle timeouts at 412 and 532 s, start_failed at 457 and 547 s).
+- In 487200 the tender portal (browser 1) and ERP (browser 3) failed in lockstep with identical timestamps (75.2 / 90.0 / 180.0 / 504 / 594 s), while the customer portal and webmail in browsers 2 and 4 worked. Two different browsers stalling together points at the server side of those two sites, not one broken browser or our event loop. a27e had the loop watchdog and it never dumped.
+- In other runs the same sites showed 'Locator.evaluate: Timeout 30000ms' on clicks (f93e, 164e, 3d85). That means the page's renderer or backend was stalling mid-run too.
+- Collateral damage: the briefing waits for every start to finish (180 s) and the planner waits for a second pair of attempts (another 180 s). That is 360 s with nothing running (platform profile: 05:54 idle, 00:08 to 06:03, in a27e and 9371). Then an IndexError in look() on the tab-less session killed both a27e and 9371 (exit 1, 0 points; fixed later with revive).
+- ERP alone failed to start in f93e (276 and 366 s), and all 5 positions were lost.
+
+What would work better:
+1) Never close a tab that is still loading. One attempt should keep waiting on the same tab with a longer cap (about 180 to 240 s). Today each retry throws away a navigation or login that was halfway through.
+2) Keep retrying in the background with backoff (for example 30, 60, 120 s) until a hard deadline about 300 s before the end, instead of 2 attempts. Only the bid site truly gates points: a signed bid with no positions is worth 10, versus 0 without one.
+3) Decouple the briefing and planner from site starts. The brief does not need the tender portal; start research on the sites that are up, and let the bid-site session keep warming in parallel. Starting the bid site first and keeping it warm is good, but it must not block anything.
+4) A fresh browser context per attempt is unlikely to help, because two browsers failed in lockstep. A cheap way to rule it out is one attempt in a new context after two failures.
+5) Make the start budget phase-aware: goto 60 s, then settle as long as the start budget allows, rather than fixed 30+45 inside 90.
+</agent-message>
+
+---
+
+<task-notification>
+<task-id>b51b3yliv</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>[Monitor expired after 30m with 3 events delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a61a1dc566d4dd696</task-id>
+<tool-use-id>toolu_01R46ixkLkR7bzzd6BtCUdoW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a61a1dc566d4dd696.output</output-file>
+<status>completed</status>
+<summary>Agent "Analyse all v2 sandbox runs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The runs hit 100 only when nothing went wrong. Everything worked in all 4 of the 100 runs; each of the 12 failures had a site that would not open, a spec search that got lost, a false review-page alarm, or a deadline cut. Model speed is not the cause. You already have the site-start part.
+
+**Data limits:**
+- The platform keeps only the last ~260 stdout lines per run, so the first 160 to 500 s of trace is lost in most runs. I rebuilt phase starts from the `seconds=` fields and used the complete per-call and per-browser data from the platform's MCP tools.
+- No run has a screen recording.
+- run_d4deebd2d3a2d429 ran the v1 package and is excluded.
+- Runs started after about 21:40 UTC are not covered, apart from the c5b0 result you sent.
+
+**1. Per run** (seconds on the run clock; scoring: a 100 run gets full points on every field; a 10 run gets decision 5 + reference 5 and nothing else; 0 means no signed bid)
+
+| run | q | research | form | sign | first failure that cost points |
+|---|---|---|---|---|---|
+| 06a3 | 100 | 8–371 | 373–559 | 560–591 | none |
+| 715a (scored) | 100 | 9–527 | 529–665 | 667–840 | none (first TAN lookup returned the reference; retry took 125 s) |
+| 8e5c | 100 | 9–586 | 588–720 | 723–748 | none |
+| 4b941 | 100 | 5–621 | 624–781 | 784–813 | none (research ended 9 s before the 630 s deadline) |
+| df14 | 10 | 54–620 | 622–675 | 677–793 | spec found no revision history in 2 attempts |
+| f910 | 0 | 9–594 | 595–765 | 767–1110 | spec read only A-5, then a false summary alarm sent signing back and it timed out |
+| 817c | 10 | 55–727 | 730–827 | 828–856 | tender worker cut at the 630 s research deadline, so no positions |
+| 3004 | 0 | 7–599 (full answer) | 602–684 | 689–1110 | false summary alarm, signing timed out |
+| 3d85 | 10 | 7–767 | 783–946 | 946–1058 | spec attempt 1 looped 25 steps; attempt 2 opened the requirements at 629 s |
+| 9371, a27e, 487200, f93e, 49b0, 164e, 6a01 | 0/10 | 180–414 s lost to failed starts | – | – | a site never opened, or a page hung (covered in my earlier message) |
+
+**2. Model calls and site slowness**
+- **Latency:** p50 2.4–4.0 s, p90 8–15 s, max 19–59 s, 0 to 3 calls over 45 s per run.
+- **Errors:** none, apart from the expected 401 after the bid is in.
+- **No queue pressure:** team-wide calls in flight peaked at 20, under the 32-per-team cap. The scored run shows 7 % of call time as queue wait and test runs 63–92 %, but total latency is the same, so that is how the platform counts time, not extra delay.
+- **Site slowness:**
+  - Settle timeouts and failed starts appear only in failing runs (2 to 8 each, none in the 100 runs).
+  - Mail kinds hit their 150 s cap 2 to 10 times per run, including the 100 runs. Mean time per kind is 103–158 s and the max is 344 s.
+  - The ERP 12-step limit was hit in 5 runs.
+
+**3. Failure taxonomy** (16 runs, ranked by points lost)
+1. **A site won't open or a page stalls:** 7 runs, about 690 points.
+2. **Spec navigation fails or is too slow:** df14, 3d85, f910; about 270 points.
+3. **False summary-check alarm, then signing goes back and times out:** f910, 3004; 200 points. Your c5b0 finding ("5 %" vs "5,00") makes it 3 runs.
+4. **Research deadline cuts a slow worker:** 817c, 90 points.
+
+**Critical path in the 100 runs:**
+- The last research inputs are the mail kinds. end_reserves and condition_rules finished at 539–570 s; verify then took 17–45 s.
+- Two requirements, covering 3 of the 5 positions, wait on the end_reserves mail.
+- Form took 132–185 s; signing took 25–30 s, or 173 s with a bad TAN.
+- The 100 runs were not faster than the failures. They had every site open on the first try, the spec found on the first attempt (or by the parallel spec attempts in 8e5c and 4b941), tender facts in before ~450 s, and a summary check that matched.
+
+**4. Recommendations**
+- **Summary check:** never let a mismatch switch signing to thinking or go back in the wizard. Sign as entered. Worth +200 points in 2 of 16 runs.
+- **Spec:** run two parallel attempts from the start, each capped at about 150 s / 25 steps with a loop guard. The spec must be done by about 350 s so the ERP (100–130 s) and verify (cap 45 s; 3d85 took 137 s) fit.
+- **Research deadline:** move it from 630 s to about 720 s. With the end at 1110 s, a 200 s form budget (seen max 185 s) and a 180 s signing reserve, research can run to 730 s. That would have saved 817c and probably 3d85. Put last_chance at the end minus 120 s.
+- **Step limits:**
+  - ERP material views: raise from 12 to 16–18, or scale with the time left.
+  - Spec: keep 25 plus the loop guard.
+  - Mail: give end_reserves and condition_rules 200 s and start them first; 150 s for the rest.
+- **Where parallelism pays:** on the spec and on starting the critical mail kinds first, not on model calls.
+- **Logging:** write the full trace to a file and print a short phase summary at the end, so the platform's line limit stops hiding the early phases.
+
+Everything is in `/Users/jonasstenglein/.claude/jobs/064ce75e/tmp/`: the analysis in `v2_analysis.md`, raw logs, model-call lists and profiles in `logs/`, scores in `status/`, and the fetch scripts in `scripts/`.</result>
+<usage><subagent_tokens>253090</subagent_tokens><tool_uses>76</tool_uses><duration_ms>3246406</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bw4h5snsi</task-id>
+<summary>Monitor event: "soak test-run summaries, both runners"</summary>
+<event>00:04 run_3e4ff5d97d2166c3 de33a85 quality=None 0.0min $0.000 signed</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+ARe we hitting the same issues? "
+
+<pasted_content id="c6ab">
+Elia — Yesterday at 11:02
+Hi all!
+
+Feel free to reach out either via chat or in-person in case you have any questions ^^
+
+We optimized the challenge to work really well for coding agents (through mcp/cli) - just point your agent at the url and it'll walk you through onboarding and can then get going re: implementation and submissions (first-class debug support for the sandboxed runs etc. included) - good luck, happy hillclimbing & make sure to melt our GPUs!
+
+https://ehl-challenge.atira.ai/ 
+Atira EHL Challenge
+Atira EHL Challenge
+Build an AI agent that works through the software a sales engineer uses every day: a tender portal, a supplier portal, an ERP and a webmail inbox.
+Atira EHL Challenge
+Elia — Yesterday at 13:50
+@everyone
+
+We've bumped the concurrent test runs allowed per team to 4 to aid with iteration speed and will keep adjusting as time goes on & capacity holds up - time to fill the 1TB of DDR5 on the runners ;)
+
++ fixed an issue w/ linking gh repos
++ "stage" page w/ token count now public @ https://ehl-challenge.atira.ai/challenges/rfq/stage
++ live tok count now also on the landing page
++ autoscaler rn is at just one B200 for qwen (peak ~50'000 TPS), gotta pump those numbers
+
+See: https://ehl-challenge.atira.ai/announcements
+
+Besides, but important: I'd strongly recommend keeping GitHub repositories private (!)
+
+We were just told by some peers that their repos are public - I'd strongly advise to keep repositories private and link them to your team on the platform. Public ones can be found quite easily and other teams could copy / profit off your work, which would (presumably) be unfortunate.
+
+Currently there's not yet much to profit off, but at later stages it'd get ugly w/ copying. Feel free to turn the repos public after the hackathon is over though :) 
+swaggpi [r6c],  — Yesterday at 16:21
+Hi, we can’t use any GPT-6 model through the LLM proxy. Could you check?
+
+Error (every GPT-6 request):
+400 invalid_request_error — "unknown model: gpt-6.1-sol"
+Same for gpt-6-sol, gpt-6-luna, gpt-6-astra, gpt-6, gpt-6.1 (and gpt-5.6-*, gpt-5.5).
+
+Where we tested:
+
+Inside a sandbox test run, using the run’s OPENAI_BASE_URL (…/llm/run/<token>/openai/v1/chat/completions). Probe run: run_d9cc8120d6f88fca (10 Oct, 14:10 UTC).
+Outside runs via …/llm/openai/v1/… with x-atira-team-key, on both /chat/completions and /responses.
+
+What we ruled out:
+
+Our key is fine: gpt-5.4 returns 200 through the same proxy, in the same run.
+The model IDs are exact: they come from OpenAI’s /v1/models for our key (gpt-6-astra, gpt-6-luna, gpt-6-sol, gpt-6.1-sol), and direct calls to OpenAI with the same key succeed.
+The proxy’s own /v1/models listing even shows them; only the actual calls are refused. So they look like they’re missing from the proxy’s price list or allowlist.
+
+Could you add the GPT-6 family (at least gpt-6.1-sol, gpt-6-sol, gpt-6-luna) to the proxy? If GPT-6 is only meant to work through another route (e.g. OpenRouter), which model ID and key should we use? Thanks!
+Hi, we can’t use any GPT-6 model through
+6 Messages ›
+There are no recent messages in this thread.
+Shuo Chen — Yesterday at 17:38
+could you pls share your workshop decks? is it possible?
+Shuo Chen — Yesterday at 17:40
+a sily question, which model is expecte to let my agent use in the submission? the qwen? or the gpt-6?
+a sily question, which model is expecte
+1 Message ›
+There are no recent messages in this thread.
+ff2004. — Yesterday at 17:55
+hey, the website seems really slow rn:)
+Elia — Yesterday at 18:01
+Performance improvements up, should be a lot smoother now :) 
+Vamshidhar [11],  — Yesterday at 18:13
+is that 100 score from participants or from your company test?
+is that 100 score from participants or
+1 Message ›
+There are no recent messages in this thread.
+meinnamemax — Yesterday at 18:23
+Could you please clarify how the final presentations will work? Will every team give a pitch, or will only finalists be selected? If only finalists present, will these be the top two teams on the leaderboard, or are there additional selection criteria?
+Could you please clarify how the final
+2 Messages ›
+There are no recent messages in this thread.
+Elia
+ started a thread: is that 100 score from participants or. See all threads. — Yesterday at 18:49
+Elia
+ started a thread: Could you please clarify how the final. See all threads. — Yesterday at 18:51
+Elia — Yesterday at 19:58
+Popular request: you can now promote eligible test runs (below 20 minutes duration) to the leaderboard directly.
+August (Atira) — Yesterday at 20:23
+Top-7 teams according to private-set ranking get a 3 minutes pitch
+Final winners will be decided by us: approx. private-set ranking > tech / pitch > public-set ranking
+Maybe you’ll get some hints on avg. private-public deviation throughout the evening/night 👀
+And these top-7 will be revealed at 12 tmrw after which pitches start so make sure you're ready!
+swaggpi [r6c],  — Yesterday at 20:28
+Hi, is there any way we can increase the amount of sandboxes available again? We keep running into "Waiting for a free sandbox: #5 in line." again and having to wait to be able to do a run
+Hi, is there any way we can increase the
+3 Messages ›
+Elia
+3h ago
+iiisak [650H],  — Yesterday at 22:00
+Qwen inference is really slow right now 60-100s latency
+Astavicious — Yesterday at 22:00
+Ja
+so slow
+Elia — Yesterday at 22:03
+deploying more gpus, sec ingress in front needed scaling, p95 down hard now :)
+
+gpu cap substantially higher anyways now though in case y'all go wild tn 
+iiisak [650H],  — Yesterday at 22:09
+thanks
+lmk when
+rationing my openai credit 💔
+Elia — Yesterday at 22:13
+is up -- will head home now but available via dms / here
+
+we'll drain the vm queue in ~1h to deploy some bigger perf upgrades 
+Image
+iiisak [650H],  — Yesterday at 23:30
+latency back up to 60-100s
+is it due to upgrades?
+Elia — Yesterday at 23:39
+nah, incoming tho once home
+swaggpi [r6c],  — Yesterday at 23:40
+Hi Atira team, Im facing a similar issue. We’re seeing requests through the sandbox model proxy hang without ever reaching the model, and we have per-request evidence.
+
+Symptom: in our test runs, roughly 7% of requests to OPENAI_BASE_URL (…/llm/run/<token>/openai/v1) never get a response. The request is fully sent, the TCP/TLS connection is fine, and then no response headers come back. Those requests are also missing from the run’s LLM call log: no entry, not even as failed or in flight.
+
+Evidence: run run_c1ec7542d4f89fe6, traced at the HTTP connection level with httpcore trace hooks:
+
+56 requests stalled at receive_response_headers after send_request_body.complete (we cut them off at 15 s for chat, 4 s for /v1/decisions).
+run_llm_calls for the same run shows 746 calls and only 4 failures, all 429s that returned immediately. None of the 56 stalled requests appear.
+Example: at 00:09.4 our 4 workers each sent one /responses request. Only 3 are logged (c_183625, c_183626, c_183628, all 200 in ~1.4 s). The 4th never shows up and timed out at 00:24.4 without response headers.
+/v1/decisions is hit hardest: 27 of 117 requests stalled (~23%), versus ~4–5% for /responses. 40 of the 56 stalls were on freshly opened connections.
+Same pattern in run_fbbc225418df69da (49 client timeouts, platform log says “Failures: none”) and run_fe6169a934516d1b.
+Calling OpenAI directly from our machines with the same payloads and concurrency: 120/120 fine, no stalls.
+
+Impact: up to 20 minutes of agents stalling over a run and slightly increased cost which leads to very bad scores since they are cost * time
+
+Could you check whether the proxy drops or holds some requests before logging/forwarding them (connection handling for new connections, or the /decisions route)? Happy to share full traces. Thanks!
+Elia — Yesterday at 23:41
+fix incoming, sqlite is burning rn 
+</pasted_content id="c6ab">
+
+" Still I guess trimming efficiency if this happens in the final test phase is good...
+
+---
+
+You just care about having a good submission. What are you currently working on? And how did the last rounds turn out?
+
+---
+
+<task-notification>
+<task-id>bw4h5snsi</task-id>
+<summary>Monitor event: "soak test-run summaries, both runners"</summary>
+<event>00:12 run_7d02b63f45fd7746 de33a85 quality=None 0.0min $0.000 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+Can we maybe also use the one on device instance possible? And until they upgrade the parallelism or so until they improve their systems?
+
+---
+
+<task-notification>
+<task-id>b14miv1ku</task-id>
+<tool-use-id>toolu_018d7a76pUS5QPfs1f8q2v6y</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/b14miv1ku.output</output-file>
+<status>completed</status>
+<summary>Background command "Check the latest soak runs" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+"local loop with 2 parallel runs" didn't you say earlier these cmopete? Or is that fixed?
+
+---
+
+My Claude limit resets in like 30mins. Should we work on parallizing runs with some subagents or so?
+
+---
+
+<task-notification>
+<task-id>bw4h5snsi</task-id>
+<summary>Monitor event: "soak test-run summaries, both runners"</summary>
+<event>00:17 run_5ed811c867e7f67f d15f2e7 quality=None 0.0min $0.000 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bifnbspgq</task-id>
+<summary>Monitor event: "local soak scores and sandbox soak results"</summary>
+<event>00:17 run_5ed811c867e7f67f d15f2e7 quality=None 0.0min $0.000 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bw4h5snsi</task-id>
+<summary>Monitor event: "soak test-run summaries, both runners"</summary>
+<event>00:17 run_f19c5ed48be1faed 522dddc quality=100 11.6min $0.191 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bifnbspgq</task-id>
+<summary>Monitor event: "local soak scores and sandbox soak results"</summary>
+<event>00:17 run_f19c5ed48be1faed 522dddc quality=100 11.6min $0.191 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+But still can't you let a subagent or so work on parallelism already in a worktree or so?
+
+---
+
+<task-notification>
+<task-id>bw4h5snsi</task-id>
+<summary>Monitor event: "soak test-run summaries, both runners"</summary>
+<event>00:26 run_262c91398cd64598 8c7ab8f quality=100 7.6min $0.110 signed</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bifnbspgq</task-id>
+<summary>Monitor event: "local soak scores and sandbox soak results"</summary>
+<event>00:26 run_262c91398cd64598 8c7ab8f quality=100 7.6min $0.110 signed</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bifnbspgq</task-id>
+<summary>Monitor event: "local soak scores and sandbox soak results"</summary>
+<event>00:29 8c7ab8f local quality=18.9 934s local loop A [ 90.0s] customer-portal start_failed attempt=1 error='TimeoutError: '|[ 90.0s] mail start_failed attempt=1 error='TimeoutError: '|[ 180.0s] customer-portal start_failed attempt=2 error='TimeoutError: '|[ 180.0s] mail start_failed attempt=2 error='TimeoutError: '|</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+Promote it
+
+---
+
+<task-notification>
+<task-id>bw4h5snsi</task-id>
+<summary>Monitor event: "soak test-run summaries, both runners"</summary>
+<event>[Monitor expired after 30m with 5 events delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bifnbspgq</task-id>
+<summary>Monitor event: "local soak scores and sandbox soak results"</summary>
+<event>00:32 run_4c16473513134dea 8c7ab8f quality=100 14.0min $0.141 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+I promoted via the web page. It is pending
+
+---
+
+What are your subagents doing right now?
+
+---
+
+<task-notification>
+<task-id>bifnbspgq</task-id>
+<summary>Monitor event: "local soak scores and sandbox soak results"</summary>
+<event>00:39 run_39d08ed6f668f4e7 8c7ab8f quality=59 10.5min $0.116 signed</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aae38136b82fe0808</task-id>
+<tool-use-id>toolu_01SWcCY2H6HAJhXACBDSPJ9Z</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/aae38136b82fe0808.output</output-file>
+<status>completed</status>
+<summary>Agent "Resilient site starts under load" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Slow website starts now keep waiting on the same tab instead of being thrown away, and nothing else waits for them. All 162 unit tests pass. The sandbox run reached quality 56 (eligible), but signing failed for a reason that has nothing to do with starts: a model 401 error.
+
+**Branch:** `worktree-agent-aae38136b82fe0808` (based on d15f2e7, which includes 522dddc). Nothing pushed or merged.
+- `c4f88be` Keep slow website starts alive on their tab
+- `2de78fc` Test starts against a slow local site
+
+## Design
+**`agent/browser_tools.py` (`SiteSession`)**
+- **Same tab:** one attempt has a 210 s budget (`SESSION_START_SECONDS`). It runs goto for up to 60 s and does not abort the request if that times out. It then loops settle (45 s cap) and look (30 s cap) on the same tab until the page shows something. Only a closed tab, the browser's own error page or the budget ends an attempt. If the budget runs out while the page shows something (e.g. a sign-in still pending), it returns that page rather than failing.
+- **Pending sign-in:** if the sign-in form is still showing within 45 s of sending it on the same URL, the helper does not send it again; the start keeps waiting. Before, sending it again could cancel the post-login page that was still loading.
+- **Retries:** after a failed attempt it waits 30, 60, then 120 s (repeating) before trying again. It keeps going until `until`; by default that is 300 s before the run's deadline (`browser_tools.DEADLINE`, set by `agent.solve`). `until` can be changed while a start is running.
+- **Fresh context:** the third attempt runs in a new browser context. If that also fails, the session goes back to the original context and closes the new one.
+- **Pending starts:** `revive()` waits for a start that is still running in another task instead of opening a second tab. So a session can be handed to a worker or to `submit_bid` before it is up.
+- `_goto` now allows 60 s instead of 30 s.
+
+**`agent/agent.py`**
+- A new `warm_up()` starts all sign-ins as background tasks and returns at once, so the brief model call no longer waits for them.
+- The bid site from the run contract keeps warming until 300 s before the deadline. Other sites give up after 600 s; the mail site is moved up to the long limit once the brief names it.
+- The second pair of start attempts before research is gone. A trace event `starts state` records each site's state when research ends.
+
+**`agent/orchestrator.py`**
+- The orchestrator receives the warm sessions. A new `site_up(site)` makes each worker on a site (tender, qa, spec, mail tabs) wait for that site's warm session, then join, while workers on sites that are already up carry on.
+- Worker starts retry until the research deadline.
+- ERP tabs that `research.py` opens itself don't wait for their site; they only get the longer default retries.
+
+## Tests
+New file `agent/tests/test_slow_start.py`: 6 tests against a local `http.server` that stalls. The stalls (8 s) and limits (2–3 s per step) are about ten times shorter than real ones; I didn't add a full-scale 40–70 s variant.
+1. A stalled home page loads on the same tab: one GET, no `start_failed`.
+2. With a per-attempt cap shorter than the stall (the old setup), both attempts fail and the server sees two requests.
+3. The sign-in page is fast but the post-login page stalls: the start waits, there is exactly one POST, and it ends on the dashboard.
+4. A session handed out while its start is running: `look()` waits for it, with no second tab.
+5. Nothing listening: three failed attempts, with the fresh context tried after two, then back to the original context.
+6. `warm_up` returns in under 0.5 s and the brief stand-in finishes in under 2 s. A worker on a fast site joins in under 6 s, and one on the slow site joins when it comes up.
+
+## Sandbox run `run_f7b4e2341bfdb1e1` (at commit c4f88be)
+The platform only kept logs from about 150 s and from 465 s on; this is from what it kept.
+- **Starts:**
+  - The tender portal was slow under load again: at 164.8 s its warm session was still waiting on the same tab (`start_wait phase='settle'` on `/consent`).
+  - No `start_failed` appears in the logs that were kept, and the tender and qa workers were working by 252 s.
+  - ERP tabs started in 0.7–2.3 s.
+  - At 706.8 s all four sites were up and no starts were pending.
+- **Nothing blocked:** the orchestrator started at about 97 s (706.8 − 609.4). In the earlier runs the briefing finished at 180 s and the plan at 360–414 s.
+- **Outcome:** the bid form was filled up to the signing step (4 positions, summary check OK at 826.7 s). Then the model started returning `401 authentication_error` at 851.8 s, so signing never happened. That looks like the run's model key being revoked near the time limit. One related observation: research took 609 s and only finished at 706.8 s, which left signing very close to that limit.
+
+## Not done
+The run is not recorded in `experiments/runs.jsonl`. `test-run.sh` lost its follow connection when the platform timed out, and recorded the run as "running"; I reverted that, and the re-record also timed out. To record it once the platform responds:
+`python3 dev/track.py platform run_f7b4e2341bfdb1e1 --version v2 --experiment resilient-starts --note "resilient starts" --commit c4f88be --dirty no`</result>
+<usage><subagent_tokens>158280</subagent_tokens><tool_uses>68</tool_uses><duration_ms>2245099</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aae38136b82fe0808</worktreePath><worktreeBranch>worktree-agent-aae38136b82fe0808</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+After merging. Can you check why "New soak result: run_39d08ed6 at 8c7ab8f: 59 (10.5 min, signed). So the current code is 4 of 5 at 100, with one partial result." failed and improve it? (or a subagent)
+
+---
+
+<task-notification>
+<task-id>bifnbspgq</task-id>
+<summary>Monitor event: "local soak scores and sandbox soak results"</summary>
+<event>00:41 run_76b6ec5947502fb2 8c7ab8f quality=37.1 13.8min $0.150 signed</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+Also investigate the 37.1 one (with a subagent)
+
+---
+
+<task-notification>
+<task-id>bifnbspgq</task-id>
+<summary>Monitor event: "local soak scores and sandbox soak results"</summary>
+<event>[Monitor expired after 30m with 7 events delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bmdgtslz0</task-id>
+<tool-use-id>toolu_01EC8GMgERHamzKX2vo4MzEG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bmdgtslz0.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the promoted submission's review" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Also fyi just go this "part of the upgrade is up, 2nd part going up now -- runs will be paused for few min (those running rn will be restarted post-deploy)"
+
+---
+
+<task-notification>
+<task-id>b1j308mir</task-id>
+<tool-use-id>toolu_0198bQwtdH7cHo9oiY7nT1if</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/b1j308mir.output</output-file>
+<status>completed</status>
+<summary>Background command "Fetch logs and breakdowns of both partial runs" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bbja2jd03</task-id>
+<summary>Monitor event: "soak results (sandbox and local)"</summary>
+<event>00:46 run_e4d3e11f4d337e6a 8c7ab8f quality=51.2 7.4min $0.134 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bbja2jd03</task-id>
+<summary>Monitor event: "soak results (sandbox and local)"</summary>
+<event>00:46 run_993e7cf450e116b2 39c95a8 quality=None 0.0min $0.000 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bbja2jd03</task-id>
+<summary>Monitor event: "soak results (sandbox and local)"</summary>
+<event>00:47 run_ac33fc69c9874f9e 8c7ab8f quality=None 0.0min $0.000 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+"- The final candidate is sub_63a81b12: 100 in 7:33, rank #2. That's secured." yeah but it is not reliable enough on the test split. There we have to get more reliability
+
+---
+
+<task-notification>
+<task-id>bbja2jd03</task-id>
+<summary>Monitor event: "soak results (sandbox and local)"</summary>
+<event>00:49 8c7ab8f local quality=27.35 1232s local loop A [ 95.5s] specification problem text='A-2 read differently on two pages'|[ 95.5s] specification problem text='A-3 read differently on two pages'|[ 95.5s] specification problem text='A-4 read differently on two pages'|[ 239.0s] erp:HZ-9704 start_failed attempt=1 error='TimeoutError: '|</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/flush
+
+---
+
+Can you (maybe a subagent also) ask it to add an option for anthrophic backend. Have an agent qwen-alternatives-cost-speed and it recommended e.g. using Haiku 5.5 and we have credits there. Maybe speed would be better. But we should check of which reasoning and if cost is ok. And you can ask me if/where it needs the api key
+
+---
+
+yeah maybe an .env and .env.example or so would be nice. And then tell me where it is on the worktree or so
+
+---
+
+fyi "
+
+<pasted_content id="c6ab">
+back up
+
+bunch of (v) hot paths are streamlined now for current scale - should fly now (everything a lot quicker, sqlite + a bunch of single-threaded node processes were drowning) :)
+that also resolves the rare annoying site timeouts under full load, occasional queueing, etc.
+
++ concurrent runs cap also increased once more
+</pasted_content id="c6ab">
+
+"
+
+---
+
+<task-notification>
+<task-id>bbja2jd03</task-id>
+<summary>Monitor event: "soak results (sandbox and local)"</summary>
+<event>01:00 run_0139c00e4530c09d ffef7a8 quality=19.1 11.4min $0.089 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bbja2jd03</task-id>
+<summary>Monitor event: "soak results (sandbox and local)"</summary>
+<event>01:00 run_19a63c64cf9b9588 ffef7a8 quality=30.6 11.9min $0.079 signed</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bxvctz7o6</task-id>
+<tool-use-id>toolu_011HuYZXzQiTNJ2DzE6R44hM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bxvctz7o6.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the renamed-sites robustness check on main" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+"The second soak run (run_19a63c64) scored 30.6 with the same pattern." can you start this to a subagent or add to an existing one? We need to fix this.
+
+---
+
+<task-notification>
+<task-id>bbja2jd03</task-id>
+<summary>Monitor event: "soak results (sandbox and local)"</summary>
+<event>01:02 ffef7a8 local quality=37.1 762s local loop A [ 567.0s] materials problem text='A-2: search worker returned no result'|[ 567.0s] materials problem text='A-4: A-4: stroke pending (per-end reserve for key ER-9526)'|[ 567.0s] materials problem text='A-5: search worker returned no result'|[ 567.0s] materials problem text='A-2: search worker returned no result'|</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
