@@ -71,3 +71,33 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   re-locking gates. Two fixes were needed: older tool results were cut to one line once a newer view came, so the
   model paged again by hand to see the list it had collected (results of search / collect / extract now stay), and
   after paging the next view must come whole, not as a diff against a page the model never saw.
+- v2 position filling (`configurator.py`, `PositionDesk` in `submit.py`): the model names the position on screen,
+  maps control labels to value names once and names the confirm button; the helper walks the cascading selects
+  one level per round trip, matches options by value (text-sorted lists, neighbouring numbers or a catalogue
+  number that is a prefix of another) and formats German numbers. Offline mock and live (scouting, up to the TAN
+  page): one position entered in full, a position with an impossible attribute failed and was omitted, net total
+  from the entered positions only, Hauptangebot, AGB unticked; 202 s, 28 requests, 183k input tokens.
+- The worker forgot the page after a note(): `_forget_old_views` kept only the last request, so a short tool
+  result wiped the newest view and Qwen clicked guessed refs (hit "add position" in the mock). Keep the newest view
+  in full whatever comes after it.
+- Attribute wording can differ from the option text (a "none" attribute vs a "without ..." option): the tool
+  reports the options and the model passes `choices`, used only when no option matches literally (an always-on
+  override broke a later position that was already right).
+- Without "every value is already calculated; do not research" the bid worker wandered into documents and the Q&A
+  and burned its 76 steps picking options itself. The goal now says so up front.
+- Phased flow (form phase thinking off) on the offline mock: positions, discount, net total, offer type and
+  declarations right, summary check matched, signed in 93 s and 16 requests. Thinking-off slips seen there and
+  live: the model typed its own net total (now stated in the goal), clicked "omit" on a position without asking
+  configure_position() (goal: call it first on every position page), sent a partial `fields` map that replaced
+  the first one and let an unrelated position count as entered (maps now merge; a position counts only with
+  material, quantity, price and lead time mapped), and "chose" a neighbouring bore for an impossible one via
+  `choices` (numbers must now match exactly; `choices` only for worded attributes, remembered per position).
+- Live on the shared scouting login, a re-login mid-run reset the wizard to its first step; the worker re-entered
+  the form from the start. Another reason to verify signing only in test runs.
+- Live, thinking off, the model still entered its own "all positions" net total after one position failed and
+  clicked "omit" instead of "next" right after a successful fill (that position was lost). Now every
+  configure_position() result states the running net total of the positions entered, and the tool saves the
+  position with the next button the model named once. Mock after that: signed and fully correct in 64 s,
+  13 requests.
+- Local live runs twice hung before the briefing finished: one site's start (the webmail) never returned while the
+  sites answered curl at once. solve() gathers every site start without a timeout; worth a guard.

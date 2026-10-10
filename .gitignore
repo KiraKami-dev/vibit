@@ -4,3 +4,5 @@ experiments/local-runs.jsonl
 checks/
 # hand-labelled eval set: copied site text, local only
 dev/clef_eval/data/
+# hand-made answers for dev/configurator_check.py: site values, local only
+dev/local/
