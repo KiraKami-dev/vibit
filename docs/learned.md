@@ -20,5 +20,9 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - v1 submission: review passed, quality 10, 4:41 min, $0.024; team rank #4. Submit from a clean `git archive` export
   of agent/ so unfinished files never reach the package reviewer.
 - The scouting logins are global demo logins shared by every team: local bid-form and TAN runs collide with other
-  teams (TAN request numbers jump). Use local runs for reading only; verify bid-form changes with test runs, which get
-  fresh logins (up to 5 per team at once, 3 more waiting).
+  teams (TAN request numbers jump). Verify TAN signing with test runs, which get fresh logins (up to 5 per team at
+  once, 3 more waiting); see the isolation probe below for what else is shared.
+- Isolation probe (two browser contexts, scouting login): the bid wizard's progress lives in the session cookie, not
+  the account (A advanced to step 2, a fresh context B still saw an empty step 1), so local bid-form runs do not see
+  each other's wizard. The webmail is one shared mailbox (same list in both contexts, TAN mails numbered across all
+  teams), so TAN requests remain the only collision: stop local runs before the TAN request, sign in test runs.
