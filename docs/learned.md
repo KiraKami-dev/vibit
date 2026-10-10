@@ -46,3 +46,15 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - After the bid is in, the platform closes the run's model token; the final model call gets 401. Caught now.
 - Faster v1 submission (thinking by phase, fill_in, TAN hand-off): quality 10 in 2:34 min for $0.011, against 4:41 and
   $0.024 for the first v1; no quality loss, cost x time about 4x better.
+- Page views, read-only bench (smoke goals, 3 runs each, base vs new): the history trim kept only the newest request's
+  view, so after any note() the model had no page at all and invented values (refused notes, re-opened pages). Now
+  the latest view stays until a newer one arrives, and the first prompt's view is trimmed once superseded.
+- Same-page actions now return only the changed parts (controls are separate pieces, unchanged refs stay valid) or
+  "unchanged"; the full view stays in context and in the cached prefix. Invented form (fill, select, tick, save):
+  ~27.7k -> ~20.6k input tokens, correct in 7/7 runs. Read-only sites navigate, so diffs rarely fire there.
+- Select lists over 600 characters show count, first 8 and last 2; `options(ref, contains)` searches them and a
+  failed `select` names close matches. Costs one request when the model wants the list, saves tokens per view.
+- Request makeup (smoke): system + tools ~5k chars fixed, history ~3k, view ~1.5-2.5k; 40-55 % of input is reported
+  as cached, so per-request token cuts are modest; the step count dominates tokens and seconds (browser actions
+  take 0.3-0.7 s, a model step 1-4 s). Repeated boilerplate lines (footer, title bar) were 1-4 % of view text when
+  restricted to safe lines: not worth the risk of hiding status lines, dropped.

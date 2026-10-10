@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlparse
 
-from extract import locate, observe
+from extract import changes, locate, observe, select_options
 from playwright.async_api import BrowserContext, Dialog, Page
 from pydantic_ai import RunContext
 from tracing import Trace
@@ -106,6 +106,8 @@ class SiteSession:
     stamp: int = 0
     logins: int = 0
     seen: str = ""  # every view's text this session, to check notes against
+    shown: tuple = ()  # (url, title, view) the model has now, so an unchanged page is not sent again
+    base: tuple = ()  # the same for the latest view it got in full; changes are told against this one
 
     @property
     def name(self) -> str:
@@ -252,8 +254,14 @@ class SiteSession:
                 self.events.append(f"closed popup {title!r} with its close button")
                 self.trace.event(self.name, "helper", action="close_popup", title=title)
 
-    async def look(self, offset: int = 0) -> str:
-        """What the model sees: the helpers' events, the tab, then the page text with refs."""
+    async def look(self, offset: int = 0, brief: bool = False, fresh: bool = False) -> str:
+        """What the model sees: the helpers' events, the tab, then the page text with refs.
+
+        After an action on the same page, only the changed lines are sent when that is much shorter: the model still
+        has its latest full view (worker.py keeps it), and unchanged lines keep their refs. Only with `brief` (the
+        browser tools, whose result the model gets as is). `fresh` marks a whole view the model now holds (a
+        worker's first prompt); other callers (helpers that reshape the text) get it whole and reset the baseline.
+        """
         page = self.page
         await self._collect_closed(page)
         self.stamp += 1
@@ -263,39 +271,53 @@ class SiteSession:
             except Exception as error:
                 await asyncio.sleep(1.0)
                 self.view = await observe(page, str(self.stamp)) if not page.is_closed() else f"(page error {error})"
-        header = [f"URL: {page.url}", f"Title: {await page.title()}"]
+        title = await page.title()
+        header = [f"URL: {page.url}", f"Title: {title}"]
+        notes = []
         if len(self.pages) > 1:
-            header.append(f"Windows open: {len(self.pages)} (you are in the newest)")
+            notes.append(f"Windows open: {len(self.pages)} (you are in the newest)")
         if self.events:
-            header.append("Since your last action: " + "; ".join(self.events))
+            notes.append("Since your last action: " + "; ".join(self.events))
             self.events.clear()
+        key = (page.url, title, self.view)
+        if offset == 0 and brief and key == self.shown:
+            return "\n".join([*notes, "The page is unchanged since your last action (same text and refs)."])
         if offset == 0:
             self.trace.event(self.name, "view", quiet=True, url=page.url, text=self.view)
             self.seen += "\n" + self.view
+            same_page = brief and self.base and self.base[:2] == key[:2] and len(self.view) <= MAX_VIEW
+            diff = changes(self.base[2], self.view) if same_page else None
+            if diff is not None:
+                self.shown = key
+                return "\n".join([*notes, "The page changed. Against your latest full view of it, only these parts "
+                                   "differ now (- was there, + is new); everything else, refs included, is as there:",
+                                   diff])
         text = self.view[offset:offset + MAX_VIEW]
         rest = len(self.view) - offset - len(text)
         if rest > 0:
             text += f"\n[... {rest} more characters: read_more(offset={offset + len(text)})]"
-        return "\n".join(header) + "\n\n" + text
+        self.shown = self.base = key if offset == 0 and rest <= 0 and (brief or fresh) else ()
+        return "\n".join(header + notes) + "\n\n" + text
 
     async def act(self, kind: str, ref: str, fn) -> str:
         """Run one action on the element `ref`, settle, and return the new view."""
         async with self.lock:
             element = await locate(self.page, ref)
             if element is None:
-                return f"No element {ref} on this page (refs change with every view).\n\n" + await self.look()
+                return (f"No element {ref} on this page (refs change with every view).\n\n"
+                        + await self.look(brief=True))
             started = time.monotonic()
             before = (self.page.url, self.view)
             try:
                 await fn(element)
             except Exception as error:
-                first = str(error).splitlines()[0][:200]
+                first = str(error).splitlines()[0][:300]
                 self.trace.event(self.name, "action_error", action=kind, ref=ref, error=first)
-                return f"{kind} {ref} failed: {first}\n\n" + await self.look()
+                return f"{kind} {ref} failed: {first}\n\n" + await self.look(brief=True)
             await asyncio.sleep(0.25)
             await self.settle()
             self.trace.event(self.name, "action", action=kind, ref=ref, seconds=round(time.monotonic() - started, 2))
-            view = await self.look()
+            view = await self.look(brief=True)
             if (self.page.url, self.view) == before:
                 view = (f"Nothing on the page changed after {kind} {ref}. Do not repeat it; check the page for what "
                         f"is still missing (a required field, a checkbox, another button).\n\n") + view
@@ -327,7 +349,7 @@ async def goto(ctx: RunContext[Deps], url: str) -> str:
     async with session.lock:
         await session._goto(target)
         session.trace.event(session.name, "action", action="goto", url=target)
-        return await session.look()
+        return await session.look(brief=True)
 
 
 async def click(ctx: RunContext[Deps], ref: str) -> str:
@@ -351,14 +373,60 @@ async def fill(ctx: RunContext[Deps], ref: str, text: str, submit: bool = False)
     return await ctx.deps.session.act("fill", ref, run)
 
 
+LABELS_JS = r"""
+e => Array.from(e.options || []).map(o =>
+  [o.textContent.replace(/[\u200b\u200c\u200d\u2060\ufeff\u00ad]/g, '').replace(/\s+/g, ' ').trim(), o.value])
+"""
+
+
+def _option_index(choices: list[list[str]], option: str) -> int | None:
+    """The option whose visible text (else value) is `option`, ignoring spacing and then case."""
+    want = " ".join(option.split())
+    for match in (lambda t, v: t == want, lambda t, v: v == option, lambda t, v: t.casefold() == want.casefold()):
+        for i, (text, value) in enumerate(choices):
+            if match(text, value):
+                return i
+    return None
+
+
+def _close_options(texts: list[str], option: str, limit: int = 8) -> list[str]:
+    """Options that contain `option`, else any of its words, for a helpful error."""
+    want = option.casefold().strip()
+    hits = [t for t in texts if want and want in t.casefold()]
+    if not hits:
+        words = [w for w in want.replace(",", " ").split() if len(w) > 1]
+        hits = [t for t in texts if any(w in t.casefold() for w in words)]
+    return hits[:limit]
+
+
 async def select(ctx: RunContext[Deps], ref: str, option: str) -> str:
     """Choose an option of a select by its visible text."""
     async def run(element):
-        try:
-            await element.select_option(label=option, timeout=5000)
-        except Exception:
-            await element.select_option(option, timeout=5000)
+        choices = await element.evaluate(LABELS_JS)
+        index = _option_index(choices, option)
+        if index is None:
+            texts = [text for text, _ in choices]
+            close = _close_options(texts, option)
+            hint = f"options like it: {' | '.join(close)}" if close else f"options({ref}, contains) searches them"
+            raise ValueError(f"no option {option!r} among {len(texts)}; {hint}")
+        await element.select_option(index=index, timeout=5000)
     return await ctx.deps.session.act("select", ref, run)
+
+
+async def options(ctx: RunContext[Deps], ref: str, contains: str = "") -> str:
+    """List the options of a select (views shorten long lists), or only those whose text contains `contains`."""
+    session = ctx.deps.session
+    async with session.lock:
+        found = await select_options(session.page, ref, contains)
+    if found is None:
+        return f"No select {ref} on this page (refs change with every view)."
+    total, hits = found
+    which = f" containing {contains!r}" if contains else ""
+    text = f"{len(hits)} of {total} options of {ref}{which}:\n" + "\n".join(hits[:300])
+    if len(hits) > 300:
+        text += f"\n... {len(hits) - 300} more; narrow with contains"
+    session.seen += "\n" + text
+    return text
 
 
 async def check(ctx: RunContext[Deps], ref: str, checked: bool = True) -> str:
@@ -380,7 +448,7 @@ async def back(ctx: RunContext[Deps]) -> str:
         except Exception:
             pass
         await session.settle()
-        return await session.look()
+        return await session.look(brief=True)
 
 
 async def read_more(ctx: RunContext[Deps], offset: int) -> str:
@@ -418,4 +486,4 @@ async def note(ctx: RunContext[Deps], key: str, value: str) -> str:
     return f"noted {key}"
 
 
-TOOLS = [goto, click, fill, select, check, back, read_more, note]
+TOOLS = [goto, click, fill, select, options, check, back, read_more, note]
