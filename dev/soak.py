@@ -66,7 +66,9 @@ def summarise(run: str, commit: str, version: str, note: str) -> str:
         match = SIGNAL.search(line)
         if match and not (match.group(2) == "summary_check" and "matches=True" in line):
             signals.append(f"{match.group(1)} {match.group(2)}: {match.group(3)[:140]}")
-    bid = "no bid" if "without submitting" in atira("status", run) or "result=None" in logs else "signed"
+    # eligibility is the platform's own word on whether a bid went in; the agent's result=None also follows a
+    # successful submission (the platform closes the model token right after it)
+    bid = "signed" if score.get("eligible") else "no bid"
     subprocess.run([sys.executable, str(ROOT / "dev" / "track.py"), "platform", run, "--version", version,
                     "--experiment", "soak", "--commit", commit, "--dirty", "no", "--note", note],
                    cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, timeout=300)
