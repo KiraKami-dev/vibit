@@ -635,20 +635,19 @@ class BidFlow:
         self.session.trace.event("bid_flow", kind, **data)
 
     async def _run(self) -> None:
-        try:
-            while self.passes < PREPARES and self.deadline - time.monotonic() > SIGNING_RESERVE + 300:
+        while self.passes < PREPARES and self.deadline - time.monotonic() > SIGNING_RESERVE + 300:
+            try:
                 await self._prepare()
                 if not self.ready:
                     return
                 await self._keep_alive()  # returns only when the session was lost
                 async with self.session.lock:  # sign in again and show where the wizard stands now
                     await self.session._goto(self.session.page.url)
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:  # the form then simply starts from where it is
-            self._event("failed", error=f"{type(error).__name__}: {str(error)[:300]}")
-        finally:
-            self.preparing = False
+            except Exception as error:  # e.g. a model error: another pass; at worst the form starts from scratch
+                self.preparing = self.ready = False
+                self._event("failed", error=f"{type(error).__name__}: {str(error)[:300]}")
+                await asyncio.sleep(5)
+        self.preparing = False
 
     async def _prepare(self) -> None:
         self.passes += 1
