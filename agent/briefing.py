@@ -24,7 +24,8 @@ class Briefing(BaseModel):
 async def read_brief(task: dict) -> Briefing:
     sites = "\n".join(f"- siteId {s['siteId']}: {s['url']}" for s in task["access"])
     submission = task.get("submission", {})
-    agent = Agent(llm.model(), output_type=Briefing, model_settings=llm.settings(thinking=True), retries=3,
+    agent = Agent(llm.model(), output_type=Briefing, model_settings=llm.settings(llm.thinking("brief", False)),
+                  retries=3,
                   instructions="You read a task brief and extract facts from it exactly as written.")
 
     @agent.output_validator

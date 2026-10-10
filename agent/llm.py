@@ -36,6 +36,13 @@ def model() -> OpenAIChatModel:
     return OpenAIChatModel(os.environ.get("AGENT_MODEL", QWEN_MODEL), provider=OpenAIProvider(openai_client=client))
 
 
+def thinking(phase: str, default: bool) -> bool:
+    """Whether `phase` (BRIEF, FORM, REVIEW, ...) thinks: THINKING_<PHASE>=0/1 overrides the default, so
+    experiments can switch it per phase and the run records say which way it ran."""
+    value = os.environ.get(f"THINKING_{phase.upper()}", "").strip().lower()
+    return default if not value else value not in ("0", "false", "no", "off")
+
+
 def settings(thinking: bool = False) -> ModelSettings:
     return ModelSettings(
         temperature=0.2,
