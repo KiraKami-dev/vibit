@@ -276,6 +276,7 @@ class GapFiller:
         def job(coro, name: str) -> None:
             jobs[asyncio.create_task(coro, name=f"gap:{name}")] = name
 
+        todo = self.spare_doubts(todo)
         for gap in todo:
             self.tries[gap.ident] = self.tries.get(gap.ident, 0) + 1
             self.trace("gap_retry", gap=gap.ident, round=self.round, attempt=self.tries[gap.ident],
@@ -293,6 +294,9 @@ class GapFiller:
         for gap in areas.get("material", []):
             job(self.material(gap.key), gap.ident)
         if "mail" in areas:
+            # Kinds that blank or omit fields come first; a kind only the verifier doubted (its doubts are mostly
+            # "the quote shows only the header") takes a mail tab only when one is spare: in one sandbox run eight
+            # doubted kinds held all four tabs and the one real gap (a setup pool) stayed open.
             kinds = [g.key for g in areas["mail"]]
             if "end_reserves" in kinds:  # a reserve moves the stroke the material must match
                 touched |= {rid for rid, req in o.requirements.items() if o.effective(req).pending}
@@ -316,6 +320,19 @@ class GapFiller:
                 error = task.exception()
                 o.board.problem("gaps", f"{jobs[task]} retry failed: {type(error).__name__}: {str(error)[:160]}")
         return touched
+
+    def spare_doubts(self, todo: list[Gap]) -> list[Gap]:
+        """
+        Mail kinds that blank or omit fields come first; a kind only the verifier doubted (its doubts are mostly
+        "the quote shows only the header") takes a mail tab only when one is spare: in one sandbox run eight
+        doubted kinds held all four tabs and the one real gap (a setup pool) stayed open.
+        """
+        real = [g for g in todo if not (g.area == "mail" and g.reason.startswith(DOUBT))]
+        doubted = [g for g in todo if g not in real]
+        spare = max(0, len(getattr(self.o, "mail_sessions", None) or []) - sum(g.area == "mail" for g in real))
+        if doubted[spare:]:
+            self.trace("gap_skipped", gaps=[g.ident for g in doubted[spare:]], reason="no spare mail tab")
+        return real + doubted[:spare]
 
     async def reselect(self, rids: set[str]) -> None:
         """The final material choice again for the requirements a retry touched (no browsing)."""

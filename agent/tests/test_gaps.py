@@ -382,5 +382,17 @@ class MailReread(unittest.TestCase):
         self.assertFalse(filler.unread("packaging"))  # once per kind; next time it is searched
 
 
+class DoubtsYield(unittest.TestCase):
+    def test_doubted_kinds_take_only_spare_mail_tabs(self):
+        o = runnable(100)
+        o.mail_sessions = [object(), object()]
+        filler = GapFiller(o)
+        todo = [Gap("mail", "fx", f"{gaps.DOUBT}: header only"), Gap("mail", "setup_pools", "key unresolved"),
+                Gap("mail", "approval", f"{gaps.DOUBT}: header only"), Gap("erp", "A-1", "x")]
+        self.assertEqual([g.ident for g in filler.spare_doubts(todo)], ["mail/setup_pools", "erp/A-1", "mail/fx"])
+        o.mail_sessions = [object()]
+        self.assertEqual([g.ident for g in filler.spare_doubts(todo)], ["mail/setup_pools", "erp/A-1"])
+
+
 if __name__ == "__main__":
     unittest.main()
