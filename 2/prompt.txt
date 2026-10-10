@@ -1,0 +1,99 @@
+As the server is quite busy: Is there an option to get like with our sponsored OpenAI credits get a model that is similar on speed and cost as the provided Qwen 3.8? Or like any model (also other providers) better on the cost/speed/quality tradeoffs
+
+---
+
+And a loal one that would e.g. fit on ssh ada? But I guess not the quality, right?
+
+---
+
+Can you research some other models? What would be the best fit?
+
+---
+
+"so most of the slowness you're seeing is the busy server" but that is counting towards our run times, right? So if we can get a faster inference model at around the same cost it would be better for us, right?
+
+---
+
+Maybe also the same model on OpenRouter? How is the cost there?
+
+---
+
+<task-notification>
+<task-id>ae48b233d112901f1</task-id>
+<tool-use-id>toolu_01SBqs8EQESkyaFE9kABLs4n</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/a320548f-34e7-4906-8a8a-f4947ebfa95b/tasks/ae48b233d112901f1.output</output-file>
+<status>completed</status>
+<summary>Agent "Research fast cheap LLMs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found three options that look better than the hosted Qwen baseline: Claude Haiku 5.5, DeepSeek V4.1 Flash served through Together, and GLM-5.3-Flash. A caution before the numbers: for reasoning models, Artificial Analysis (AA) counts thinking time in "time to first token" (TTFT), so those latencies look far worse than they will be with thinking switched off. "AAII" below is AA's Intelligence Index.
+
+| Model | Reachable via | $/M in / cached / out | tok/s | TTFT | AAII (setting) | Img | Ctx |
+|---|---|---|---|---|---|---|---|
+| **Claude Haiku 5.5** | Anthropic, OpenRouter | 0.10 / 0.01 / 0.50 (prompts up to 100k tokens); 0.50 / 0.05 / 2.50 above | 166–240 | AA 9.7 s (low effort, thinking included); one third-party test: about 0.6 s with thinking off | 29 low, 34 med, 38 high, 41 xhigh, 43 max | yes | 1M |
+| **DeepSeek V4.1 Flash** | DeepSeek, Together, Fireworks, OpenRouter | DeepSeek direct: 0.15 / 0.003 / 0.60 off-peak, double at peak. Together: 0.30 / 0.006 / 1.20 | DeepSeek 217, Together 280, Baseten 288 | 1.16 s DeepSeek, 0.35 s Together | 39 max, 25 non-reasoning | yes (per OpenRouter) | 1M |
+| **GLM-5.3-Flash** | Z.ai, Together, Fireworks, OpenRouter (about 30 hosts) | 0.15 / 0.03 / 0.50 (some hosts as low as 0.03 input) | Z.ai 53, Together 95, Fireworks 181 | 3.0 s Z.ai, 0.61 s Together, 1.49 s Fireworks | 42 | yes | 1M |
+| MiMo-V2.6-Pro | OpenRouter (Xiaomi, DeepInfra, Novita) | 0.435 / 0.0036 / 0.87 | 45 | 3.5 s | 46 | yes | 1M |
+| MiMo-V2.6-Flash | OpenRouter | 0.14 / 0.003 / 0.28 | 58 | 3.4 s | 38 | yes | 1M |
+| GPT-6 Luna | OpenAI, OpenRouter | 0.10 / 0.01 / 0.50 (cheaper and pricier tiers also listed) | 114–139 | 0.9 s non-reasoning, 2.8 s low | 18 non-reasoning, 22 low, 33 high, 38 max | yes | 1M |
+| GPT-5.6 Luna | OpenAI | not checked | 105–113 | 0.8–2.2 s | 16–37 | yes | 1M |
+| GPT-6.1 Sol | OpenAI | 2.00 / about 0.10 / 10.00 | 47 | 2.8 s | 42 low, 48 med | yes | 1M |
+| Gemini 3.7 Flash | Google | 0.75 / about 0.075 / 3.75 | 307 | 8.6 s | 39 (high) | yes | 1M |
+| Gemini 3.6 Flash | Google | 0.75 / – / 3.75 (deprecated) | 197 | 13.9 s | 34 | yes | 1M |
+| Gemini 3.5 Flash-Lite | Google, OpenRouter | 0.30 / 0.03 / 2.50 (0.15 / 1.25 tier also listed) | 365 | 9 s | **22** | yes | 1M |
+| Qwen3.8 Flash (OpenRouter) | OpenRouter, Alibaba only | 0.15 / 0.016 / 0.47 | (baseline 56) | 2.46 s | 40 | yes | 1M |
+| gpt-oss-120b | Groq 0.15/0.075/0.60, Cerebras 0.35/0.75 | as listed | 184–203 | 0.9 s | 12 | no | 131k |
+| Mercury 2.5 / Celeris-1 | Mercury via OpenRouter (Inception) | Mercury 0.04 / 0.004 / 0.15 | 818 / 1,523 | 3.2 / 0.6 s | 12 / 6 | no | 260k / 131k |
+| Mistral Small 4 / Medium 3.5 | Mistral | not checked | 151–163 | 0.7 / 2.3 s | 11 / 14 | – | 256k |
+| GPT-5.4 nano / mini | OpenAI | not checked | 164–271 | about 0.7 s non-reasoning | 21 / 24 at xhigh | – | – |
+
+**Conflicting or uncertain numbers**
+- **Gemini 3.5 Flash-Lite:** AA now shows 22, not the ~36 we had. It drops out.
+- **GPT-6 Luna:** AA measures 114–139 tok/s, below our 140–155.
+- **Qwen3.8 Flash on OpenRouter:** its page links to the Qwen3.8-Flash-Next weights, but it doesn't say it is the same model. It has a single host (Alibaba) and the same price as our baseline, so there is no speed gain.
+- **Grok:** xAI's model list has no fast or mini model now. The cheapest is grok-4.3 at $1.25 / $0.20 / $2.50. OpenRouter returned no hosts for grok-4.1-fast.
+- **Fast models:** Mercury, Celeris, gpt-oss and Mistral score 6–14 on the current index, far too low for our quality-first ranking.
+- **Tool-calling benchmarks:** none for these models on tau-bench or BFCL. Haiku 5.5 scores 35.4% on Terminal-Bench 4.0 and 54.3% on the Vals Index (Vals AI). One third-party Terminal-Bench 2.1 board shows DeepSeek V4.1 Flash at 90.6% and GLM-5.3-Flash at 84.3%; I don't trust it.
+
+**Top 3 for our case**
+1. **Claude Haiku 5.5.** It is cheaper than the baseline per output token, cached input costs $0.01, and output speed is 3–4x faster (166–240 vs 56 tok/s). It scores up to 43, accepts images and does well on agentic benchmarks. Two plans to compare:
+   - Navigation at low effort or thinking off, decisions at high effort (38). The catch: navigation then runs at 29–34, below the baseline's 40.
+   - Everything at medium or high effort.
+
+   Keep each prompt under 100k tokens, or the price rises 5x. The minimum cacheable prompt is 286 tokens.
+2. **DeepSeek V4.1 Flash via Together.** About 280 tok/s with a 0.35 s TTFT, and cached input costs almost nothing. The reasoning mode is close to the baseline's quality (39). DeepSeek's own API is half price off-peak. Peak is 01:00–04:00 and 06:00–10:00 UTC on weekdays; event day is a Saturday, so the whole event should fall in off-peak.
+3. **GLM-5.3-Flash via Fireworks.** The best quality of the cheap options (42, above the baseline), at about 181 tok/s and the baseline's price range, with images. Together is the lower-latency alternative (0.61 s TTFT, 95 tok/s).
+
+MiMo-V2.6-Pro scores highest (46) but is too slow (45 tok/s) for 300 calls.
+
+Hosted Qwen and Clef add a simulated price to run cost; any other model is billed at provider prices through our own key (a team secret) and has to be listed in `agent.json`. I edited no files.
+
+**Sources**
+- [AA leaderboard](https://artificialanalysis.ai/leaderboards/models)
+- [AA OpenAI](https://artificialanalysis.ai/providers/openai)
+- [AA Haiku 5.5](https://artificialanalysis.ai/models/claude-haiku-5-5)
+- [AA GLM-5.3-Flash providers](https://artificialanalysis.ai/models/glm-5-3-flash/providers)
+- [AA DeepSeek V4.1 Flash providers](https://artificialanalysis.ai/models/deepseek-v4-1-flash/providers)
+- [AA MiMo-V2.6-Pro](https://artificialanalysis.ai/models/mimo-v2-6-pro)
+- [AA GPT-6.1 Sol](https://artificialanalysis.ai/models/gpt-6-1-sol)
+- [AA Gemini 3.6 Flash](https://artificialanalysis.ai/models/gemini-3-6-flash)
+- [AA Gemini 3.7 Flash](https://artificialanalysis.ai/models/gemini-3-7-flash)
+- [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing)
+- [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing)
+- [xAI models](https://docs.x.ai/docs/models)
+- [OpenRouter Qwen3.8 Flash](https://openrouter.ai/qwen/qwen3.8-flash)
+- [OpenRouter GLM-5.3-Flash](https://openrouter.ai/z-ai/glm-5.3-flash)
+- OpenRouter host prices from `openrouter.ai/api/v1/models/&lt;id&gt;/endpoints`
+- [Vals Haiku 5.5](https://www.vals.ai/models/anthropic_claude-haiku-5-5)
+- [Haiku 5.5 latency test](https://computingforgeeks.com/claude-haiku-5-5-released-features-benchmarks/)
+- [Terminal-Bench 2.1 board](https://codingfleet.com/blog/terminal-bench-leaderboard-2026/)
+- [Grok pricing roundup](https://benchlm.ai/xai/api-pricing)</result>
+<usage><subagent_tokens>90451</subagent_tokens><tool_uses>30</tool_uses><duration_ms>263347</duration_ms></usage>
+</task-notification>
+
+---
+
+If we let Haiku or Luna run on max though isn't it consuming more tokens and longer?
+
+---
+
+Can you rank your recommendations of what to try?

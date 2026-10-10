@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01SBqs8EQESkyaFE9kABLs4n",
+  "agent_id": "ae48b233d112901f1",
+  "subagent_type": "general-purpose",
+  "task_description": "Research fast cheap LLMs",
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 67218,
+    "cache_read_tokens": 792086,
+    "output_tokens": 7159,
+    "api_call_count": 14
+  },
+  "started_at": "2026-10-11T00:24:25.317446+02:00",
+  "completed_at": "2026-10-11T00:28:48.571293+02:00"
+}
