@@ -30,6 +30,8 @@ class Fact(BaseModel):
     worker: str = ""
     posted_at: float = 0.0
     verdict: str = Field(default="", description="'' until verified; 'ok' or the verifier's doubt")
+    rework: bool = Field(default=False, description="The doubt is about the record itself, so a new search can "
+                                                    "settle it (not merely a quote that does not show the value)")
 
     @property
     def ident(self) -> str:

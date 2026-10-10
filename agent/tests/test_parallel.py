@@ -1,4 +1,5 @@
-"""v3: the revision judged twice and the ERP's optional second candidate search."""
+"""v3: the revision judged twice, the ERP's optional second candidate search, and the waits taken out of
+the research (mail plan, rework after the verifier)."""
 import asyncio
 import tempfile
 import time
@@ -6,7 +7,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import orchestrator
 import research
+from board import Board, Fact, Source
 from research import CandidateSeen, CurrentRevision, Erp, RevisionHistory, RevisionSeen, SearchReport
 from tracing import Trace
 
@@ -162,6 +165,81 @@ class ErpSecondSearch(unittest.TestCase):
             return slots - erp.tabs._value
 
         self.assertEqual(asyncio.run(run()), 0)
+
+
+def bare() -> orchestrator.Orchestrator:
+    o = object.__new__(orchestrator.Orchestrator)
+    o.trace = Trace(tempfile.mkdtemp())
+    o.board = Board(o.trace)
+    o.rules, o.reference = "rules", "T-1"
+    o.briefing = SimpleNamespace(scenario_date="2026-06-01")
+    o.research_deadline = time.monotonic() + 600
+    o.mail_deadline = time.monotonic() + 600
+    o.task = {"brief": "Brief"}
+    return o
+
+
+def doubt(key: str, rework: bool) -> Fact:
+    return Fact(kind="mail", key=key, value="v", source=Source(site="mail"), worker="mails", verdict="doubt",
+                rework=rework)
+
+
+class ReworkOnlyForRecordDoubts(unittest.TestCase):
+    def verify(self, rounds: list[list[Fact]]):
+        calls, reworked = [], []
+
+        async def verify_board(board, rules, reference, scenario):
+            calls.append(1)
+            return rounds[len(calls) - 1]
+
+        async def rework(facts):
+            reworked.append([f.key for f in facts])
+
+        o = bare()
+        o.rework = {"mails": rework}
+        with patch.object(orchestrator, "verify_board", verify_board):
+            asyncio.run(o.verify())
+        return len(calls), reworked
+
+    def test_a_quote_that_does_not_show_the_value_sends_nothing_back(self):
+        self.assertEqual(self.verify([[doubt("a", False), doubt("b", False)]]), (1, []))
+
+    def test_a_doubted_record_goes_back_once_and_is_judged_again(self):
+        self.assertEqual(self.verify([[doubt("a", False), doubt("b", True)], []]), (2, [["b"]]))
+
+    def test_no_doubt_is_one_check(self):
+        self.assertEqual(self.verify([[]]), (1, []))
+
+
+class MailPlanHedge(unittest.TestCase):
+    def plan(self, seconds: list, hedge: float = 0.05):
+        calls = []
+
+        async def plan_searches(brief, sites, findings=""):
+            calls.append(len(calls) + 1)
+            n = calls[-1]
+            wait = seconds[n - 1]
+            if isinstance(wait, Exception):
+                raise wait
+            await asyncio.sleep(wait)
+            return [f"plan {n}"]
+
+        o = bare()
+        with patch.object(orchestrator.research_mail, "plan_searches", plan_searches), \
+                patch.object(orchestrator, "PLAN_HEDGE", hedge):
+            return asyncio.run(o._mail_plan({}, "")), len(calls)
+
+    def test_a_plan_that_answers_in_time_is_one_call(self):
+        self.assertEqual(self.plan([0.01]), (["plan 1"], 1))
+
+    def test_a_stalled_plan_gets_a_second_call_and_the_first_answer_wins(self):
+        self.assertEqual(self.plan([5.0, 0.01]), (["plan 2"], 2))
+        self.assertEqual(self.plan([0.1, 5.0]), (["plan 1"], 2))
+
+    def test_a_failed_call_leaves_the_other(self):
+        self.assertEqual(self.plan([ValueError("bad"), 0.01], hedge=0.0), (["plan 2"], 2))
+        with self.assertRaises(ValueError):
+            self.plan([ValueError("bad"), ValueError("bad")], hedge=0.0)
 
 
 if __name__ == "__main__":

@@ -170,3 +170,14 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   approval 106 s). Session expiry while opening a message's reading pane gave the reader a sign-in page (empty
   record); messages are now reopened when the tab landed elsewhere. Without the mailbox address, records are
   authorised by the recipients' domain instead of all being dropped.
+- Second searches, one run (100, 14:16, $0.144, slow platform with 56 stalled calls): the ERP second search
+  started for three requirements and never returned a list before the restarted first search did; the mail one
+  started twice and was stopped after 40 s and 7 s. ERP one now off by default, mail one dropped.
+- Where 14 to 15 min went (three 100 runs): mail searches began only 75 to 170 s in (a 45 s wait for the tender's
+  keys that always timed out, then the plan call); nine kinds over 4 tabs took three rounds; the verifier called
+  every mail fact doubtful because its quote is only the header, which re-searched all kinds (145 to 170 s) and
+  changed nothing; form 190 to 350 s, signing 30 to 50 s. Spec (45 to 170 s) and ERP (done about 80 s later)
+  were never the longest chain.
+- The 7:33 submission is a promoted soak run of main: the same code took 7:33, 11:39 and 14:00 in other runs, so
+  run time swings by a factor of two with the platform's speed.
+

@@ -51,7 +51,9 @@ SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "390"))
 # v3: 360 (was 300). submit.py stops entering positions SIGNING_RESERVE (180) before the end, so a form that
 # starts at the last moment has 180 s for its steps and positions (measured: 193 s, and 352 s on a slow bid site).
 FORM_SECONDS = float(os.environ.get("AGENT_FORM_SECONDS", "360"))  # the bid form and signing need this much
-MAIL_TABS = int(os.environ.get("MAIL_TABS", "4"))
+# Mail is the longest chain of the research (measured: nine record kinds of 40 to 190 s each took three rounds
+# over 4 tabs). 6 tabs make it two rounds.
+MAIL_TABS = int(os.environ.get("MAIL_TABS", "6"))
 SPEC_STEPS_FAST = int(os.environ.get("SPEC_STEPS_FAST", "25"))  # navigation steps of the fast spec attempt
 SPEC_STEPS_THINKING = int(os.environ.get("SPEC_STEPS_THINKING", "35"))  # and of the careful one, run alongside
 SELECT_SECONDS = 75.0  # the final material choice (a model call per requirement, in parallel)
@@ -85,7 +87,11 @@ SPEC_STRATEGIES = {
         "details or info button, a tooltip, an expandable section or an embedded viewer: check each of those "
         "before paging. Never page back and forth through the same list.")},
 }
-FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys before planning from the brief alone
+# How long the mail planner waits for the tender's keys before planning from the brief alone. 0: it plans at
+# once, with whatever positions are on the board. (With 45 s the wait timed out in three of three runs and the
+# mail searches started 75 to 170 s into the research, with the tabs signed in since about 25 s.)
+FINDINGS_WAIT = float(os.environ.get("AGENT_FINDINGS_WAIT", "0"))
+PLAN_HEDGE = 15.0  # a mail plan that has not answered by then (it answers in about 12 s) gets a second call
 REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at least this much research time left
 
 
@@ -569,13 +575,13 @@ class Orchestrator:
             # The tabs sign in while the planner reads the brief and waits for the tender's keys.
             # Staggered: several tabs signing in to one website at the same moment hung in local runs.
             starts = [asyncio.create_task(self._mail_tab(site, i)) for i in range(MAIL_TABS)]
-            positions = await board.wait("position", timeout=min(FINDINGS_WAIT, max(1.0, self.left())))
+            positions = (await board.wait("position", timeout=min(FINDINGS_WAIT, max(1.0, self.left())))
+                         if FINDINGS_WAIT > 0 else board.get("position"))
             findings = "\n".join(f"- position {k}: " + ", ".join(
                 f"{f} {v}" for f, v in fact.value.items() if f.endswith("_key") or f == "condition_group")
                 for k, fact in positions.items())
             sites = {s["siteId"]: s["url"] for s in self.task["access"]}
-            kinds = await asyncio.wait_for(research_mail.plan_searches(self.task["brief"], sites, findings),
-                                           max(1.0, self.mail_deadline - time.monotonic()))
+            kinds = await self._mail_plan(sites, findings)
             self.mail_kinds = [k for k in kinds if k.site == site]
             elsewhere = [f"{k.name} on {k.site}" for k in kinds if k.site != site]
             if elsewhere:  # another mail site would be its own job (the plan names every website it needs)
@@ -586,6 +592,32 @@ class Orchestrator:
             board.problem("mails", f"{type(error).__name__}: {str(error)[:200]}")
         finally:
             board.finish("mail")
+
+    async def _mail_plan(self, sites: dict[str, str], findings: str) -> list:
+        """The mail search plan. A planner call that has not answered after PLAN_HEDGE seconds gets a second one
+        beside it, and the first plan that arrives is used: a stalled call must not hold up every mail search."""
+        end = self.mail_deadline
+        calls = [asyncio.create_task(research_mail.plan_searches(self.task["brief"], sites, findings))]
+        try:
+            done, _ = await asyncio.wait(calls, timeout=max(0.0, min(PLAN_HEDGE, end - time.monotonic())))
+            if not done or calls[0].exception() is not None:  # still out, or failed: a second call
+                self.trace.event("mails", "plan_hedged", after=PLAN_HEDGE, failed=bool(done))
+                calls.append(asyncio.create_task(research_mail.plan_searches(self.task["brief"], sites, findings)))
+            pending, error = set(calls), None
+            while pending:
+                done, pending = await asyncio.wait(pending, timeout=max(1.0, end - time.monotonic()),
+                                                   return_when=asyncio.FIRST_COMPLETED)
+                if not done:
+                    raise TimeoutError("no mail plan by the mail deadline")
+                for call in done:
+                    if call.exception() is None:
+                        return call.result()
+                    error = call.exception()
+            raise error or TimeoutError("no mail plan")
+        finally:
+            for call in calls:
+                if not call.done():
+                    call.cancel()
 
     async def _mail_tab(self, site: str, i: int) -> SiteSession:
         await asyncio.sleep(MAIL_TAB_STAGGER * i)
@@ -756,20 +788,32 @@ class Orchestrator:
             await self._research_mail(kinds, min(self.research_deadline, time.monotonic() + REWORK_SECONDS))
 
     async def verify(self) -> None:
+        """
+        The verifier judges the facts; a fact whose record it doubts (another reference, a later date, a wrong
+        sender, a superseded record) goes back to its worker once, and the reworked facts are judged again. A
+        doubt that is only about the quote (missing, or a header that does not show the value) is recorded but
+        sends nothing back: a new search would post the same quote, and cost its 150 s for nothing.
+        """
         doubtful = await verify_board(self.board, self.rules, self.reference, self.briefing.scenario_date)
         by_worker: dict[str, list] = {}
         for fact in doubtful:
-            by_worker.setdefault(fact.worker, []).append(fact)
+            if getattr(fact, "rework", True):
+                by_worker.setdefault(fact.worker, []).append(fact)
+        if len(doubtful) > sum(len(facts) for facts in by_worker.values()):
+            self.trace.event("verify", "evidence_only",
+                             facts=[f.ident for f in doubtful if not getattr(f, "rework", True)][:30])
+        reworked = False
         for worker, facts in by_worker.items():
             rework = self.rework.get(worker)
             if rework is None or self.left() < REWORK_SECONDS:
                 continue
             self.trace.event("verify", "rework", by=worker, facts=[f.ident for f in facts])
+            reworked = True
             try:
                 await asyncio.wait_for(rework(facts), max(1.0, self.left()))
             except Exception as error:
                 self.board.problem("verify", f"rework {worker}: {type(error).__name__}: {str(error)[:160]}")
-        if by_worker:
+        if reworked:
             await verify_board(self.board, self.rules, self.reference, self.briefing.scenario_date)
 
     async def select_materials(self) -> None:
@@ -904,8 +948,12 @@ class Orchestrator:
             answer = self.fallback_answer()
             self.trace.event("calc", "answer", answer=answer, problems=problems, fallback=True)
             return answer, None
-        check = None if self.form_left() < 30 else await confirm_decision(result.decision, self.board.summary() + "\n\nProblems:\n"
-                                       + "\n".join(self.board.problems + problems), self.rules)
+        # The decision check can only turn a bid with a missing material into no_bid: without one it changes
+        # nothing, so the call (10 to 15 s before the bid form) is left out.
+        check = None
+        if result.decision == "bid" and result.missing_materials and self.form_left() >= 30:
+            check = await confirm_decision(result.decision, self.board.summary() + "\n\nProblems:\n"
+                                           + "\n".join(self.board.problems + problems), self.rules)
         if check is not None and not check.agrees:
             self.trace.event("verify", "decision_disputed", proposed=result.decision, wanted=check.decision,
                              reason=check.reason)

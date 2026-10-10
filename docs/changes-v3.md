@@ -25,6 +25,17 @@ circles for 25 steps, its retry was the same attempt again, and without requirem
 A second mail search by idle tabs was tried in one run (100, 14:16) and dropped: it started twice and was stopped
 after 40 s and 7 s when the first search returned.
 
+## Time (after three 100-point runs of 14 to 15 min)
+
+Where the time went in those runs, and what was changed. None of it removes a check that changed a result.
+
+| Wait | Seen | Change |
+| --- | --- | --- |
+| The mail planner waited up to 45 s for the tender's keys, then made its plan | The wait timed out in 3 of 3 runs; mail searches began 75 to 170 s into the research, with the tabs ready since about 25 s | `FINDINGS_WAIT` 45 -> 0: the plan is made at once from the brief and what is on the board. A plan call still out after 15 s (or failed) gets a second call beside it (`_mail_plan`) |
+| Nine mail kinds queued behind 4 tabs | Three rounds of 40 to 190 s each | `MAIL_TABS` 4 -> 6: two rounds |
+| Rework after the verifier | In 2 of 3 runs every mail fact was "doubtful" only because its quote is the message header; all kinds were searched again (145 to 170 s) and judged again (22 s), with the same result | The verifier says what a doubt is about (`Verdict.about`). Only a doubt about the record itself (reference, date, sender, superseded) sends a fact back; the second check runs only after a rework |
+| Decision check before the form | 12 to 15 s; it can only turn a bid with a missing material into no_bid, which calc already does | Called only when it can change the decision |
+
 ## Environment variables (all optional)
 
 | Variable | Default | What |
@@ -37,6 +48,7 @@ after 40 s and 7 s when the first search returned.
 | `AGENT_MAIL_SECONDS` | 600 | Mail research time from the orchestrator's start |
 | `AGENT_ERP_RACE` / `AGENT_ERP_SECOND_AFTER` / `AGENT_ERP_ALT_TABS` | 0 / 40 / 3 | ERP second search: on, seconds before it starts, how many at once |
 | `AGENT_REVISION_JUDGES` | 2 | 1 = a single revision judgement |
+| `MAIL_TABS` / `AGENT_FINDINGS_WAIT` | 6 / 0 | Mail tabs; seconds the mail planner waits for the tender's keys |
 | `AGENT_STRONG_MODEL` | unset | Model name for the `explore` attempt, e.g. one your provider key allows |
 | `AGENT_STRONG_BASE_URL` / `AGENT_STRONG_API_KEY` | `OPENAI_BASE_URL` / `OPENAI_API_KEY` | Its endpoint and key (team secret) |
 
@@ -47,3 +59,5 @@ after 40 s and 7 s when the first search returned.
 - `calc answer` with positions; the form's `configure_position` calls finishing before signing.
 - `erp second_search_start` (should be absent when the first searches work), `erp second_search` with `added`.
 - `revision_disputed` when the two revision judgements differ.
+- `mails plan` within about 40 s of the start; `verify evidence_only` instead of `verify rework`; no second
+  `verify done` unless a rework ran.
