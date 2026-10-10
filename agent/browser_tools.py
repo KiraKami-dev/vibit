@@ -171,6 +171,17 @@ class SiteSession:
         self.events.append(f"browser {dialog.type} said: {dialog.message!r}; accepted")
         await dialog.accept()
 
+    async def revive(self) -> None:
+        """A session whose tabs are all gone (e.g. after a failed start) gets a fresh tab on the site's start page,
+        so looking and acting never fail on an empty tab list."""
+        if any(not page.is_closed() for page in self.pages):
+            return
+        page = await self.context.new_page()
+        self._watch(page)
+        self.events.append("the tab was gone; opened the website again")
+        self.trace.event(self.name, "helper", action="revive")
+        await self._goto(self.site["url"])
+
     async def _goto(self, url: str) -> None:
         try:
             await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -301,6 +312,7 @@ class SiteSession:
         browser tools, whose result the model gets as is). `fresh` marks a whole view the model now holds (a
         worker's first prompt); other callers (helpers that reshape the text) get it whole and reset the baseline.
         """
+        await self.revive()
         page = self.page
         await self._collect_closed(page)
         self.stamp += 1
@@ -348,6 +360,7 @@ class SiteSession:
     async def act(self, kind: str, ref: str, fn) -> str:
         """Run one action on the element `ref`, settle, and return the new view."""
         async with self.lock:
+            await self.revive()
             element = await locate(self.page, ref)
             if element is None:
                 return (f"No element {ref} on this page (refs change with every view).\n\n"
@@ -389,6 +402,7 @@ class Deps:
 async def goto(ctx: RunContext[Deps], url: str) -> str:
     """Open a URL or a path on this website (e.g. a link's target from the page)."""
     session = ctx.deps.session
+    await session.revive()
     target = urljoin(session.page.url, url)
     if urlparse(target).netloc != urlparse(session.site["url"]).netloc:
         return f"{target} is not on this website ({session.site['url']}); stay on it."

@@ -54,7 +54,11 @@ async def solve(task: dict, page, answer: dict | None = None,
                          return_exceptions=True)  # submit_bid copes with a session that is still down
     if answer is None and os.environ.get("AGENT_RESEARCH", "1") != "0":
         answer, attributes = await research(task, briefing, contexts, trace, deadline)
-    result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline, answer, attributes)
+    try:
+        result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline, answer, attributes)
+    except Exception as error:  # never end without trying to sign: one more pass with what is on screen
+        trace.event("submit", "crashed", error=f"{type(error).__name__}: {str(error)[:300]}")
+        result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline, answer, attributes)
     trace.event("result", "done", result=result.model_dump() if result else None)
     return None
 
