@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01FM36zUzk23auiHmAst2AFa",
+  "agent_id": "a3110b38964efe0ac",
+  "subagent_type": "general-purpose",
+  "task_description": "ERP research reliability",
+  "token_usage": {
+    "input_tokens": 274,
+    "cache_creation_tokens": 2020091,
+    "cache_read_tokens": 25230545,
+    "output_tokens": 71157,
+    "api_call_count": 137
+  },
+  "started_at": "2026-10-10T23:09:27.194129+02:00",
+  "completed_at": "2026-10-11T01:11:22.95361+02:00"
+}
