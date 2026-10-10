@@ -45,7 +45,8 @@ try:
 except ImportError:  # pragma: no cover
     research_mail = None
 
-SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "420"))  # the bid form needs this much before the end
+SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "480"))  # research ends this long before the end
+FORM_SECONDS = float(os.environ.get("AGENT_FORM_SECONDS", "300"))  # the bid form and signing need this much
 MAIL_TABS = int(os.environ.get("MAIL_TABS", "4"))
 SPEC_RETRY_SECONDS = 240.0  # research time a second specification attempt needs to still feed the ERP
 SELECT_SECONDS = 75.0  # the final material choice (a model call per requirement, in parallel)
@@ -53,29 +54,12 @@ MAIL_TAB_STAGGER = 4.0  # seconds between the mail tabs' sign-ins
 MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "540"))  # from the orchestrator's start
 FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys before planning from the brief alone
 REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at least this much research time left
-SESSION_START_SECONDS = float(os.environ.get("SESSION_START_SECONDS", "90"))  # one site sign-in, tried twice
 
 
-async def start_session(session: SiteSession, attempts: int = 2) -> SiteSession:
-    """Open and sign in to a site within a time limit, once more on failure: a hung sign-in (a cookie button
-    that never answers) must not hold a worker, or the whole bid, for minutes."""
-    for attempt in range(attempts):
-        try:
-            await asyncio.wait_for(session.start(), SESSION_START_SECONDS)
-            if session.page.url.startswith("chrome-error:") or not session.view.strip():
-                # a failed navigation still "starts": the tab shows the browser's error page and nothing else
-                raise ConnectionError(f"the start page did not load ({session.page.url[:80]})")
-            return session
-        except Exception as error:
-            session.trace.event(session.name, "start_failed", attempt=attempt + 1,
-                                error=f"{type(error).__name__}: {str(error)[:160]}")
-            for page in session.pages:
-                try:
-                    await page.close()
-                except Exception:
-                    pass
-            session.pages = []
-    raise TimeoutError(f"{session.name}: the site could not be opened in {attempts} attempts")
+async def start_session(session: SiteSession) -> SiteSession:
+    """Open and sign in (SiteSession.start: time-limited, tried twice)."""
+    await session.start()
+    return session
 
 # ---------------------------------------------------------------- the planner
 
@@ -219,6 +203,16 @@ def safe_calculate(bid: calc.BidInput) -> tuple[calc.BidResult | None, dict[str,
     return None, blank, problems
 
 
+def material_attributes(material) -> dict[str, str]:
+    """The chosen material's attributes as the ERP shows them (the bid form's cascading choices lead to it)."""
+    out = {}
+    for key in ("bore", "stroke", "pressure", "mounting", "certification"):
+        value = getattr(material, key, None)
+        if value not in (None, ""):
+            out[key] = format(value, "f") if isinstance(value, Decimal) else str(value)
+    return out
+
+
 def answer_from(result: calc.BidResult, blank: dict[str, set[str]], notes: str = "") -> dict:
     answer = result.answer(notes or None)
     for position in answer["positions"]:
@@ -257,6 +251,7 @@ class Orchestrator:
         self.mail_sessions: list[SiteSession] = []
         self.rework: dict[str, object] = {}  # worker -> coroutine function for doubtful facts
         self.blank_hints: dict[str, set[str]] = {}  # position -> answer fields that stay blank
+        self.attributes: dict[str, dict[str, str]] = {}  # position -> chosen material's attributes, for the form
         self.mailbox = ""
         self.mail_results: dict[str, object] = {}  # record kind -> research_mail.KindResult
         # The mail side is the slowest (a planner and about nine record kinds): it gets its own deadline, and
@@ -265,6 +260,16 @@ class Orchestrator:
 
     def left(self) -> float:
         return self.research_deadline - time.monotonic()
+
+    def form_left(self) -> float:
+        """Seconds until the bid form must start."""
+        return self.deadline - FORM_SECONDS - time.monotonic()
+
+    async def _bounded(self, step, name: str) -> None:
+        try:
+            await asyncio.wait_for(step, max(1.0, self.form_left()))
+        except Exception as error:
+            self.board.problem(name, f"stopped: {type(error).__name__} (the bid form needs the time)")
 
     async def session(self, site: str, tag: str = "") -> SiteSession:
         access = self.access[site]
@@ -524,6 +529,16 @@ class Orchestrator:
             self.board.problem("deadline", f"{job.get_name()} stopped at the research deadline")
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        if self._erp is not None:  # ERP workers still browsing would compete with the bid form for the browser
+            for task in [*self._erp.tasks.values(), *self._erp.materials.values()]:
+                if not task.done():
+                    task.cancel()
+            if self.erp is None:  # stopped at the deadline: what finished still counts
+                def finished(tasks):
+                    return {k: t.result() for k, t in tasks.items()
+                            if t.done() and not t.cancelled() and t.exception() is None and t.result() is not None}
+                self.erp = ErpResearch(requirements=list(finished(self._erp.tasks).values()),
+                                       materials=finished(self._erp.materials))
         self.rework = {"mails": self._rework_mail}
 
     async def _rework_mail(self, doubtful: list) -> None:
@@ -576,6 +591,7 @@ class Orchestrator:
 
     def build_bid(self) -> tuple[calc.BidInput, list[str]]:
         self.blank_hints = {}
+        self.attributes = {}
         problems: list[str] = []
         clauses = None
         if self.tender_facts is not None and self.mail_facts is not None and research_mail is not None:
@@ -593,11 +609,22 @@ class Orchestrator:
                 continue
             research = next((r for r in (self.erp.requirements if self.erp else []) if r.requirement_id == req_id),
                             None)
-            number = self.chosen.get(req_id)
+            # without a final choice (reselect cut short) the ERP worker's own choice stands
+            number = self.chosen[req_id] if req_id in self.chosen else getattr(research, "selected", None)
             if number is None and (research is None or not research.inspected):
                 problems.append(f"position {p.position}: ERP not researched; position omitted")
                 continue
+            if number is None:
+                # No material only means no_bid (rule 3) when the search for it was complete; a requirement still
+                # pending (e.g. a reserve not found) or a search that hit problems leaves the position out instead.
+                pending = self.effective(self.requirements[req_id]).pending
+                if pending or (research is not None and research.problems):
+                    problems.append(f"position {p.position}: material undecided "
+                                    f"({'; '.join(pending or research.problems)[:160]}); position omitted")
+                    continue
             material = self.erp.materials.get(number) if (number and self.erp) else None
+            if material is not None:
+                self.attributes[p.position] = material_attributes(material)
             clause = by_position.get(p.position)
             self._unknown_clauses(p, clause, getattr(clauses, "setup_pool", None),
                                   getattr(clauses, "project_bonus", None))
@@ -626,8 +653,10 @@ class Orchestrator:
     async def run(self) -> tuple[dict | None, calc.BidResult | None]:
         """Research, verify, calculate: the answer dict for the bid form (None when nothing could be built)."""
         await self.research()
-        await self.verify()
-        await self.select_materials()
+        # The deadline guard after research: each step runs only in the time the bid form leaves it.
+        if self.form_left() > 60:
+            await self._bounded(self.verify(), "verify")
+        await self._bounded(self.select_materials(), "select")
         bid, problems = self.build_bid()
         self.trace.event("calc", "input", positions=[p.position for p in bid.positions], problems=problems)
         if not bid.positions:
@@ -639,7 +668,7 @@ class Orchestrator:
         problems += calc_problems
         if result is None:
             return None, None
-        check = await confirm_decision(result.decision, self.board.summary() + "\n\nProblems:\n"
+        check = None if self.form_left() < 30 else await confirm_decision(result.decision, self.board.summary() + "\n\nProblems:\n"
                                        + "\n".join(self.board.problems + problems), self.rules)
         if check is not None and not check.agrees:
             self.trace.event("verify", "decision_disputed", proposed=result.decision, wanted=check.decision,
