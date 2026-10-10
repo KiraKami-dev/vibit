@@ -323,3 +323,48 @@ Can you start more, maybe also on using the Clef etc.? Or are we already using t
 ---
 
 Anything else to check out or improve while we are at it?
+
+---
+
+<task-notification>
+<task-id>a8272e1e3d757fdae</task-id>
+<tool-use-id>toolu_01PpEgpMVpN5rds8s97gCUWi</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a8272e1e3d757fdae.output</output-file>
+<status>completed</status>
+<summary>Agent "Fair-play pre-review of package" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: likely pass for the package committed at HEAD.** I found no scenario values, no fixed click path, no crawler and no secrets. It only talks to the platform, the run's sites and the model proxy, and in the sandbox it attaches to the provided browsers rather than starting its own. The real risks are in the untracked work-in-progress files.
+
+**Committed package at HEAD, ranked by severity**
+
+1. **Low to medium flag risk: the answer strategy is fixed in code** (`submit.py:63`, `81-91`). The bid goal hardcodes `decision: bid`, every position left out (Position auslassen), discount 0 and total 0,00. None of these are copied scenario values, but rule 11 says a model must "make the important decisions", and here the decision and the money fields are fixed. A reviewer may read this as a stub or a pre-decided answer. Fix: once v2 lands, let a model choose bid or no_bid from the evidence. Until then the docstring's frank "v1" wording is fine; don't add notes arguing it is compliant.
+2. **Low: the local browser launch has a weak guard** (`browsers.py:28`, `45-46`). `chromium.launch` is skipped only when `CDP_URLS`/`CDP_URL` are set, so if they were ever missing in the sandbox it would start an own browser. Fix: also refuse to launch when `CHALLENGE_RUN_TOKEN` is set.
+3. **Low: the generic helpers in `browser_tools.py` all look fine.**
+   - Auto login (`:173`) fills the run's own credentials.
+   - Cookie handling (`:196`) prefers the necessary-only answer.
+   - The popup closer (`:25-57`) only presses close buttons and never follows links.
+   - The error-page reload (`:229`) is a retry.
+   - These all fit "helpers may retry and fill forms". The human-check helper (`:61-83`, `:215`) sets sliders and ticks robot checkboxes by script. That is the one thing a strict reviewer could call circumventing a site control. It is narrowly scoped (other checkboxes are left to the model) and reported to the model. Optionally drop it and let the model use `fill` on the slider.
+   - `_on_dialog` (`:137`) accepts every browser confirm. Acceptable, because the model triggered the action.
+4. **Cosmetic:**
+   - `tests/test_kit.py:24` uses the public-1 siteId `tender-portal` in a fixture. Rename it to something like `site-a`.
+   - `tests/` launches a local Chromium, but only as tests, never in the run.
+   - `README.md` is still the starter-kit text and steers nothing.
+   - `calc.py` holds only rule mechanics and placeholder data.
+
+**Untracked files (risky once committed)**
+
+1. **Medium (likely flagged): text copied from site pages into prompts.** These phrases are not in the brief, so they most likely come from public-1 pages:
+   - `research_tender.py:270-271`: "Kein Rüstpool", "kein Projektbonus".
+   - `research_mail.py:208`: decoy labels "Entwurf", "nicht versandt", "Keine Freigabe".
+   - Fix: describe these generically ("statements of non-membership", "draft or unsent previews").
+2. **Medium (flag risk under rule 11): code decides what to investigate and what to choose.**
+   - `research_mail.py:173-189` plus `research_kind` send nine search tasks from a fixed list. Models still drive each search, but the plan itself is code.
+   - `research.py` `select_material` picks the material in code.
+   - Fix: let an orchestrating model decide which kinds of record to pursue from the brief and Q&amp;A, and let the model choose the material while code only validates the exact match.
+3. **Low to medium: sender names and subjects hardcoded from the public brief** (`research_mail.py:174-188`). Strings like `leitung`, `kalkulation` and the subject words do appear in the brief, so they are allowed. But they are copied from public-1's brief, and the private run may phrase them differently. Fix: have `briefing.py` pull the sender-to-subject mapping out of the run's brief.
+4. **Low: off-site navigation without a host check** (`research.py:667`, `718`). `_goto(urljoin(site url, link))` follows links reported by the model and does not check the host, unlike `goto` and `open_pages`. Fix: reuse the same-host check.
+
+German words from the brief (Hauptangebot, Position auslassen, Kataloggruppe, Werkpost) are used as the brief intends, so they are fine.</result>
+<usage><subagent_tokens>113949</subagent_tokens><tool_uses>19</tool_uses><duration_ms>113941</duration_ms></usage>
+</task-notification>
