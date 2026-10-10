@@ -46,9 +46,10 @@ try:
 except ImportError:  # pragma: no cover
     research_mail = None
 
-SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "480"))  # research ends this long before the end
-# v3: 360 (was 300). submit.py stops entering positions SIGNING_RESERVE (now 180) before the end, so the form had
-# only 60 s for its first steps and every position; now 180 s. Retune both from a run that enters positions.
+# research ends this long before the end: the form needs up to ~185 s and signing ~30 s (173 s with a bad TAN)
+SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "390"))
+# v3: 360 (was 300). submit.py stops entering positions SIGNING_RESERVE (180) before the end, so a form that
+# starts at the last moment has 180 s for its steps and positions (measured: 193 s, and 352 s on a slow bid site).
 FORM_SECONDS = float(os.environ.get("AGENT_FORM_SECONDS", "360"))  # the bid form and signing need this much
 MAIL_TABS = int(os.environ.get("MAIL_TABS", "4"))
 SPEC_STEPS_FAST = int(os.environ.get("SPEC_STEPS_FAST", "25"))  # navigation steps of the fast spec attempt
@@ -88,9 +89,9 @@ FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys be
 REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at least this much research time left
 
 
-async def start_session(session: SiteSession) -> SiteSession:
-    """Open and sign in (SiteSession.start: time-limited, tried twice)."""
-    await session.start()
+async def start_session(session: SiteSession, until: float | None = None) -> SiteSession:
+    """Open and sign in (SiteSession.start: waits on a slow tab, retries with backoff until `until`)."""
+    await session.start(until=until)
     return session
 
 # ---------------------------------------------------------------- the planner
@@ -246,10 +247,16 @@ def material_attributes(material) -> dict[str, str]:
 
 
 def answer_from(result: calc.BidResult, blank: dict[str, set[str]], notes: str = "") -> dict:
+    """
+    The answer with the report fields whose inputs are missing left blank. The unit price stays: it is calc's best
+    estimate without the missing part, and the bid form enters a position only with a unit price, so blanking it
+    would lose the position's material, quantity, base price, packaging and delivery points too.
+    """
     answer = result.answer(notes or None)
     for position in answer["positions"]:
         for field in blank.get(position["position"], ()):
-            position.pop(field, None)
+            if field != "unit_price":
+                position.pop(field, None)
     return answer
 
 
@@ -258,8 +265,9 @@ def answer_from(result: calc.BidResult, blank: dict[str, set[str]], notes: str =
 
 class Orchestrator:
     def __init__(self, task: dict, briefing: Briefing, contexts: dict[str, BrowserContext], trace: Trace,
-                 deadline: float):
+                 deadline: float, warm: dict[str, SiteSession] | None = None):
         self.task, self.briefing, self.contexts, self.trace = task, briefing, contexts, trace
+        self.warm = warm or {}  # per website the session agent.py is signing in with, maybe still starting
         self.access = {s["siteId"]: s for s in task["access"]}
         self.deadline = deadline
         self.started = time.monotonic()
@@ -305,11 +313,31 @@ class Orchestrator:
         except Exception as error:
             self.board.problem(name, f"stopped: {type(error).__name__} (the bid form needs the time)")
 
+    async def site_up(self, site: str) -> None:
+        """
+        Wait until the website's first session (agent.py's, signing in in the background) is up, so workers join
+        a website when it comes up instead of hammering a slow one with more tabs; the others go on meanwhile.
+        Raises when that start gave up or the research deadline passes first.
+        """
+        warm = self.warm.get(site)
+        if warm is None or warm.ok:
+            return
+        if not warm.settled.is_set() or warm.starting:
+            self.trace.event(site, "waiting_for_site", seconds_left=round(self.left()))
+            try:
+                await asyncio.wait_for(warm.settled.wait(), max(1.0, self.left()))
+            except asyncio.TimeoutError:
+                raise TimeoutError(f"{site}: not up by the research deadline") from None
+            self.trace.event(site, "site_up" if warm.ok else "site_down")
+        if not warm.ok:
+            raise TimeoutError(f"{site}: the site could not be opened")
+
     async def session(self, site: str, tag: str = "") -> SiteSession:
         access = self.access[site]
         if tag:
             access = {**access, "siteId": f"{site}:{tag}"}
-        return await start_session(SiteSession(access, self.contexts[site], self.trace))
+        await self.site_up(site)
+        return await start_session(SiteSession(access, self.contexts[site], self.trace), until=self.research_deadline)
 
     # ------------------------------------------------------------ workers
 
@@ -495,7 +523,8 @@ class Orchestrator:
             await asyncio.sleep(delay)
         how = SPEC_STRATEGIES[strategy]
         access = {**self.access[site], "siteId": f"{site}:{tag}"}
-        session = await start_session(SiteSession(access, context, self.trace))
+        await self.site_up(site)
+        session = await start_session(SiteSession(access, context, self.trace), until=self.research_deadline)
         self.trace.event("specification", "variant_start", variant=tag, strategy=strategy,
                          strong=bool(how["strong"] and llm.strong_model() is not None))
         return await research_spec(
@@ -587,8 +616,11 @@ class Orchestrator:
         joins as soon as it is ready (a tab that never opens just leaves the work to the others).
         """
         queue: asyncio.Queue = asyncio.Queue()
-        # The approval goes first: the discount counts for points of its own and feeds every unit price.
-        for kind in sorted(kinds, key=lambda k: k.name != "approval"):
+        # The approval goes first: the discount counts for points of its own and feeds every unit price. The
+        # stroke reserves and the condition rules follow: materials (and so most positions) and the discount
+        # scopes wait on them.
+        first = ("approval", "end_reserves", "condition_rules")
+        for kind in sorted(kinds, key=lambda k: first.index(k.name) if k.name in first else len(first)):
             queue.put_nowait((kind, 0))
         deadline = deadline or self.mail_deadline
 

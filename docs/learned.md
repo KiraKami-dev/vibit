@@ -164,3 +164,9 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - After the accepted bid the model token is revoked: the signing worker ends with a 401 and the sign-only last pass
   starts and fails at once. Harmless, but it reads like an error in the log.
 
+- Mail research, local (scouting, 4 tabs): before 7 of 9 kinds in 515 s (plan 97 s after a 45 s stalled call;
+  stalled reader calls held kinds 180 s; approval 330 s). After pipelined reads, a 60 s grace after the first
+  hit, shorter read/plan timeouts and a fresh tab after 45 s without a page view: 8 of 9 in 401 s (plan 20 s,
+  approval 106 s). Session expiry while opening a message's reading pane gave the reader a sign-in page (empty
+  record); messages are now reopened when the tab landed elsewhere. Without the mailbox address, records are
+  authorised by the recipients' domain instead of all being dropped.
