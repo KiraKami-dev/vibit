@@ -144,3 +144,7 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - sub_9bd976b00673121a (quality 100, 14:02, rank #2) was the watchdog test run promoted to a submission from its run
   page. Its exact code is branch submitted/sub_9bd976b0. It still has the old signing weakness (no bid when signing
   overruns), so replace it once the fixed version scores 100 reliably across several test runs.
+- Soak run 1 (3f5d6b6): NO BID. The sites were slow (several tabs hit the 45 s settle cap at once), the webmail
+  session failed both starts and lost its tab, and submit_bid's address lookup then crashed on the empty tab list
+  (IndexError), which ended solve() before signing. Fixed: sessions reopen a lost tab, mail lookups never raise,
+  solve() retries signing once after an unexpected error.
