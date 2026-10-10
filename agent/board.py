@@ -56,7 +56,7 @@ class Board:
         self.facts[(kind, key)] = fact
         self._event(self._first, kind).set()
         if self.trace:
-            self.trace.event("board", "fact", quiet=True, kind=kind, key=key, worker=worker,
+            self.trace.event("board", "fact", quiet=True, fact_kind=kind, key=key, worker=worker,
                              value=value if isinstance(value, (str, int, float)) else str(value)[:300])
         return fact
 
@@ -86,7 +86,7 @@ class Board:
             await asyncio.wait_for(event.wait(), timeout)
         except asyncio.TimeoutError:
             if self.trace:
-                self.trace.event("board", "wait_timeout", kind=kind, seconds=timeout)
+                self.trace.event("board", "wait_timeout", fact_kind=kind, seconds=timeout)
         return self.get(kind)
 
     def summary(self) -> str:
