@@ -32,8 +32,8 @@ import llm
 from board import Board, Source
 from briefing import Briefing
 from browser_tools import SiteSession
-from evidence import (EffectiveRequirement, Requirement, effective_requirement, merged_attributes, parse_date,
-                      to_position_input, wording_differences)
+from evidence import (EffectiveRequirement, Requirement, effective_requirement, merged_attributes, mismatches,
+                      parse_date, to_position_input, wording_differences)
 from gaps import Calculation, GapFiller
 from research import Erp, ErpResearch, SpecResult, research_spec, reselect, same_revision
 from tracing import Trace
@@ -534,7 +534,12 @@ class Orchestrator:
                 f"{f} {v}" for f, v in fact.value.items() if f.endswith("_key") or f == "condition_group")
                 for k, fact in positions.items())
             sites = {s["siteId"]: s["url"] for s in self.task["access"]}
-            kinds = await self._plan_mail(sites, findings)
+            try:
+                kinds = await self._plan_mail(sites, findings)
+            except BaseException:
+                for start in starts:  # no plan, no searches: the tabs would only compete for the browser
+                    start.cancel()
+                raise
             self.mail_kinds = [k for k in kinds if k.site == site]
             elsewhere = [f"{k.name} on {k.site}" for k in kinds if k.site != site]
             if elsewhere:  # another mail site would be its own job (the plan names every website it needs)
@@ -790,6 +795,33 @@ class Orchestrator:
         if fields:
             self.blank_hints.setdefault(p.position, set()).update(fields)
 
+    def _estimate(self, req_id: str, research) -> str | None:
+        """
+        A requirement whose stroke still waits on a per-end reserve (rule 20) at calc time: the best estimate among
+        the inspected active materials that equal it in every other attribute is the one with the smallest stroke
+        that still exceeds the usable travel (nominal = usable + 2 x reserve, so never less). An estimate keeps
+        the position's quantity and other points that an omitted position loses; the gap pass still treats the
+        requirement as open, so the reserve is searched for while time is left.
+        """
+        if research is None or self.erp is None:
+            return None
+        req = self.requirements[req_id]
+        effective = self.effective(req)
+        usable = Decimal(str(calc.apply_amendments({"stroke": req.stroke}, self._amendments(), req.revision,
+                                                   req.requirement_id, self.scenario_stamp)["stroke"]))
+        best: tuple[Decimal, str] | None = None
+        for number in research.inspected:
+            record = self.erp.materials.get(number)
+            if record is None or not record.active:
+                continue
+            attrs = merged_attributes(record, research)
+            stroke = attrs.get("stroke")
+            if mismatches(effective, attrs) or not isinstance(stroke, Decimal) or stroke <= usable:
+                continue
+            if best is None or stroke < best[0]:
+                best = (stroke, number)
+        return best[1] if best else None
+
     def build_bid(self) -> tuple[calc.BidInput, list[str]]:
         self.blank_hints = {}
         self.attributes = {}
@@ -821,7 +853,12 @@ class Orchestrator:
                 # No material only means no_bid (rule 3) when the search for it was complete; a requirement still
                 # pending (e.g. a reserve not found) or a search that hit problems leaves the position out instead.
                 pending = self.effective(self.requirements[req_id]).pending
-                if pending or (research is not None and research.problems):
+                estimate = self._estimate(req_id, research) if pending else None
+                if estimate:
+                    problems.append(f"position {p.position}: {'; '.join(pending)[:120]}; material {estimate} "
+                                    f"estimated (the closest stroke above the usable travel)")
+                    number = estimate
+                elif pending or (research is not None and research.problems):
                     problems.append(f"position {p.position}: material undecided "
                                     f"({'; '.join(pending or research.problems)[:160]}); position omitted")
                     continue

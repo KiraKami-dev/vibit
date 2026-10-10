@@ -3,6 +3,7 @@ import asyncio
 import sys
 import time
 import unittest
+from datetime import date
 from decimal import Decimal as D
 from pathlib import Path
 from types import SimpleNamespace
@@ -34,8 +35,9 @@ def requirement(rid: str, reserve_key: str | None = None) -> Requirement:
 
 
 def complete_record(number: str) -> MaterialRecord:
-    import calc
     from datetime import date
+
+    import calc
     return MaterialRecord(material_number=number, active=True, status="active", free_stock=5,
                           stock_lead_time_weeks=1, production_lead_time_weeks=4, pieces_per_carton=2,
                           allocation_mass_kg=D("1"), surcharge_mass_kg=D("1"),
@@ -270,6 +272,36 @@ class Scheduling(unittest.TestCase):
         filler.mails = busy
         asyncio.run(filler.fill([Gap("erp", "A-1", ""), Gap("material", "M-1", ""), Gap("mail", "fx", "")]))
         self.assertEqual(peak[0], 3)
+
+
+class PendingStroke(unittest.TestCase):
+    def orchestrator(self):
+        from orchestrator import Orchestrator
+        o = Orchestrator.__new__(Orchestrator)
+        o.tender_facts, o.mail_facts = None, None
+        o.scenario_stamp = date(2026, 6, 1)
+        o.requirements = {"A-1": requirement("A-1", "K-1")}
+
+        def material(number, stroke, active=True):
+            return complete_record(number).model_copy(update={
+                "active": active, "bore": D("50"), "stroke": D(stroke), "pressure": D("160"),
+                "mounting": "Flange", "certification": "None"})
+
+        records = [material("M-1", "90"), material("M-2", "110"), material("M-3", "104"),
+                   material("M-4", "102", active=False),
+                   material("M-5", "103").model_copy(update={"pressure": D("250")})]
+        o.erp = ErpResearch(requirements=[], materials={r.material_number: r for r in records})
+        return o, RequirementResearch(requirement_id="A-1", inspected=[r.material_number for r in records])
+
+    def test_estimate_is_the_smallest_stroke_above_the_usable_travel(self):
+        o, research = self.orchestrator()
+        self.assertEqual(o._estimate("A-1", research), "M-3")
+
+    def test_no_estimate_without_a_fitting_material(self):
+        o, research = self.orchestrator()
+        research.inspected = ["M-1", "M-4", "M-5"]
+        self.assertIsNone(o._estimate("A-1", research))
+
 
 
 if __name__ == "__main__":
