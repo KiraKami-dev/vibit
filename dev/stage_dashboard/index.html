@@ -40,6 +40,10 @@ tr.us td{background:var(--us);color:var(--usink)}
 svg text{fill:var(--mute);font-size:11px}
 .two{display:grid;grid-template-columns:1fr;gap:20px}
 @media(min-width:900px){.two{grid-template-columns:1.1fr .9fr}}
+button.m{font:inherit;font-size:12px;padding:2px 10px;border:1px solid var(--line);background:var(--card);color:var(--mute);border-radius:99px;cursor:pointer}
+button.m.on{color:var(--acc);border-color:var(--acc)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;padding:6px 8px 4px;font-size:12px;color:var(--mute)}
+.legend i{display:inline-block;width:10px;height:3px;margin-right:5px;vertical-align:middle;border-radius:2px}
 ul.feed{list-style:none;margin:0;padding:0}
 ul.feed li{padding:7px 12px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:12px}
 ul.feed li:first-child{border-top:0}
@@ -55,9 +59,29 @@ ul.feed li:first-child{border-top:0}
 <div class="kpis" id="kpis"></div>
 
 <section>
+  <h2>What each team is doing in test runs</h2>
+  <p class="hint">One line per test run, coloured by team, from the moment the stage first shows it. Thick dots are runs live right now.
+    <span id="metricBtns" style="margin-left:8px"></span></p>
+  <div class="card" style="padding:8px"><svg id="lines" viewBox="0 0 900 300" width="100%"></svg><div id="legend" class="legend"></div></div>
+</section>
+
+<section>
   <h2>Running now</h2>
   <p class="hint" id="liveHint"></p>
   <div class="card"><table id="live"></table></div>
+</section>
+
+<section class="two">
+  <div>
+    <h2>Test-run leaderboard</h2>
+    <p class="hint" id="doneHint"></p>
+    <div class="card"><table id="done"></table></div>
+  </div>
+  <div>
+    <h2>Run log</h2>
+    <p class="hint">What the stage showed, newest first.</p>
+    <div class="card"><ul class="feed" id="runlog"></ul></div>
+  </div>
 </section>
 
 <section class="two">
@@ -72,17 +96,10 @@ ul.feed li:first-child{border-top:0}
 </section>
 
 <section>
-  <h2>Test-run leaderboard</h2>
-  <p class="hint" id="doneHint"></p>
-  <div class="card"><table id="done"></table></div>
-</section>
-
-<section>
   <h2>Submission leaderboard</h2>
   <p class="hint">Order: eligible, then quality, then cost × time. “vs us” compares cost × time with ours.</p>
   <div class="card"><table id="board"></table></div>
 </section>
-
 </main>
 
 <script>
@@ -109,9 +126,9 @@ function render(){
   $('dot').className='dot'+(age>20?' off':'');
   $('status').textContent=age>20?`stage unreachable for ${Math.round(age)}s`:`live · updated ${Math.round(age)}s ago`;
 
-  const k=[['Running now',S.running_total??st.running_now],['Model calls',tk.calls],['Tokens served',tk.tokens_served],
+  const k=[['Running now',S.running_total??st.running_now],['Model calls',tk.calls],['Tokens served',tk.tokens_served==null?null:(tk.tokens_served/1e9).toFixed(2)+'B'],
            ['Tokens / s',tk.tps],['Teams',st.teams],['Submissions',st.submissions],['Best quality',st.best_quality]];
-  $('kpis').innerHTML=k.map(([a,b])=>`<div class="kpi"><b>${num(b)}</b><span>${a}</span></div>`).join('');
+  $('kpis').innerHTML=k.map(([a,b])=>`<div class="kpi"><b>${typeof b==='string'?b:num(b)}</b><span>${a}</span></div>`).join('');
 
   // live runs
   const runs=[...S.window].sort((a,b)=>(b.secs||0)-(a.secs||0));
@@ -137,6 +154,7 @@ function render(){
     :'<tbody><tr><td class="empty">Waiting for leaderboard…</td></tr></tbody>';
   $('board').insertAdjacentHTML('afterend','');
   scatter(E,us);
+  lines();runLog();
 
   // test-run leaderboard (early pace, from every test run the stage has shown)
   const T={};
@@ -164,6 +182,55 @@ function render(){
     case'rank_changed':return `moved #${d.from} → #${d.to}`;
     default:return e.type}};
   $('feed').innerHTML=ev.map(e=>`<li><span><b>${esc(e.team_name||'')}</b> ${esc(say(e))}</span><span class="mute">${ago(e.at)}</span></li>`).join('')||'<li class="mute">No activity.</li>';
+}
+
+
+let METRIC=2;   // sample index: 2 calls, 3 cost
+function teamColor(team,names){
+  if(team===US)return '#f59e0b';
+  const pal=['#2563eb','#16a34a','#dc2626','#9333ea','#0891b2','#db2777','#65a30d','#ea580c','#4f46e5','#0d9488','#a16207','#be123c','#7c3aed','#0369a1','#15803d','#c2410c'];
+  return pal[names.indexOf(team)%pal.length];
+}
+function lines(){
+  const svg=$('lines'),now=S.polled_at;
+  $('metricBtns').innerHTML=[[2,'Calls'],[3,'Cost']].map(([i,l])=>`<button class="m ${METRIC===i?'on':''}" data-m="${i}">${l}</button>`).join('');
+  document.querySelectorAll('#metricBtns button').forEach(b=>b.onclick=()=>{METRIC=+b.dataset.m;render()});
+  const live=new Set(S.window.map(r=>r.id));
+  const R=S.all.filter(r=>/test/i.test(r.kind||'')&&r.samples.length>=2&&now-r.last<1800);
+  if(!R.length){svg.innerHTML='<text x="450" y="150" text-anchor="middle">Collecting test runs…</text>';$('legend').innerHTML='';return}
+  const names=[...new Set(S.all.map(r=>r.team))].sort();
+  const W=900,H=300,m={l:52,r:14,t:10,b:28};
+  const xmax=Math.max(120,...R.map(r=>r.samples[r.samples.length-1][1]));
+  const ymax=Math.max(METRIC===3?0.01:5,...R.map(r=>r.samples[r.samples.length-1][METRIC]))*1.08;
+  const X=v=>m.l+v/xmax*(W-m.l-m.r),Y=v=>H-m.b-v/ymax*(H-m.t-m.b);
+  const yfmt=v=>METRIC===3?'$'+(v<1?v.toFixed(2):v.toFixed(1)):Math.round(v);
+  let o='';
+  for(let i=0;i<=4;i++){const v=ymax*i/4;o+=`<line x1="${m.l}" x2="${W-m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text x="${m.l-6}" y="${Y(v)+4}" text-anchor="end">${yfmt(v)}</text>`}
+  const step=xmax>900?300:xmax>400?120:60;
+  for(let x=0;x<=xmax;x+=step)o+=`<text x="${X(x)}" y="${H-8}" text-anchor="middle">${Math.round(x/60*10)/10}m</text>`;
+  const ordered=[...R].sort((a,b)=>(a.team===US)-(b.team===US));   // ours drawn last, on top
+  for(const r of ordered){
+    const c=teamColor(r.team,names),isLive=live.has(r.id),u=r.team===US;
+    const pts=r.samples.map(s=>X(s[1]).toFixed(1)+','+Y(s[METRIC]).toFixed(1)).join(' ');
+    const e=r.samples[r.samples.length-1];
+    o+=`<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="${u?3:1.6}" stroke-opacity="${isLive||u?1:.4}"><title>${esc(r.team)}</title></polyline>`;
+    if(isLive)o+=`<circle cx="${X(e[1])}" cy="${Y(e[METRIC])}" r="${u?5:3.5}" fill="${c}"><title>${esc(r.team)} · ${fmtT(e[1])} · ${e[2]} calls · ${usd(e[3])}</title></circle>`;
+  }
+  svg.innerHTML=o;
+  const teams=[...new Set(R.map(r=>r.team))].sort((a,b)=>(b===US)-(a===US)||a.localeCompare(b));
+  $('legend').innerHTML=teams.map(t=>`<span><i style="background:${teamColor(t,names)}"></i>${esc(t)}</span>`).join('');
+}
+function runLog(){
+  const ev=[],now=S.polled_at;
+  for(const r of S.all){
+    if(!/test/i.test(r.kind||''))continue;
+    ev.push([r.first,r.team,'started a test run']);
+    const fc=r.samples.find(s=>s[2]>0);
+    if(fc)ev.push([fc[0],r.team,`first model call at ${fmtT(fc[1])}`]);
+    if(now-r.last>20&&r.secs!=null)ev.push([r.last,r.team,`left the stage window at ${fmtT(r.secs)} · ${r.calls} calls · ${usd(r.cost)}`]);
+  }
+  ev.sort((a,b)=>b[0]-a[0]);
+  $('runlog').innerHTML=ev.slice(0,40).map(e=>`<li><span class="${e[1]===US?'':''}"><b>${esc(e[1])}</b> ${esc(e[2])}</span><span class="mute">${ago(e[0]*1000)}</span></li>`).join('')||'<li class="mute">Nothing recorded yet.</li>';
 }
 
 function scatter(E,us){
