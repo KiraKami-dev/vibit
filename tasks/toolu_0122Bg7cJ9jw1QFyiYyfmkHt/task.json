@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0122Bg7cJ9jw1QFyiYyfmkHt",
+  "agent_id": "aab59b204c79e220a",
+  "subagent_type": "general-purpose",
+  "task_description": "Generic efficiency tools for workers",
+  "token_usage": {
+    "input_tokens": 2860,
+    "cache_creation_tokens": 193424,
+    "cache_read_tokens": 13554953,
+    "output_tokens": 78264,
+    "api_call_count": 95
+  },
+  "started_at": "2026-10-10T19:04:04.701299+02:00",
+  "completed_at": "2026-10-10T19:23:10.084962+02:00"
+}
