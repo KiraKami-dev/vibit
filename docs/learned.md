@@ -141,3 +141,6 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   found no revision history, so every position was omitted and the found discount was lost too), and NO BID: a false
   summary-check alarm switched signing to thinking, the model went back in the wizard (clears later steps) and the
   deadline cut it before the TAN was entered. Signing needs its own time reserve and must never go back.
+- sub_9bd976b00673121a (quality 100, 14:02, rank #2) was the watchdog test run promoted to a submission from its run
+  page. Its exact code is branch submitted/sub_9bd976b0. It still has the old signing weakness (no bid when signing
+  overruns), so replace it once the fixed version scores 100 reliably across several test runs.
