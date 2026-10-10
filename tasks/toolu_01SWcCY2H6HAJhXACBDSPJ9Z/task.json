@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01SWcCY2H6HAJhXACBDSPJ9Z",
+  "agent_id": "aae38136b82fe0808",
+  "subagent_type": "general-purpose",
+  "task_description": "Resilient site starts under load",
+  "token_usage": {
+    "input_tokens": 126,
+    "cache_creation_tokens": 250183,
+    "cache_read_tokens": 6870465,
+    "output_tokens": 45103,
+    "api_call_count": 63
+  },
+  "started_at": "2026-10-11T00:02:35.273161+02:00",
+  "completed_at": "2026-10-11T00:40:00.248652+02:00"
+}
