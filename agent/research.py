@@ -71,18 +71,10 @@ def _strip_refs(text: str) -> str:
     return _REF.sub("[", text)
 
 
-def _slow_model():
-    """The worker model with a client timeout that fits a thinking call reading a whole page (often 15 to 40 s);
-    the default timeout is tuned for short navigation steps. Built synchronously, so concurrent calls keep theirs."""
-    old = os.environ.get("LLM_TIMEOUT")
-    os.environ["LLM_TIMEOUT"] = os.environ.get("LLM_READ_TIMEOUT", "90")
-    try:
-        return llm.model()
-    finally:
-        if old is None:
-            os.environ.pop("LLM_TIMEOUT", None)
-        else:
-            os.environ["LLM_TIMEOUT"] = old
+def _read_settings(thinking: bool):
+    """Model settings for a call reading a whole page (often 15 to 40 s): the timeout is LLM_READ_TIMEOUT (default
+    90 s) in either mode, since the thinking-off default is tuned for short navigation steps."""
+    return llm.settings(thinking, timeout=llm.env_seconds("LLM_READ_TIMEOUT", 90.0))
 
 
 # Readers copy values from pages a worker chose, under a grounding check; thinking makes each call ~30 s instead of
@@ -94,8 +86,8 @@ async def _grounded_read(output_type: type[T], instructions: str, prompt: str, s
                          trace: Trace | None = None, name: str = "research", what: str = "") -> T:
     """One reader call: the model reports what `source` (the text it is shown) says; every value it returns must
     appear in that text, else it is told which ones do not and tries again. Traced with seconds and refusals."""
-    agent = Agent(_slow_model(), output_type=output_type, instructions=instructions,
-                  model_settings=llm.settings(thinking=READ_THINKING), retries=3)
+    agent = Agent(llm.model(), output_type=output_type, instructions=instructions,
+                  model_settings=_read_settings(READ_THINKING), retries=3)
     refusals: list[str] = []
 
     @agent.output_validator
@@ -344,8 +336,8 @@ async def _extract_page(text: str, document: str, revision: str, context: str, t
 
 async def _choose_revision(history: RevisionHistory, view: str, context: str) -> CurrentRevision | None:
     ids = {r.revision.strip() for r in history.revisions}
-    agent = Agent(_slow_model(), output_type=CurrentRevision, instructions=CHOOSE_REVISION,
-                  model_settings=llm.settings(thinking=True), retries=3)
+    agent = Agent(llm.model(), output_type=CurrentRevision, instructions=CHOOSE_REVISION,
+                  model_settings=_read_settings(True), retries=3)
 
     @agent.output_validator
     def _listed(out: CurrentRevision) -> CurrentRevision:
@@ -865,8 +857,8 @@ async def choose_material(req: EffectiveRequirement, research: RequirementResear
         return None, [f"{req.requirement_id}: stroke pending ({'; '.join(req.pending)})"]
     if not materials:
         return None, [f"{req.requirement_id}: no material could be inspected"]
-    agent = Agent(_slow_model(), output_type=MaterialChoice, instructions=CHOOSE_MATERIAL,
-                  model_settings=llm.settings(thinking=True), retries=3)
+    agent = Agent(llm.model(), output_type=MaterialChoice, instructions=CHOOSE_MATERIAL,
+                  model_settings=_read_settings(True), retries=3)
 
     @agent.output_validator
     def _valid(out: MaterialChoice) -> MaterialChoice:
