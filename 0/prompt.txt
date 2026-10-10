@@ -1,0 +1,29 @@
+# AGENTS.md instructions for /Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals
+
+<INSTRUCTIONS>
+<!-- entire-graph:begin -->
+This repo has the entire-graph code graph installed. Before exploring code with
+grep/find/whole-file reads, read .entire/graph-agent.md — resolution-first guidance
+for using graph retrieval, focused source inspection, and verification.
+@.entire/graph-agent.md
+<!-- entire-graph:end -->
+
+</INSTRUCTIONS>
+
+---
+
+<environment_context>
+  <cwd>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals</cwd>
+  <shell>zsh</shell>
+  <current_date>2026-10-10</current_date>
+  <timezone>Europe/Berlin</timezone>
+  <filesystem><workspace_roots><root>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals</root></workspace_roots><permission_profile type="managed"><file_system type="restricted"><entry access="read"><special>:root</special></entry><entry access="write"><path>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals</path></entry><entry access="write"><special>:slash_tmp</special></entry><entry access="write"><special>:tmpdir</special></entry><entry access="read"><path>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.git</path></entry><entry access="read"><path>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.agents</path></entry><entry access="read"><path>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.codex</path></entry><entry access="read"><path>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.aws</path></entry></file_system></permission_profile></filesystem>
+</environment_context>
+
+---
+
+Can you find a "critical path" through the system. So we maybe could build some langgraph or so? Don't use the current code / modify it and do it in a worktree. Like we thought we don't have to let an llm guess where information is but can tell this?
+
+---
+
+can you generate e.g. in downloads or so or just show me a path somewhre a figure of this or so?

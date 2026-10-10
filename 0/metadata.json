@@ -1,0 +1,55 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4KM7GB0E0C2XM7ZJNCH4WTR",
+  "session_id": "01a12740-6839-78f1-8ca0-b6d175e6f079",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-10T19:21:54.667372Z",
+  "branch": "worktree-agent-a1d0cca4a7d0d81f7",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/learned.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-sol",
+  "turn_id": "7f4a72a92a3b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 70032,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 745344,
+    "output_tokens": 5658,
+    "api_call_count": 15
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-10T19:21:54.652419Z",
+    "agent_lines": 0,
+    "agent_removed": 30,
+    "human_added": 12,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 12,
+    "total_lines_changed": 42,
+    "agent_percentage": 71.42857142857143,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 100,
+      "user_lines_removed": 1,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 11,
+        ".claude/skills/entire-search/SKILL.md": 1,
+        ".codex/hooks.json": 88
+      },
+      "user_removed_per_file": {
+        ".claude/skills/entire-search/SKILL.md": 1
+      }
+    }
+  ]
+}
