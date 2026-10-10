@@ -21,7 +21,7 @@ from briefing import read_brief
 from browser_tools import SiteSession
 from orchestrator import Orchestrator
 from playwright.async_api import async_playwright
-from submit import Mailbox, submit_bid
+from submit import BidFlow, Mailbox, submit_bid
 import tracing
 from tracing import Trace
 
@@ -77,13 +77,16 @@ async def solve(task: dict, page, answer: dict | None = None,
     bid, mail = sessions[briefing.bid_site], sessions[briefing.mail_site]
     for session in (bid, mail):  # critical after all: warm until the margin before the deadline
         session.until = max(session.until or 0, deadline - browser_tools.START_MARGIN)
+    # The bid form's steps that need no research (bidder data, offer type) run while the research does.
+    flow = BidFlow(bid, Mailbox(mail, briefing, deadline), briefing, deadline)
+    flow.start()
     if answer is None and os.environ.get("AGENT_RESEARCH", "1") != "0":
         answer, attributes = await research(task, briefing, contexts, trace, deadline, sessions)
     # A start still running is waited for by the session's first look; one that gave up gets a fresh tab there.
     trace.event("starts", "state", **{name: ("up" if s.ok else "starting" if s.starting else "down")
                                       for name, s in sessions.items()}, pending=sum(not t.done() for t in starts.values()))
     try:
-        result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline, answer, attributes)
+        result = await flow.finish(answer, attributes)
     except Exception as error:  # never end without trying to sign: one more pass with what is on screen
         trace.event("submit", "crashed", error=f"{type(error).__name__}: {str(error)[:300]}")
         result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline, answer, attributes)

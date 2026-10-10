@@ -21,6 +21,11 @@ NUMBER_OPTION = re.compile(r"^\s*([+-]?\d[\d.,]*)\s*[^\d]*$")
 MONEY_KEYS = {"unit_price", "base_unit_price", "surcharge_per_unit", "packaging_per_unit", "rebate_total"}
 COUNT_KEYS = {"quantity", "lead_time_weeks"}
 REQUIRED_KEYS = ("position", "material_number", "quantity", "unit_price", "lead_time_weeks")
+# the material attributes the form's choices lead through (orchestrator.material_attributes gives these names)
+ATTRIBUTE_KEYS = ("bore", "stroke", "pressure", "mounting", "certification")
+# every value name a position control can take, known before any value is calculated
+VALUE_NAMES = (*REQUIRED_KEYS[1:], "base_unit_price", "surcharge_per_unit", "packaging_per_unit", "rebate_total",
+               *ATTRIBUTE_KEYS)
 
 
 def clean(text: str) -> str:
@@ -112,6 +117,29 @@ def find_control(view: str, label: str, kinds: tuple[str, ...] = ()) -> tuple[st
     if partial:
         return None, f"{label!r} matches several controls: " + ", ".join(repr(c[2]) for c in partial[:6])
     return None, f"no control labelled {label!r} on the page"
+
+
+def mapping_problems(view: str, fields: dict[str, str], known: set[str], buttons: tuple[str, ...] = ()) -> list[str]:
+    """
+    What is wrong with a control mapping (label -> value name) for the form in `view`: unknown value names, labels
+    that name no control (or several), required values left unmapped, buttons not on the page. [] when usable.
+    """
+    problems = []
+    unknown = sorted({name for name in fields.values() if name not in known})
+    if unknown:
+        problems.append(f"unknown value names {unknown}; use only: {', '.join(sorted(known))}")
+    for label in fields:
+        ref, why = find_control(view, label, ("select", "textbox", "textarea"))
+        if ref is None:
+            problems.append(why)
+    unmapped = sorted(set(REQUIRED_KEYS[1:]) - set(fields.values()))
+    if unmapped:
+        problems.append(f"no control mapped for {', '.join(unmapped)}")
+    for button in filter(None, buttons):
+        ref, why = find_control(view, button, ("button",))
+        if ref is None:
+            problems.append(why)
+    return problems
 
 
 def position_on_page(view: str, position: str) -> bool:
