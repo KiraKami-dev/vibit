@@ -71,3 +71,15 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   re-locking gates. Two fixes were needed: older tool results were cut to one line once a newer view came, so the
   model paged again by hand to see the list it had collected (results of search / collect / extract now stay), and
   after paging the next view must come whole, not as a diff against a page the model never saw.
+- Streaming through the models proxy (raw SSE probes): text and `reasoning_content` arrive token by token (gaps
+  under 1.5 s), but tool-call arguments are held back until complete (a 60-row output tool: first argument byte at
+  64 s, all at once); quiet stretches carry `: keepalive` comments every 10 s. Headers come with the first (role)
+  chunk: within 9.4 s in 179 of 180 calls (p90 5.9 s, either mode). The one hang (thinking off) sent no headers
+  and nothing else for 200 s, so "no first chunk in 20 s" catches it; a tool call's silence cannot be told from a
+  stall, so tool requests keep their per-mode timeout as allowed silence.
+- `LLM_STREAM_WATCHDOG=1` A/B (30 agent calls each, run side by side): excluding one prompt that sends thinking-on
+  reasoning into minutes, median 13.2 s vs 14.4 s, p90 74 vs 81 s, max 89 vs 268 s (deadline retried a legit
+  thinking-on long answer twice); 2 no-first-chunk retries caught at 20 s. On the runaway-reasoning prompt the
+  deadline failed 2 of 8 after 6 retries x 90 s, the watchdog finished 8 of 8 but took 87 to 811 s (6 calls hit
+  the 300 s cap). Progress does not end runaway reasoning: keep the cap lower (LLM_MAX_CALL 120 to 150) or cap
+  output tokens before turning the watchdog on.
