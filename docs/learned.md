@@ -101,3 +101,25 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   13 requests.
 - Local live runs twice hung before the briefing finished: one site's start (the webmail) never returned while the
   sites answered curl at once. solve() gathers every site start without a timeout; worth a guard.
+- v2 orchestrator local runs (planner -> board -> workers -> verify -> calc): the planner picked all four fact kinds
+  and mapped each to the right site from the brief alone (23 s); the tender worker resolved 5 positions with final
+  quantities and keys in 75 to 105 s; the mail plan named 9 record kinds. `Trace.event()` takes `kind` and `worker`
+  positionally, so board events must not pass keywords of those names (two runs lost every posted fact to that).
+- The spec worker (`research.py`, thinking off) twice looped between two controls on one page for its full 25
+  steps and found no revision history, so no requirement reached the ERP; it needs a loop guard or thinking on
+  for that step. Mail kinds that find nothing burn the full 20-step budget (about 70 s per kind and tab).
+- A thinking verifier call over a batch of facts can outlast a 120 s budget; verify runs thinking off with the
+  long-timeout reader model by default.
+- v2 end to end, local (planner -> board -> tender, spec + ERP, mail -> verify -> calc): one run reached the full
+  answer (local check 100/100) in 752 s of research; other runs lost the spec (navigator paged between two list
+  pages for 25 steps, or clicked row menus the popup closer shut), the mail tabs (sign-ins hung or landed on the
+  browser error page) or the ERP (a look() wrapper missing the new keywords). Each now has a guard: a loop hint
+  after three arrivals on one page, one thinking retry for the spec, time-limited starts with a retry that also
+  rejects error pages, staggered mail tabs that join when ready, and a mail deadline with partial results.
+- Mail records only count with the bidder's domain: when the address lookup ran on a tab that showed an error
+  page, every authority record was dropped silently. The address now comes from the first tab that shows it.
+- A requirement whose stroke reserve was not found came back without a material and calc turned the whole bid
+  into no_bid. Undecided materials (pending inputs, search problems) now omit the position; only a complete
+  search without a match means no_bid.
+- One run with the mail kinds on site_tools.search/collect kept nothing in three kinds (150 s each; paging
+  followed a message list into a session expiry); kept on the paging tool for now.
