@@ -376,3 +376,7 @@ What score should we expect once we have v2? And when do you think it is ready? 
 ---
 
 Ok would it help to have more subagents to speed it up. Or do more runs (not submission) on the system or on ours? Or anything?
+
+---
+
+"The real bottleneck is the shared scouting account." could we improve that somehow? Like with an additional machine, login, etc. I guess the challenge providers have thought about this somehow?
