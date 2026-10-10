@@ -18,6 +18,14 @@ def cdp_urls(env=os.environ) -> list[str]:
     return urls or ([env["CDP_URL"]] if env.get("CDP_URL") else [])
 
 
+async def _launch_local(playwright):
+    """A Chromium of the kit's own, for runs on your machine only: in a run the sandbox stops browsers the agent
+    starts, so a missing CDP_URLS there is an error, not a reason to launch one."""
+    if os.environ.get("CHALLENGE_RUN_TOKEN"):
+        raise RuntimeError("In a run the sandbox provides the browsers (CDP_URLS); refusing to launch one")
+    return await playwright.chromium.launch(headless=os.environ.get("HEADLESS") == "1")
+
+
 async def connect(playwright, number: int = 0):
     """Browser `number` of the run (0 is browser 1) and a page in it. Locally, a Chromium of its own."""
     urls = cdp_urls()
@@ -25,7 +33,7 @@ async def connect(playwright, number: int = 0):
         browser = await playwright.chromium.connect_over_cdp(urls[number])
         context = browser.contexts[0] if browser.contexts else await browser.new_context()
     else:
-        browser = await playwright.chromium.launch(headless=os.environ.get("HEADLESS") == "1")
+        browser = await _launch_local(playwright)
         context = await browser.new_context()
     page = context.pages[0] if context.pages else await context.new_page()
     return browser, page
@@ -42,7 +50,7 @@ async def contexts(playwright, count: int) -> list:
             browser = browsers[i % len(browsers)]
             found.append(browser.contexts[0] if browser.contexts else await browser.new_context())
         return found
-    browser = await playwright.chromium.launch(headless=os.environ.get("HEADLESS") == "1")
+    browser = await _launch_local(playwright)
     return [await browser.new_context(viewport={"width": 1280, "height": 800}) for _ in range(count)]
 
 

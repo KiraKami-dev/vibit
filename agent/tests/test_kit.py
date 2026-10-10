@@ -21,7 +21,7 @@ import agent  # noqa: E402
 
 RUN = {
     "run_id": "run_test", "brief": "Prepare the bid.", "answer_schema": {"type": "object"},
-    "access": [{"siteId": "tender-portal", "url": "https://tender.example/",
+    "access": [{"siteId": "site-a", "url": "https://site-a.example/",
                 "credentials": {"username": "u", "password": "s3cret"}}],
     "submission": {"kind": "api", "url": "http://placeholder/v1/runs/current/answer"},
 }
