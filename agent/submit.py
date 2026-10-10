@@ -61,11 +61,16 @@ class Mailbox:
         self.last_tan = ""
 
     async def address(self) -> str:
-        async with self.lock:
-            found, _ = await run_worker(
-                self.session, "Find the email address of the mailbox you are signed in to (the bidder's own "
-                "address, usually shown as the signed-in account). Return it at once.",
-                MailboxAddress, deadline=self.deadline, max_steps=8, notes=False)
+        """The bidder's own address, or "" when the webmail cannot tell: never an error that would stop the bid."""
+        try:
+            async with self.lock:
+                found, _ = await run_worker(
+                    self.session, "Find the email address of the mailbox you are signed in to (the bidder's own "
+                    "address, usually shown as the signed-in account). Return it at once.",
+                    MailboxAddress, deadline=self.deadline, max_steps=8, notes=False)
+        except Exception as error:
+            self.session.trace.event(self.session.name, "stopped", reason=f"address: {type(error).__name__}: {error}")
+            return ""
         return found.address if found else ""
 
     async def tan(self, answer: str = "") -> SigningTan | None:
@@ -77,8 +82,16 @@ class Mailbox:
         older = f" The TAN {self.last_tan} you returned before is no longer valid." if self.last_tan else ""
         said = (f" The bid website answered the request with: {answer!r}; pick the message for that request."
                 if answer else "")
+        try:
+            return await self._tan(older, said, answer)
+        except Exception as error:  # the bid worker asks again; an error here must not stop the bid
+            self.session.trace.event(self.session.name, "stopped", reason=f"tan: {type(error).__name__}: {error}")
+            return None
+
+    async def _tan(self, older: str, said: str, answer: str) -> SigningTan | None:
         async with self.lock:
             async with self.session.lock:  # the list the tab shows predates the request: load it again
+                await self.session.revive()
                 await self.session._goto(self.session.page.url)
             found, _ = await run_worker(
                 self.session, f"A new signing TAN for tender {self.briefing.tender_reference} was just requested."

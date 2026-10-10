@@ -6,10 +6,17 @@ usually `hidden` or `aria-hidden`), collapsed `<details>` are opened, tooltips a
 same-origin iframes are walked in place and zero-width characters are stripped. Interactive elements get a
 `data-ar` ref such as `e12` that `locate` resolves again for clicking and filling.
 """
+import asyncio
 import difflib
 import re
 
 from playwright.async_api import Frame, Locator, Page
+
+# A page whose script hangs (an endless loop) never answers an evaluate: every call into a page is bounded, so a
+# frozen tab costs seconds, not the run.
+WALK_SECONDS = 20.0
+FRAME_SECONDS = 5.0
+DIFF_CHARS = 40000  # longer views are sent whole instead of diffed (difflib is quadratic in the worst case)
 
 WALK_JS = r"""
 ([start, stamp]) => {
@@ -184,16 +191,17 @@ WALK_JS = r"""
 
 async def observe(page: Page, stamp: str = "1") -> str:
     """The page's visible content as text with `[eN ...]` refs; frames the main walk could not enter follow."""
-    result = await page.main_frame.evaluate(WALK_JS, [1, stamp])
+    result = await asyncio.wait_for(page.main_frame.evaluate(WALK_JS, [1, stamp]), WALK_SECONDS)
     parts = [result["text"]]
     next_id = result["next"]
     if result["crossOrigin"]:
         for frame in page.frames[1:]:
             try:
-                walked = await frame.evaluate("document.documentElement.dataset.arWalked || ''")
+                walked = await asyncio.wait_for(
+                    frame.evaluate("document.documentElement.dataset.arWalked || ''"), FRAME_SECONDS)
                 if walked == stamp:
                     continue
-                sub = await frame.evaluate(WALK_JS, [next_id, stamp])
+                sub = await asyncio.wait_for(frame.evaluate(WALK_JS, [next_id, stamp]), WALK_SECONDS)
             except Exception:
                 continue
             next_id = sub["next"]
@@ -208,7 +216,7 @@ async def locate(page: Page, ref: str) -> Locator | None:
     for frame in frames:
         try:
             locator = frame.locator(selector)
-            if await locator.count():
+            if await asyncio.wait_for(locator.count(), FRAME_SECONDS):
                 return locator.first
         except Exception:
             continue
@@ -230,9 +238,9 @@ OPTIONS_JS = r"""
 async def select_options(page: Page, ref: str, contains: str = "") -> tuple[int, list[str]] | None:
     """All options of the select `ref` (or those whose text contains `contains`, ignoring case); None without one."""
     element = await locate(page, ref)
-    if element is None or await element.evaluate("e => e.tagName") != "SELECT":
+    if element is None or await asyncio.wait_for(element.evaluate("e => e.tagName"), FRAME_SECONDS) != "SELECT":
         return None
-    found = await element.evaluate(OPTIONS_JS, contains)
+    found = await asyncio.wait_for(element.evaluate(OPTIONS_JS, contains), WALK_SECONDS)
     return found["total"], found["hits"]
 
 
@@ -251,6 +259,8 @@ def changes(old: str, new: str, share: float = 0.4) -> str | None:
     Unchanged pieces are identical text, refs included, so together with the old view they give the new page.
     None when the change is a large part of the page (then the whole view is clearer and not much longer).
     """
+    if len(old) + len(new) > DIFF_CHARS:
+        return None
     before, after = _pieces(old), _pieces(new)
     out = []
     for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes():

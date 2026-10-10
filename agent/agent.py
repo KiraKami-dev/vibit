@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import browsers
+import loopwatch
 import run as contract
 from briefing import read_brief
 from browser_tools import SiteSession
@@ -39,6 +40,7 @@ async def solve(task: dict, page, answer: dict | None = None,
     researches them; a research failure never costs the signed bid.
     """
     trace = Trace()
+    loopwatch.Watchdog(activity=lambda: trace.last).start()  # a blocked loop or a silent run dumps its stacks
     left = min(contract.seconds_left(task), LOCAL_SECONDS)
     deadline = time.monotonic() + left - SAFETY_SECONDS
     # Sign in to every website while the model reads the brief: which one plays which part is only known after it.
@@ -58,7 +60,11 @@ async def solve(task: dict, page, answer: dict | None = None,
                          return_exceptions=True)  # submit_bid copes with a session that is still down
     if answer is None and os.environ.get("AGENT_RESEARCH", "1") != "0":
         answer, attributes = await research(task, briefing, contexts, trace, deadline)
-    result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline, answer, attributes)
+    try:
+        result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline, answer, attributes)
+    except Exception as error:  # never end without trying to sign: one more pass with what is on screen
+        trace.event("submit", "crashed", error=f"{type(error).__name__}: {str(error)[:300]}")
+        result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline, answer, attributes)
     trace.event("result", "done", result=result.model_dump() if result else None)
     return None
 
@@ -67,6 +73,7 @@ async def research(task: dict, briefing, contexts: list, trace: Trace, deadline:
                    ) -> tuple[dict | None, dict[str, dict[str, str]] | None]:
     """The orchestrator's answer and material attributes; (None, None) when it fails or builds nothing."""
     answer, attributes, problems = None, None, []
+    orchestrator = None
     started = time.monotonic()
     try:
         orchestrator = Orchestrator(task, briefing, {s["siteId"]: c for s, c in zip(task["access"], contexts)},
@@ -76,6 +83,8 @@ async def research(task: dict, briefing, contexts: list, trace: Trace, deadline:
         attributes = orchestrator.attributes
     except Exception as error:  # the signed bid must never be lost to a research failure
         trace.event("orchestrator", "failed", error=f"{type(error).__name__}: {str(error)[:300]}")
+    if answer is None and orchestrator is not None:  # still the reference, decision and any discount read
+        answer = orchestrator.fallback_answer()
     trace.event("orchestrator", "done", seconds=round(time.monotonic() - started, 1), answer=answer,
                 attributes=attributes, problems=problems[:30])
     path = Path(trace.path).with_name("answer.json")
