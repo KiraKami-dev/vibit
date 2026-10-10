@@ -18,6 +18,7 @@ from playwright.async_api import BrowserContext, Dialog, Page
 from pydantic_ai import RunContext
 from tracing import Trace
 
+SETTLE_SECONDS = 45  # upper bound for waiting on a page and its helpers after one action
 MAX_VIEW = 14000  # characters of a page shown at once; read_more pages through the rest
 
 # Closes modal <dialog>s and aria-modal popups through their own close button as soon as they open, and records
@@ -148,7 +149,15 @@ class SiteSession:
         await self.settle()
 
     async def settle(self) -> None:
-        """Let the page finish, then run the generic helpers until nothing changes."""
+        """Let the page finish and run the generic helpers, but never longer than SETTLE_SECONDS: a click that never
+        returns (seen on a cookie notice) must not block the tab for minutes."""
+        try:
+            await asyncio.wait_for(self._settle(), SETTLE_SECONDS)
+        except asyncio.TimeoutError:
+            self.events.append("the page kept loading; continuing with what it shows")
+            self.trace.event(self.name, "helper_error", helper="settle", error=f"timeout after {SETTLE_SECONDS} s")
+
+    async def _settle(self) -> None:
         page = self.page
         self.logins = 0  # a timeout later in the run may need a fresh sign-in
         for _ in range(6):
@@ -439,7 +448,7 @@ async def check(ctx: RunContext[Deps], ref: str, checked: bool = True) -> str:
     return await ctx.deps.session.act("check", ref, run)
 
 
-async def back(ctx: RunContext[Deps]) -> str:
+async def back(ctx: RunContext[Deps], reason: str = "") -> str:
     """Go back to the previous page."""
     session = ctx.deps.session
     async with session.lock:
