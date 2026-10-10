@@ -53,5 +53,13 @@ class KindBudgetTest(unittest.TestCase):
                          ["approval", "fx", "packaging"])
 
 
+class LandedTest(unittest.TestCase):
+    def test_a_sign_in_redirect_is_not_the_message(self):
+        want = "https://mail.example.com/?folder=inbox&message=m-1"
+        self.assertTrue(rm._landed(want, want))
+        self.assertFalse(rm._landed("https://mail.example.com/login?returnTo=%2F", want))
+        self.assertFalse(rm._landed("https://mail.example.com/?folder=inbox", want))
+
+
 if __name__ == "__main__":
     unittest.main()
