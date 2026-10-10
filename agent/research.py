@@ -51,6 +51,7 @@ from evidence import (
     parse_int,
     parse_mass_kg,
     parse_number,
+    parse_pieces_per_set,
     parse_weeks,
 )
 from tracing import Trace
@@ -286,7 +287,8 @@ class RequirementSeen(BaseModel):
     certification: str = Field(description="Required certification as written, or the words saying none is "
                                            "required")
     catalog_group: str = Field(description="The Kataloggruppe (catalogue group code) named for the ERP search")
-    pieces_per_set: str = Field("", description="Pieces per set (Satz) if the text defines a set, else ''")
+    pieces_per_set: str = Field("", description="How many pieces one set (Satz) holds, if the text defines a set "
+                                                 "(the piece count only, e.g. '4' for '1 set = 4 pieces'), else ''")
     stroke_is_usable_travel: bool = Field(description="True if the stroke is stated as usable travel (nutzbarer "
                                                       "Weg) to which a reserve must be added for the ERP stroke")
     reserve_key: str = Field("", description="The key of that end reserve, if named, else ''")
@@ -398,12 +400,20 @@ def _record_views(session: SiteSession) -> dict[str, str]:
     return views
 
 
+def _pieces_per_set(text: str) -> int | None:
+    """None when the spec gives no set size or words it unclearly (a set position is then left out, not mispriced)."""
+    try:
+        return parse_pieces_per_set(text) if text.strip() else None
+    except ParseError:
+        return None
+
+
 def _parse_requirement(seen: RequirementSeen, revision: str) -> Requirement:
     return Requirement(
         requirement_id=seen.requirement_id.strip(), revision=revision, bore=parse_number(seen.bore),
         stroke=parse_number(seen.stroke), pressure=parse_number(seen.pressure), mounting=seen.mounting.strip(),
         certification=seen.certification.strip(), catalog_group=seen.catalog_group.strip(),
-        pieces_per_set=parse_int(seen.pieces_per_set) if seen.pieces_per_set.strip() else None,
+        pieces_per_set=_pieces_per_set(seen.pieces_per_set),
         stroke_is_usable=seen.stroke_is_usable_travel, reserve_key=seen.reserve_key.strip() or None,
         raw={k: str(v) for k, v in seen.model_dump().items()})
 

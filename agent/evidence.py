@@ -76,6 +76,35 @@ def parse_int(text: str, fmt: str | None = None) -> int:
     return int(value)
 
 
+_SET_WORDS = ("satz", "sätze", "saetze", "set", "kit", "pack")
+
+
+def parse_pieces_per_set(text: str) -> int:
+    """
+    Pieces in one set, from a model's copy of the spec wording: "5", "5 Stück", or a definition such as
+    "1 Satz = 5 Stück" / "2 sets = 10 pcs" (the first number there is the sets, not the pieces: a live run read 1
+    and bid 26 pieces instead of 130). An equation gives right / left; otherwise a number next to a set word is the
+    set count and the other one the pieces. Raises ParseError when the text does not say it unambiguously.
+    """
+    body = _TAG.sub("", str(text or ""))
+    numbers = [int(n) for n in re.findall(r"\d+", body)]
+    if len(numbers) == 1:
+        return numbers[0]
+    if len(numbers) == 2:
+        sets, pieces = numbers
+        equation = re.fullmatch(r"\D*\d+\D*[=:]\D*\d+\D*", body)
+        if not equation:
+            words = re.findall(r"(\d+)\s*([^\W\d_]*)", body)
+            is_set = [w.casefold().startswith(_SET_WORDS) for _, w in words]
+            if is_set == [False, True]:
+                sets, pieces = numbers[1], numbers[0]
+            elif is_set != [True, False]:
+                raise ParseError(f"pieces per set unclear in {text!r}")
+        if sets > 0 and pieces % sets == 0:
+            return pieces // sets
+    raise ParseError(f"pieces per set unclear in {text!r}")
+
+
 _DATE_TAG = re.compile(r"\((MM|TT|DD)[/.-](TT|DD|MM)\)", re.IGNORECASE)
 
 
