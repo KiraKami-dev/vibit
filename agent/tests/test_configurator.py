@@ -133,5 +133,53 @@ class Positions(unittest.TestCase):
         self.assertEqual(complete_positions({**answer, "decision": "no_bid"}), {})
 
 
+FORM = """<h2>Item 3.07</h2>
+<label>Qty <input name="q"></label>
+<label>Net price <input name="p"></label>
+<label>Article <select name="m"><option value="">Choose</option><option value="x">M-7 / 16 bar</option></select>
+</label>
+<label>Weeks <select name="w"><option value="">Choose</option><option value="3">3 weeks</option></select></label>
+"""
+
+
+class FillPosition(unittest.TestCase):
+    def test_guessed_label_without_control_is_skipped(self):
+        import asyncio
+
+        from configurator import FillPlan, fill_position
+        from extract import observe
+        from playwright.async_api import async_playwright
+
+        class Session:
+            def __init__(self, page):
+                self.page = page
+
+            async def look(self):
+                return await observe(self.page, "1")
+
+            async def settle(self):
+                pass
+
+        async def run():
+            async with async_playwright() as playwright:
+                browser = await playwright.chromium.launch(headless=True)
+                page = await browser.new_page()
+                await page.set_content(FORM)
+                entry = {"position": "3.07", "material_number": "M-7", "quantity": 4, "unit_price": 2.5,
+                         "lead_time_weeks": 3, "pressure": "16"}
+                plan = FillPlan(fields={"Qty": "quantity", "Net price": "unit_price", "Article": "material_number",
+                                        "Weeks": "lead_time_weeks", "Pressure stage": "pressure"})
+                log: list[str] = []
+                error = await fill_position(Session(page), entry, plan, log)
+                values = [await page.input_value(f"[name={n}]") for n in "qpmw"]
+                await browser.close()
+                return error, log, values
+
+        error, log, values = asyncio.run(run())
+        self.assertIsNone(error)
+        self.assertEqual(values, ["4", "2,50", "x", "3"])
+        self.assertTrue(any("Pressure stage" in line and "skipped" in line for line in log))
+
+
 if __name__ == "__main__":
     unittest.main()

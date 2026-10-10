@@ -237,6 +237,11 @@ async def fill_position(session, entry: dict, plan: FillPlan, log: list[str],
         for attempt in range(2):
             ref, why = find_control(view, label, ("select", "textbox", "textarea"))
             element = await locate(session.page, ref) if ref else None
+            if element is None and ref is None and key not in REQUIRED_KEYS:
+                # a label the model guessed for a value the form has no control for (live: "Druck" for the
+                # pressure, which the form shows only inside the catalogue option): skip it, never fail the
+                # position over it; the required values still need their controls
+                break
             if element is None:
                 return why or f"{label!r} vanished from the page"
             if not await element.evaluate("e => e.disabled || e.readOnly === true"):
@@ -248,6 +253,9 @@ async def fill_position(session, entry: dict, plan: FillPlan, log: list[str],
             view, error = await _confirm(session, plan, view)
             if error:
                 return error
+        if element is None:
+            log.append(f"{label}: no such control on this page; skipped")
+            continue
         if await element.evaluate("e => e.tagName") == "SELECT":
             state = await _select_state(element)
             option, why = match_option(state["options"], value)
