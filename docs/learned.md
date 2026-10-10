@@ -153,3 +153,9 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   page. Tender documents and Q&A run in two tabs and positions post before the Q&A; a run without complete positions
   still answers (reference, decision, discount, total 0). Test runs: 100 (12.5 min, $0.177) and 100 (13.5 min, $0.184); one earlier run had a
   full research answer (82 offline) but signing timed out (fixed on main by the signing reserve).
+- Mail research, local (scouting, 4 tabs): before 7 of 9 kinds in 515 s (plan 97 s after a 45 s stalled call;
+  stalled reader calls held kinds 180 s; approval 330 s). After pipelined reads, a 60 s grace after the first
+  hit, shorter read/plan timeouts and a fresh tab after 45 s without a page view: 8 of 9 in 401 s (plan 20 s,
+  approval 106 s). Session expiry while opening a message's reading pane gave the reader a sign-in page (empty
+  record); messages are now reopened when the tab landed elsewhere. Without the mailbox address, records are
+  authorised by the recipients' domain instead of all being dropped.
