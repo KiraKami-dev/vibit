@@ -182,3 +182,12 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   for an attribute the form has no control for failed whole positions; one live run mapped no price breakdown
   fields at all; under model load (p50 11 s, p95 91 s) every 30 s try of the mail plan timed out and no mail kind
   was searched. All fixed on branch worktree-agent-a525dcbc767c5a2b1.
+- Bid form overlapped with the research (BidFlow): an early pass enters bidder data and the main offer and maps
+  the first position page's controls (~30-50 s, during research), then waits. Sandbox run 07b5 (quality 100):
+  form 91 s after research (132-185 s before), signing 30 s, signed at ~620 s. The wizard keeps its step through
+  a 180 s idle tab and through in-page fetches of the start page; locally the session drops every 1-3 min while
+  other runs sign in with the shared scouting login (wizard back to step 1), which the form then redoes.
+  Keepalive must run inside the tab: context.request resolves no hosts in the sandbox (EAI_AGAIN).
+- confirm_decision after calc could never change a decision (calc returns no bid with missing materials) and
+  cost ~8 s before the form; now skipped. A grounded FormReady quoting our own "5,00" was refused four times
+  (30 s) and the model then went back a step; form status results are no longer grounded.
