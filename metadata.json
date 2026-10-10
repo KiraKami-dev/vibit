@@ -3,8 +3,9 @@
   "checkpoint_id": "01M4M1BKWWXQBKVEQFGAVV9QZ7",
   "strategy": "manual-commit",
   "branch": "research/agent-architecture",
-  "checkpoints_count": 11,
+  "checkpoints_count": 13,
   "files_touched": [
+    ".gitignore",
     "agent/orchestrator.py",
     "agent/research_mail.py"
   ],
@@ -15,13 +16,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 824,
-    "cache_creation_tokens": 958376,
-    "cache_read_tokens": 73360383,
-    "output_tokens": 444843,
-    "api_call_count": 353
+    "input_tokens": 910,
+    "cache_creation_tokens": 1186848,
+    "cache_read_tokens": 80823761,
+    "output_tokens": 554696,
+    "api_call_count": 395
   }
 }
