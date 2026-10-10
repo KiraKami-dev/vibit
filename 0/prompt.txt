@@ -694,3 +694,66 @@ Files are in `checks/`:
 - `v1_answer.json`</result>
 <usage><subagent_tokens>232102</subagent_tokens><tool_uses>58</tool_uses><duration_ms>981975</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>affb9add17bc3753b</task-id>
+<tool-use-id>toolu_01RUSxJxCorefaXRdHv4fJvJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/affb9add17bc3753b.output</output-file>
+<status>completed</status>
+<summary>Agent "Speed up bid flow: thinking by phase" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The v1 bid now takes 87 to 105 s in sandbox test runs instead of 201 s, across 4 runs of the final variant. Every run scored quality 10, was eligible, had no extra positions, and signed with all 5 positions omitted. Cost per run fell from $0.019 to $0.008 to $0.010. Nothing was pushed, merged or submitted.
+
+Branch `worktree-agent-affb9add17bc3753b`, commits:
+- `7770963` Split bid worker into form and review phases
+- `dc42886` Check the summary once, then sign thinking off
+- `caf0c1c` Log fill_in actions and reject empty selects
+- `4ce4c18` Add bid speed-up lessons to learned.md
+- `3765615` Record final-variant test runs
+
+## Why most timing came from test runs, not local runs
+After your update about shared scouting logins I moved the full sign-and-TAN measurements to test runs. Local runs had shown a correct TAN being rejected because another team's request invalidated it.
+- Local runs now only cover the form phase. `AGENT_STOP_BEFORE_SIGN=1` stops before any TAN request, so we don't invalidate other teams' TANs.
+- One of my earlier full local runs did request TANs on the shared webmail before your warning.
+
+## Timings per variant (test runs)
+
+| Variant | Duration | Quality | Cost |
+|---|---|---|---|
+| Baseline (all thinking on) | 201 s | 10 | $0.019 |
+| A: form thinking off, review thinking on | 271 s (1 run) | 10 | $0.019 |
+| B: thinking off in both phases | 171 s (1 run) | 10 | $0.012 |
+| **Final variant** (4 runs) | **94, 96, 105, 87 s** | 10 each | $0.008 to $0.010 |
+
+Run A was slow because of three problems, all fixed in the final variant:
+- The model went off to read every tender document (35 s). The goal now says to tick the acknowledgement without opening them.
+- The mail lookup hit its 8-step limit once. It now reloads the inbox first, gets a hint to open the message's own page, and has 10 steps.
+- Some thinking-on steps took 20 to 34 s.
+
+On the local scouting sites, the form phase alone (stopping before the TAN) took 41 to 52 s with the final code, against about 126 s before.
+
+## What changed
+- **`briefing.py` and `llm.py`:** the briefing runs with thinking off and is still validated against the brief: 6 to 10 s instead of 17 to 45 s. `llm.thinking(phase, default)` reads `THINKING_BRIEF`, `THINKING_FORM`, `THINKING_REVIEW` and `THINKING_SIGN`, so experiments are recorded.
+- **`agent.py`:** all sites are signed in while the brief is being read.
+- **Bid worker in `submit.py`**, which now runs in three steps:
+  - **Form phase:** thinking off, up to the review/signing page. The contact email is looked up first and put straight into the goal.
+  - **Summary check:** one model call compares the review page with the requirements.
+  - **Signing phase:** thinking stays off when the check passes, and turns on if the check fails or finds problems.
+- **TAN hand-off:** a new `request_signing_tan(ref)` tool clicks the button the model chose, then fetches the TAN. It also passes the portal's reply (e.g. "Anforderung N") to the mail worker so it picks that exact message. The bid worker can't request another TAN while a lookup runs.
+- **Fewer steps:** a new `fill_in(actions)` tool lets the model do several fills, selects, ticks or clicks on one page in one step; switch it off with `AGENT_FILL_IN=0`. I did not turn on parallel tool calls: element refs are renumbered after every view, so batched clicks could hit the wrong button.
+- **Clean exit:** once the bid is in, the platform closes the run's model token and the last model call gets a 401. That error is now caught; the score was never affected.
+
+## Correctness checks
+- **Summary check accuracy:** I tested it offline on 6 edited copies of a real review page: one correct, plus an alternative offer, a 5 % discount, a position not omitted, an extra position and a transposed VAT id. With thinking off it judged all 6 correctly in 2 to 5 s; with thinking on, also all 6, but in 4 to 27 s. So it defaults to off.
+- **Wrong clicks:** with thinking off, the form phase sometimes clicks "Position hinzufügen" (add position) instead of "Weiter". It recovered in every run and the scores show no extra positions, but it costs steps.
+
+## Recommended defaults (already in the code)
+- `THINKING_BRIEF=0`, `THINKING_FORM=0`, `THINKING_REVIEW=0`, `THINKING_SIGN` on only when the check doesn't pass.
+- `AGENT_FILL_IN=1`.
+
+No changes to `worker.py`, `browser_tools.py` or `extract.py` were needed; the new tools live in `submit.py`. Lessons are added as bullets in `docs/learned.md`, and all test runs are recorded in `experiments/runs.jsonl`.</result>
+<usage><subagent_tokens>188842</subagent_tokens><tool_uses>95</tool_uses><duration_ms>2324344</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-affb9add17bc3753b</worktreePath><worktreeBranch>worktree-agent-affb9add17bc3753b</worktreeBranch></worktree>
+</task-notification>
