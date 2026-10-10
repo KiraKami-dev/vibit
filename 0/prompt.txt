@@ -1502,3 +1502,65 @@ The three archive mails that search added are noise: two travel-expense reminder
 <usage><subagent_tokens>125044</subagent_tokens><tool_uses>45</tool_uses><duration_ms>1184530</duration_ms></usage>
 <worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a6e9ece93fe436042</worktreePath><worktreeBranch>worktree-agent-a6e9ece93fe436042</worktreeBranch></worktree>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>b19ro1dda</task-id>
+<summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6e9ece93fe436042</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6e9ece93fe436042.output</output-file>
+<status>completed</status>
+<summary>Agent "Find and fix the event-loop hang" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>I couldn't pin down the exact cause of the hang from the log. The fixes for every likely blocker are committed, along with a watchdog that will dump stacks if it happens again. The sandbox run of the branch did not hang, but it also failed (score 0) for a different reason, described below.
+
+**Most likely cause.** "Nothing at all for 20+ min, and no deadline ever fired" fits a blocked event loop better than a hung await. The log shows nothing that blocks for that long, so the candidates are:
+- **Frozen page plus unbounded calls.** I reproduced this locally: on a tab running an endless JS loop, `page.evaluate`, `frame.evaluate`, `page.title()` and `locator.count()` hang forever with no timeout. Other tabs keep working, and `asyncio.wait_for` does cut these calls. `observe()`, `look()`, `locate()`, `_human_check` and `_collect_closed` had no bound. `look()` is also called outside any `wait_for` in many places, including the first view in `run_worker`. The two `Locator.evaluate: Timeout 30000ms exceeded` errors on mail tabs, and the 45 s settle timeout on the ERP tab, show pages becoming unresponsive just before the silence. On its own this explains a stuck worker, not the missed deadlines.
+- **Quadratic regex in the grounding check.** `unseen_values()` used `[\w/.:,+-]*\d[\w/.:,+-]*`, which is quadratic on any long run of those characters with no digit. Measured: 20k characters take 1.1 s, so 200k would take about 110 s and 1M about 45 min, all on the loop. It only runs on model output and notes, and the mail workers run with `grounded=False`, so it probably isn't what hung at 362 s.
+- **Ruled out:**
+  - The diff in `changes()` is only run on views of 14k characters or less, and stays around 10 ms on a worst-case table.
+  - I found no `SiteSession.lock` re-entrance. Mailbox lock then session lock is always taken in that order, never reversed.
+  - Nothing swallows `CancelledError`.
+- **Infra possibility.** If the sandbox stopped reading stdout, `print(flush=True)` would block the whole loop and give exactly this picture. I can't verify that from our side.
+
+**Fixes (commit `630849a`):**
+- **Watchdog:** new `agent/loopwatch.py`, started in `agent.solve()`.
+  - A daemon thread watches a 1 s heartbeat. If the loop is stale for more than 20 s, it prints a `[watchdog]` line and dumps every thread's stack to stdout with `faulthandler`, at most once a minute.
+  - If the loop still runs but no trace event has appeared for 300 s, it dumps all asyncio task stacks. That catches the deadlock case too.
+  - `tracing.py` now records the time of the latest event (two lines).
+- **`extract.py`:** the page walk is capped at 20 s. Per-frame evaluates, `locate()`'s `count()` and `select_options` are capped at 5 to 20 s. `changes()` returns None (send the whole view) when the two views together exceed 40k characters.
+- **`browser_tools.py`:**
+  - The human-check and popup-collect frame evaluates have timeouts, and so does `page.title()`.
+  - `look()` now returns "(the page does not respond …)" instead of hanging when its retry also fails.
+  - `unseen_values()` uses a linear regex that gives the same results. It also searches `seen` directly instead of rebuilding a whitespace-normalised copy on every call; values contain no whitespace, so the result is the same.
+
+**Tests.** The new `agent/tests/test_hang.py` checks that:
+- a 250k-character diff and the grounding check (200k-character token against about 2 MB of history) each finish in under 1 s;
+- a frozen page is cut off and `look()` returns a note, while another tab still works;
+- the Python side of `look()` on a 100k+ character page takes under 1 s;
+- the watchdog dumps on a blocked loop and on a silent run.
+
+The full suite passes: 142 tests.
+
+**Sandbox run `run_a27e8c91f74fdb41`:** failed with score 0.
+- tender-portal, which is the bid site, never opened (repeated 45 s settle timeouts), so research had nothing to build on.
+- There was no hang and no watchdog dump: the research deadline fired at 630 s as designed.
+- The run then crashed with `IndexError` in `SiteSession.page` (`open_pages[-1]` on an empty list), reached from `look()` when `submit_bid()` started the bid worker on a session with no tab.
+- That crash is an existing bug, and the fix belongs in `submit.py` or `agent.py`, which I left alone. Someone should make `submit_bid` reopen the bid site, or exit cleanly, when its session has no tab.
+- The website's log stream timed out twice while I followed the run; I recorded the result with `dev/track.py --force`. `experiments/runs.jsonl` now has two lines for this run, an early "running" one and the final "failed" one.
+
+**Branch:** `worktree-agent-a6e9ece93fe436042`, with commits `630849a` (the fixes) and `1374502` (the run record). The `Entire-Checkpoint` line is kept and there is no session trailer. Nothing was pushed or merged.</result>
+<usage><subagent_tokens>132030</subagent_tokens><tool_uses>50</tool_uses><duration_ms>1591008</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a6e9ece93fe436042</worktreePath><worktreeBranch>worktree-agent-a6e9ece93fe436042</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Why do the sandboxes hang? Is it our fault or is the server overload? That would be bad as we couldn’t fix it.
