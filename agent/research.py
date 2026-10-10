@@ -1098,7 +1098,7 @@ class Erp:
                         views[session.page.url] = _strip_refs(session.view)
                     until = self._until(READ_SECONDS)
                     coverage, _ = await run_worker(session, DETAIL_GOAL.format(material=number, focus=focus),
-                                                   Coverage, deadline=until, max_steps=steps(until, 4, 14),
+                                                   Coverage, deadline=until, max_steps=steps(until, 6, 18),
                                                    tools=(open_pages,), **_worker_kwargs(notes=False, grounded=False))
                 finally:
                     await self._close(session)
