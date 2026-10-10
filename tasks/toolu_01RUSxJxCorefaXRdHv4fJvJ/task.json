@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01RUSxJxCorefaXRdHv4fJvJ",
+  "agent_id": "affb9add17bc3753b",
+  "subagent_type": "general-purpose",
+  "task_description": "Speed up bid flow: thinking by phase",
+  "token_usage": {
+    "input_tokens": 164,
+    "cache_creation_tokens": 166512,
+    "cache_read_tokens": 10595995,
+    "output_tokens": 53569,
+    "api_call_count": 82
+  },
+  "started_at": "2026-10-10T18:17:36.069634+02:00",
+  "completed_at": "2026-10-10T18:56:20.275296+02:00"
+}
