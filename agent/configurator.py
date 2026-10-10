@@ -184,12 +184,17 @@ async def fill_position(session, entry: dict, plan: FillPlan, log: list[str],
     """
     picked = {clean(label): text for label, text in (choices or {}).items()}
     answer_keys = MONEY_KEYS | COUNT_KEYS | {"material_number", "position"}
+    # a position counts as entered only with its material, quantity, price and lead time (the material control
+    # opens only once the choices before it are made)
+    unmapped = sorted(set(REQUIRED_KEYS) - {"position"} - set(plan.fields.values()))
+    if unmapped:
+        return f"no control mapped for {', '.join(unmapped)}: add them to fields"
     view = await session.look()
     order = {clean(label): i for i, (_, _, label) in enumerate(controls(view))}
     mapping = sorted(plan.fields.items(), key=lambda item: order.get(clean(item[0]), len(order)))
     for label, key in mapping:
         if key not in entry:
-            log.append(f"{label}: left blank (no value for {key})")
+            log.append(f"{label}: left empty (this bid gives no value for it, which is fine)")
             continue
         value = form_value(key, entry[key])
         for attempt in range(2):

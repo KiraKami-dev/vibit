@@ -17,6 +17,7 @@ import browser_tools
 import llm
 from briefing import Briefing
 from browser_tools import Deps, SiteSession
+from calc import position_key
 from configurator import FillPlan, complete_positions, fill_position, german, position_on_page
 from extract import locate
 from pydantic import BaseModel, Field
@@ -178,12 +179,13 @@ class PositionDesk:
         """
         session, plan, position = ctx.deps.session, self.plan, position.strip()
         known = set().union(*self.entries.values()) - {"position"}
-        if fields:
-            plan.fields = {label: name.strip() for label, name in fields.items()}
-            unknown = sorted({name for name in plan.fields.values() if name not in known})
+        if fields:  # later calls add to or correct the mapping, they never drop what was mapped before
+            given = {label: name.strip() for label, name in fields.items()}
+            unknown = sorted({name for name in given.values() if name not in known})
             if unknown:
-                plan.fields = {}
                 return f"Unknown value names {unknown}; use only: {', '.join(sorted(known))}. Call again."
+            plan.fields = {label: name for label, name in plan.fields.items() if name not in given.values()}
+            plan.fields.update(given)
         if confirm_button:
             plan.confirm = confirm_button
         entry = self.entries.get(position)
@@ -216,14 +218,17 @@ class PositionDesk:
         return (f"Position {position} entered: {'; '.join(log)}. Check it, then save and continue with the form's "
                 f"next/continue button.\n\n{view}")
 
+    def entry_total(self, position: str) -> Decimal:
+        entry = self.entries[position]
+        return Decimal(str(entry["quantity"])) * Decimal(str(entry["unit_price"]))
+
     def total(self, omitted: set[str] = frozenset()) -> Decimal:
-        return sum((Decimal(str(self.entries[p]["quantity"])) * Decimal(str(self.entries[p]["unit_price"]))
-                    for p in self.entered - omitted), Decimal(0))
+        return sum((self.entry_total(p) for p in self.entered - omitted), Decimal(0))
 
     def expected(self) -> str:
         """What the review should show for each position entered, for the summary check and the signing pass."""
         lines = []
-        for p in sorted(self.entered):
+        for p in sorted(self.entered, key=position_key):
             e = self.entries[p]
             extra = ", ".join(f"{label} {german(e[key])}" for key, label in (
                 ("base_unit_price", "base price"), ("surcharge_per_unit", "surcharge per piece"),
@@ -254,7 +259,8 @@ def _positions(answer: dict | None, desk: PositionDesk, filled: bool) -> str:
                 f"alternative offer); no positions;\n- discount {discount} and net total 0,00;")
     head = "- decision: bid (main offer, not an alternative offer);\n"
     if filled and desk.entered:
-        return head + (f"- these positions entered with exactly these values:\n{desk.expected()}\n"
+        return head + (f"- exactly {len(desk.entered)} position(s) entered, each with these values:\n"
+                       f"{desk.expected()}\n"
                        "- every other position omitted, and no added or extra position;\n"
                        f"- discount {discount} and net total {german(desk.total())} (German number format; never a "
                        "gross amount);")
@@ -265,9 +271,9 @@ def _positions(answer: dict | None, desk: PositionDesk, filled: bool) -> str:
                        "number format);")
     names = sorted({key for entry in desk.entries.values() for key in entry} - {"position"})
     return head + f"""- enter exactly these positions: {', '.join(sorted(desk.entries))}. The form shows one position
-  at a time, in its own order: read which position is on screen and call configure_position() for it, which enters
-  all its values; then save and continue with the form's next/continue button. Never pick options or type position
-  values yourself;
+  at a time, in its own order. On every position page, first call configure_position() with the number the page
+  shows: it enters all values of a position of this bid, or tells you to omit it. Then save and continue with the
+  form's next/continue button. Never pick options or type position values yourself;
 - configure_position() needs, once, which control takes which value: map each control's label (as your view shows
   it) to one of these value names: {', '.join(names)}. Choices that open further choices (attributes of the
   material) map to the attribute with the same meaning; the material/catalogue number control to material_number;
@@ -277,9 +283,9 @@ def _positions(answer: dict | None, desk: PositionDesk, filled: bool) -> str:
 - leave out, with the form's option to omit a position, every other position and any position where
   configure_position() reports a problem it cannot resolve. Never use options that add positions; if the form
   shows an extra position you did not ask for, remove it or leave it out;
-- discount {discount}; net total: what net_total() returns once the positions are done (pass positions you entered
-  but left out after all). Enter both as written (German number format), never a gross amount or a sum the page
-  proposes;"""
+- discount {discount}; net total {german(sum((desk.entry_total(p) for p in desk.entries), Decimal(0)))} when every
+  position above was entered, otherwise what net_total() returns. Enter both exactly as written here (German number
+  format), never a sum you work out yourself, a gross amount or a sum the page proposes;"""
 
 
 def _requirements(briefing: Briefing, email: str, answer: dict | None = None, desk: PositionDesk | None = None,
