@@ -1,0 +1,347 @@
+How does the submission work? Like the 20min part and so? And why are there so many people running test runs but only two elegible on the leaderboard?
+
+---
+
+Please check then on the website or so. Or create some project claude md with digging in this with subagents etc and providing general good context into it: 
+
+<pasted_content id="c659">
+This is the start of the #atira channel. 
+Elia — 11:02
+Hi all!
+
+Feel free to reach out either via chat or in-person in case you have any questions ^^
+
+We optimized the challenge to work really well for coding agents (through mcp/cli) - just point your agent at the url and it'll walk you through onboarding and can then get going re: implementation and submissions (first-class debug support for the sandboxed runs etc. included) - good luck, happy hillclimbing & make sure to melt our GPUs!
+
+https://ehl-challenge.atira.ai/ 
+Atira EHL Challenge
+Atira EHL Challenge
+Build an AI agent that works through the software a sales engineer uses every day: a tender portal, a supplier portal, an ERP and a webmail inbox.
+Atira EHL Challenge
+Elia — 13:50
+@everyone
+
+We've bumped the concurrent test runs allowed per team to 4 to aid with iteration speed and will keep adjusting as time goes on & capacity holds up - time to fill the 1TB of DDR5 on the runners ;)
+
++ fixed an issue w/ linking gh repos
++ "stage" page w/ token count now public @ https://ehl-challenge.atira.ai/challenges/rfq/stage
++ live tok count now also on the landing page
++ autoscaler rn is at just one B200 for qwen (peak ~50'000 TPS), gotta pump those numbers
+
+See: https://ehl-challenge.atira.ai/announcements
+
+Besides, but important: I'd strongly recommend keeping GitHub repositories private (!)
+
+We were just told by some peers that their repos are public - I'd strongly advise to keep repositories private and link them to your team on the platform. Public ones can be found quite easily and other teams could copy / profit off your work, which would (presumably) be unfortunate.
+
+Currently there's not yet much to profit off, but at later stages it'd get ugly w/ copying. Feel free to turn the repos public after the hackathon is over though :) 
+</pasted_content id="c659">
+
+---
+
+Let some Opus subagents review it and improve it.
+
+---
+
+<task-notification>
+<task-id>a7ef24543be0d0d88</task-id>
+<tool-use-id>toolu_01AtSmAPHTQ3tKHDFx1qK4mS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/489c5ab0-057b-4583-b76a-581eee01412c/tasks/a7ef24543be0d0d88.output</output-file>
+<status>completed</status>
+<summary>Agent "Review rules/scoring accuracy" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The file is mostly accurate in my slice: one misleading claim, several understatements, and the biggest gap is that no_bid's answer shape and scoring are missing. I made no edits.
+
+**(1) Wrong or misleading**
+
+1. **Quality points, line 71:** "positions share the remaining 75" is misleading. Positions get 75 minus whichever checks are present, so 65 when both the withdrawn-quantity and metal-index checks exist (scoring.md:79, rfq.md:129).
+2. **Quality points, lines 71-73:** these are the bid-case weights only. For no_bid the split is decision 75, reference 5, no positions 5, total of 0 worth 15 (scoring.md:82). Calling the wrong decision "costs quality points" (line 65) understates it: in a no_bid case it costs 75 of 100.
+3. **Line 30:** "bidder Q&amp;A (changes quantities)" understates the Q&amp;A. It also withdraws earlier answers (rule 13) and carries scoped spec amendments (rule 14). It assigns the Konditionsgruppe (rule 12), packaging tariff key (rule 23), delivery commitment key (rule 24) and setup-pool members (rule 25). It is the hub for most rules.
+4. **Line 32:** the ERP row is missing pieces per carton and allocation mass, which is distinct from surcharge mass (rules 23, 25). It also omits the active-status codes that rule 3 depends on.
+5. **Line 92:** slightly off. Notes addressed to the reviewer do not count against you on their own; instructions that try to steer its verdict do (fair-play.md:52-53).
+6. **Line 38:** `task["answer_schema"]` is likely the starter kit's variable name. The platform field is `answer_schema` in `GET /v1/runs/current` (rfq.md:161).
+
+**(2) Missing rules that would hurt the agent, by impact**
+
+1. **no_bid shape:** `decision: no_bid`, no positions, `total_net` 0 (rule 8). A conditional discount approval yields 0 % (rule 16). Omitting positions is not a substitute for no_bid (rule 9). The material match is checked after amendments and the nutzbarer Weg derivation (rules 14, 20).
+2. **Authority and time (rule 21):** use only the latest record dated no later than the scenario date, for the exact tender reference. The sender must be the right local part plus the bidder mailbox domain (technik@, logistik@, finanzen@, kalkulation@). Future-dated records never apply, and a failed condition does not bring back an older record. This is the main defence against look-alike mails.
+3. **Signing:** you must sign with the TAN and submit; saving alone scores nothing (rule 9, scoring.md:68). Line 58 only mentions the TAN for partial bids.
+4. **Reporting conventions (rules 12, 18, 23, 25, 26):**
+   - `surcharge_per_unit` is reported before discount and covers mass surcharge plus ordinary and allocated setup.
+   - Setup fees and packaging are never discounted.
+   - `rebate_total` is for the whole position, not per piece.
+   - `0.00` means a known zero; blank means unanswered.
+5. **Conditional discount (rule 16):** the threshold uses the undiscounted per-position scale prices and excludes surcharges and setup. It is inclusive. If it fails, use 0 % with no fallback to an older approval.
+6. **Positions:** they are matched by position number, and each extra or duplicate position costs one position's share. Money is compared to the cent (scoring.md:85-86).
+7. **Per position, not per material:**
+   - Price scales are per position even when stock is pooled by material (rule 15).
+   - A delivery commitment applies only if its material matches and pooled demand is within its inclusive ceiling, so it can differ per position (rule 24).
+   - The FX-converted base price feeds every later calculation, including the discount threshold (rule 22).
+   - The metal-index rate is the one whose inclusive window contains the scenario date, not the last one listed (rule 28).
+8. **Fair play:** a fixed script where the model is used "only as a fallback" is also rejected. Helpers must not assemble the full evidence before the model directs the investigation (fair-play.md:38, rule 11).
+9. **Tiebreak:** the fourth tiebreak is submission ID (scoring.md:34). Low value.
+
+**(3) Cut candidates**
+
+- The parenthetical rule list on lines 36-37 duplicates the brief. Either cut it or replace it with the five traps in point 2 above.
+- Lines 71-73 could be one line pointing to rule 29 plus the corrected "75 minus checks" and the no_bid weights.
+- Outside my slice: the "Why the leaderboard has few entries" section is a dated snapshot and low value for whoever builds the agent.
+- Line 20 says the scouting logins need sign-in, but `challenges/rfq.md` (lines 84-89) shows them publicly. That makes the no-hardcoding warning more important, not less.</result>
+<usage><subagent_tokens>62958</subagent_tokens><tool_uses>6</tool_uses><duration_ms>43559</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4cb9cda426915739</task-id>
+<tool-use-id>toolu_013igwiRdanw81urf9F1Nsxb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/489c5ab0-057b-4583-b76a-581eee01412c/tasks/a4cb9cda426915739.output</output-file>
+<status>completed</status>
+<summary>Agent "Review mechanics/CLI accuracy" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Most of my slice checks out against the docs. I found no outright factual errors, just one unverifiable claim and several gaps.
+
+**Confirmed correct:** test-run 2 h vs scored 20 min; setup up to 5 min with network, not timed; time runs from the start of the `run` command to the accepted answer; 400 keeps the clock running; `seconds_left` plus "submit about a minute early"; `browsers` 1 to 4; 20 MB package; one submission in flight (429). Also correct: the Qwen and Clef prices and the 32 and 16 concurrency limits, `QWEN_*` / `CLEF_*`, `--best-of 3` costing up to 3x on own keys, the local dev commands, and the MCP add line.
+
+## 1. Wrong or unverifiable
+- **Concurrency "(raised by organizers, may change)":** I can't verify the "raised" part. docs_api.md "The run queue" says up to 4 test runs run at once, up to 3 more can wait, and one more gets 429.
+- **Score breakdown "same" for both kinds of run:** true on the public dataset. The final private run shows quality, eligibility, cost and time with no breakdown, and its logs have private values replaced by `[private]` (docs_scoring.md, docs_api.md).
+- **`models` in `agent.json`:** the doc doesn't say what happens when the field is missing. Without it the run waits for every hosted model. The starter kit sets `["qwen"]`, so if you start using Clef, add `"clef"`. Otherwise Clef may still be warming up when your timed run starts (run-contract "Scored run").
+- **Package limits:** besides 20 MB, the limits are 2,000 files and 5 MB per file. `.gitignore` exclusions apply (docs_cli.md).
+
+## 2. Missing practical info
+- **Setup vs run:** setup gets no run variables and no team secrets, and nothing it starts carries over into the run. Model warm-up (up to 10 min) is also not timed.
+- **Team secrets:** max 20; names in capitals, digits and underscores; reserved names are refused (`CHALLENGE_*`, `*_BASE_URL`, `*_PROXY`, `CDP_URL(S)`, `BROWSER_COUNT`, ...). They can also be managed with `PUT/GET/DELETE /v1/teams/me/secrets/&lt;NAME&gt;`. Values are redacted from logs. Source: run-contract "Team secrets".
+- **Sandbox environment:** `CDP_URL`, `CDP_URLS` (JSON array), `BROWSER_COUNT`, and `DISPLAY` (`:n`). `HTTP(S)_PROXY=127.0.0.1:3128` is the only way out, with `NO_PROXY=localhost,127.0.0.1`. Any custom HTTP client must respect these. Locally `CDP_URLS` is not set and the kit launches its own Chromium (`HEADLESS=1` hides it). `browsers.connect(playwright, 1)` attaches to browser 2, since the index starts at 0.
+- **User-Agent:** send your own. The API answers Python's default `Python-urllib` with 403.
+- **After a 202:** the agent has 10 s to exit before the platform stops it.
+- **CLI commands to add:**
+  - `atira cancel &lt;run_|reh_&gt;` (409 / exit 6 if the run already finished)
+  - `atira logs &lt;run&gt; --follow`
+  - `atira status [id]`, which also shows the best-of choice
+  - `atira package &lt;id&gt; --out`
+  - `atira final` with no flag shows the current choice; `--best-of 1` opts out
+  - `test-run --dry-run` shows what would be uploaded
+  - `atira upgrade` fixes "Unknown command: models"
+- **Exit codes:** 3 not signed in, 5 bad package, 6 busy/429, 7 `--follow` run failed or timed out. Worth noting for scripts.
+- **MCP tools that pay off when debugging:** `diagnose_run` (failure class plus last stderr), `run_logs` (grep and time range), `run_llm_calls` (cost, p50/p95 latency, queue wait), `run_profile` (critical path, idle stretches), `run_screenshot`, `compare_runs`, `cancel_run`. Failure classes: `platform`, `agent_exit`, `timeout`, `cancelled`, `no_answer`, `answer_rejected`.
+- **Platform failures:** if the hosted models were down for most of a run that ended with no answer, the run doesn't count, and a scored run restarts once by itself.
+- **Measuring cost:** `/v1/runs/current` shows spend so far, `GET /v1/models/status` lists hosted-model prices, and `run_llm_calls` gives per-model totals. Cached input and thinking tokens are billed; a call with no reported cost is charged the highest published price; there is no spending limit.
+- **Install:** after installing, run `export PATH="$HOME/.local/bin:$PATH"` (start.md).
+- **Local proxy:** `atira models proxy` listens on port 8765. Use `--port` together with `atira scout --env --port`.
+
+## 3. Cut
+- The "(raised by organizers, may change)" aside.
+- Models bullet 3 ("Locally: ..."): it repeats the dev-loop block word for word.
+- The "Cold start can take minutes" warning applies only locally, since warm-up isn't timed in runs. Shorten it to "locally, use long timeouts (kit: 360 s)".
+- Outside my slice, but "Why the leaderboard has few entries" is a dated snapshot (2026-10-10) and will go stale.</result>
+<usage><subagent_tokens>82197</subagent_tokens><tool_uses>11</tool_uses><duration_ms>57191</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a195a5022644be2ee</task-id>
+<tool-use-id>toolu_01F2jkxtN61PYqhe4zpjY5gU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/489c5ab0-057b-4583-b76a-581eee01412c/tasks/a195a5022644be2ee.output</output-file>
+<status>completed</status>
+<summary>Agent "Review structure and agent design" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found no rule violations in the file, and its links are right. Two things need fixing: the leaderboard section presents guesses as facts, and there is no architecture section.
+
+**Constraint check (point 3).** Clean. There are no em or en dashes. There are no scouting logins, TANs, tokens, emails or GitHub handles. The file correctly points to `atira scout` instead of storing logins.
+
+**Point 1: structure and redundancy.**
+- The order mostly works: links, the task, how runs work, ranking, fair play, models, the dev loop.
+- Move "Fair play" up to sit right after "The task". It is the section most likely to get a package rejected.
+- Delete the "Quality points" paragraph and point to `docs/scoring.md#rfq-scoring` and rule 29. It copies them, and the copy will go stale.
+- In "Models", cut the prices and concurrency limits down to a link to `start.md#models`. Keep only the env var names and the warning about slow cold starts.
+- The site table uses platform siteIds (`tender-portal`, `erp`). Add one line: "These are public-1 names; the private set renames and re-splits sites. Never branch code on siteId or URL."
+- The leaderboard snapshot you gave me shows **error404.ai already has one submission that passed review**. If that was the empty starter kit, it is currently the "latest passed submission" that goes into the final run. The file should say this, or say what that submission was.
+
+**Point 2: are the inferences labelled honestly?**
+- "Design notes" is honest. Almost every bullet traces to `building-an-agent.md` or rules 10 and 27.
+- "Why the leaderboard has few entries" is not. "Many teams run test runs" is a guess, not doc-backed. "The 2 s run is a crash/early exit" is stated as fact. "The 19:26 run likely timed out" is weak: 00:19:26 is a run length, under the 20-minute limit, and "19:26" reads like a clock time.
+- This section doesn't help a coding session at all. Drop it, or cut it to: "Snapshot 2026-10-10 (inference, unverified): test runs never appear; ineligible means no answer or wrong reference."
+
+**Proposed replacement for "Design notes for the agent":**
+
+```markdown
+## Architecture (target)
+
+- Orchestrator: reads `brief`, `access`, `answer_schema`, `expires_at`. Asks the model to map each
+  `access` entry to a role (tender, spec, ERP, mail) from its landing page. No siteId/URL branching.
+- Four sub-agents, one per browser (`"browsers": 4`, `CDP_URLS`). Each runs its own tool loop with
+  tools: goto/click/fill/read_text/screenshot, plus helpers for retry, re-login, cookie walls,
+  iframe/ZIP extraction and paging through a result set the model picked. The model chooses every
+  target and search (rules 10, 11). Each returns typed facts that cite where they came from
+  (page, date, sender, reference).
+- Fact store: dated records per key. A pure resolver picks the latest exact-reference record no
+  later than the scenario date and ignores withdrawn ones (rules 1, 5, 13, 14, 21, 28). It flags
+  conflicts back to the model; it never guesses.
+- `calc.py`: deterministic, `Decimal` + `ROUND_HALF_UP`, no model calls. Covers rules 4, 7, 15,
+  16, 17, 20, 22, 23, 24, 25, 26, 27: scale selection, FX, carton ceil, shared stock, threshold
+  test, largest-remainder cent allocation (ties ascending position), and one final rounding on
+  unrounded components.
+- Validation before submit: schema check, total equals the sum of quantity times unit price,
+  integer pieces, positions match the bill of quantities, no_bid shape. Then the model fills the
+  configurator and re-reads it to confirm.
+- Deadline guard: a watchdog on `run.seconds_left`. At about 90 s left, omit unfinished
+  positions, sign with the TAN and submit (rule 9). Fetch the TAN early.
+- Generalisation: prompts describe roles and rules, never public-1 values. Facts come only from
+  pages read during the run.
+
+## Tests
+
+- `calc.py` unit tests on invented numbers: half-up edge cases (x.xx5), allocation ties,
+  threshold equality, set-to-piece conversion, marginal bands.
+- Resolver tests with invented dated records: superseded, withdrawn, future-dated, look-alike
+  references.
+- Per-part points from the test run show which part is wrong: zero surcharge points means
+  checking rule 25 inputs, not prompts. Log extracted facts with their sources to compare.
+- Never copy public-1 values into fixtures or prompts.
+```
+
+This stays within fair play. A model picks every navigation and document. The helpers only do the jobs `fair-play.md` explicitly allows: parsing, paging a model-chosen set, calculating, validating, retrying and filling forms.
+
+I edited nothing. Everything above comes from `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/CLAUDE.md` checked against the job docs folder and `agent/`.</result>
+<usage><subagent_tokens>77232</subagent_tokens><tool_uses>12</tool_uses><duration_ms>59500</duration_ms></usage>
+</task-notification>
+
+---
+
+Which models are available for us to get from them?
+
+---
+
+Qwen3.8-Flash-Next how many parameters is this?
+
+---
+
+And the Clef is a decision model as Jev?
+
+---
+
+Also loop up jef
+
+---
+
+What is a worker here? Or that four parallel thingy? And how does it actually work with submitting / running those browsers?
+
+---
+
+Can we somehow get the full html in their sandbox? Or do we do need to use agents for this?
+
+---
+
+What if we put the entire html in Clef?
+
+---
+
+Can you add this context / see if there is sth important? https://ehl-challenge.atira.ai/llms.txt https://ehl-challenge.atira.ai/openapi.json
+https://ehl-challenge.atira.ai/docs/cli.md /Users/jonasstenglein/Downloads/message-2.txt
+
+---
+
+Do some review agents to check if CLAUDE.md is in a good state?
+
+---
+
+<task-notification>
+<task-id>af6b9fa9505a04f50</task-id>
+<tool-use-id>toolu_01UZKxwbPP9NwYg7Ji3nFA6b</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/489c5ab0-057b-4583-b76a-581eee01412c/tasks/af6b9fa9505a04f50.output</output-file>
+<status>completed</status>
+<summary>Agent "Usability review of CLAUDE.md" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verdict on the project CLAUDE.md for the agent/ build
+
+**1. Length and order**
+
+The file is about 2,290 words, which is too long to load every session. It also puts reference material first and the build material last: a fresh session reads platform links, event facts, runs and ranking before it finds out what to build.
+
+Repeated from the linked docs, so it should shrink to links:
+- the Runs/submissions table and the setup/package/agent.json bullets (run-contract.md, submitting.md);
+- the whole "Ranking and winning" weights paragraph (scoring.md);
+- the "Models" section (start.md#models);
+- the debugging paragraph with its MCP tool list, failure classes and exit codes (cli.md, mcp.md).
+
+Stale-prone facts to remove:
+- line 114, the "Snapshot 2026-10-10" leaderboard numbers;
+- line 81, "4 running per announcement (FAQ says 5; organizers keep raising it)". The docs themselves disagree here: the FAQ says 5 and submitting.md says 4;
+- line 19, the event date line.
+
+**2. What a fresh session still would not know**
+
+- **What agent/ contains now.** `llm.py`, `extract.py`, `browser_tools.py`, `worker.py` and `tracing.py` already exist (uncommitted). `calc.py`, `roles.py`, `evidence.py` and `submit.py` do not. `solve()` is still the empty stub.
+- **That `docs/plan.md` exists.** It holds the framework decision (pydantic-ai, no LangGraph), the module layout and the v0 to v4 roadmap. CLAUDE.md never mentions it. Its "Architecture (target)" section partly duplicates plan.md and differs from it (plan.md uses role workers; CLAUDE.md has one sub-agent per browser).
+- **That `dev/smoke.py` is the v0 check,** and that it runs from the repo root.
+- **Where commands run.** The table uses `./agent` from the repo root, but the dev loop does `cd agent` and then `atira test-run .`.
+- **A config gap.** `agent.json` has no `browsers` key, so it gets the default of 1, while the architecture assumes 4.
+- **The next concrete step.** Nothing says it is "finish v0, then v1 eligible signed bid".
+
+**3. Compliance**
+
+- No em dashes, no credentials, no emails.
+- `josteng` is a handle (fine). But "follow the global conventions" points to a private file teammates don't have, so the rules should be written out.
+- Fair play: nothing in it encourages hardcoding. The one risk is that plan.md is full of site-specific scouting notes from the public-1 dataset (transaction codes, tab URLs, the "Nebenangebot" default). If CLAUDE.md links to it, it needs a line saying those notes must never become code paths or prompts.
+
+**4. Proposed edits, ranked by value**
+
+1. **Top: new section "Status and layout"** (old: none). One table of the files in agent/ marked existing or planned, plus pointers to docs/plan.md (decisions, roadmap) and dev/smoke.py, plus "Next: finish v0 (smoke passes on all four sites), then v1".
+2. **Ranking, line 114** (old: the "Snapshot 2026-10-10..." bullet). New: "Check `atira status` for our current final candidate."
+3. **Runs and submissions plus Models** (old: the table and 7 bullets, about 450 words). New: 4 bullets that docs readers miss: send your own User-Agent, submit about 60 s before `expires_at`, every submit replaces the final candidate (confirm with the team), and every model call is billed at its simulated price. Then links.
+4. **Local dev loop** (old: `cd agent ... atira test-run .`). New: one working directory (repo root) and `atira test-run ./agent`. Cut the debugging paragraph to "see cli.md / mcp.md; use `atira mcp`".
+5. **Architecture (target)** (old: 6 bullets). New: "See docs/plan.md#architecture", keeping only the fair-play line and the calc.py rules (Decimal, ROUND_HALF_UP).
+6. **Team conventions** (old: "follow the global conventions"). New: spell out the author, no trailers, never stage `.claude/`, and ask before any push or PR.
+7. **Platform links, line 19** (old: the event facts line). New: delete it, keep the demo-day pointer.
+8. **Fair play** (old: none). Add: "docs/plan.md scouting notes are public-1 only; never encode them."
+9. **Ordering.** Put Status/layout first, then Fair play, then Traps, then Commands, with Links last.</result>
+<usage><subagent_tokens>52638</subagent_tokens><tool_uses>4</tool_uses><duration_ms>42042</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a003c6e1270276714</task-id>
+<tool-use-id>toolu_019H838S3aDwgoZmAK9k4scm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/489c5ab0-057b-4583-b76a-581eee01412c/tasks/a003c6e1270276714.output</output-file>
+<status>completed</status>
+<summary>Agent "Fact-check CLAUDE.md vs docs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found 13 problems in `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/CLAUDE.md`. No files were edited. Doc file names below are in `/Users/jonasstenglein/.claude/jobs/489c5ab0/tmp/docs/`, and `message-2.txt` is the newer challenge page. Everything not listed checks out.
+
+**Wrong or unsupported**
+1. **L16, `/challenges/rfq/stage`:** this path appears in no doc. The closest is `GET /v1/challenges/{id}/tokens`, the hosted models' token counter (openapi.json).
+2. **L6, "every page is also Markdown":** only the public pages are: home (`/index.md`), start, the challenge, its leaderboard and team profiles (llms.txt, start.md).
+3. **L81, test-run concurrency:** 4 running at a time comes from docs_api.md ("the run queue") and docs_submitting.md, not an announcement. "Organizers keep raising it" has no source; only docs_faq.md says 5.
+4. **L60, no_bid "discount 0":** rule 16 sets 0 % only for a *conditional* approval. no_bid scoring has no discount field (docs_scoring.md).
+5. **L67 and L176, "round only at the end" / "single final rounding":** this contradicts rule 22 (FX base rounded HALF_UP to cents first). Rules 16 and 26 also round the threshold value and the aggregate bonus.
+6. **L175, largest-remainder allocation:** that applies to the project bonus (rule 26). The setup pool (rule 25) uses "the cent-allocation rule in that mail".
+7. **L190, zero surcharge points mean rule 25 inputs:** surcharge also covers the material/mass surcharge (rules 12, 28) and the ordinary setup fee (docs_scoring.md).
+8. **L109, "every `atira submit` replaces what goes into the final":** only a submission that *passes review* does; rejected or disqualified ones don't count (docs_submitting.md).
+9. **L126, "SIMULATED price" for every call:** simulated prices apply to the hosted models only. Own-key calls are metered at the providers' published prices (docs_run-contract.md).
+10. **L94, secret names:** they must also start with a letter, can't use platform variable names (`CHALLENGE_*`, `*_BASE_URL`, …), max 20 per team, values 16 chars to 4 KB (docs_run-contract.md).
+11. **L93, package limits:** missing the 20 MB *uncompressed* total (docs_cli.md).
+
+**Internally contradictory**
+12. **Deadline margin:** L90 says submit "about a minute before" `expires_at`, L179 says "about 90 s".
+
+**Stale-prone**
+13. **L114-117, leaderboard snapshot:** it matches message-2.txt today (error404.ai: 2 submissions, quality 0, not eligible, $0.00, 25 s). But "that latest passed submission is the current final candidate" is inference: the board shows the best submission, not the latest.
+
+**Minor**
+- **L78, "answer after `expires_at` scores 0":** supported only by the starter kit's `agent/run.py`, not the platform docs.
+- **L90, `run.seconds_left`:** a kit helper (`seconds_left(run)` in `agent/run.py`), not an API field.
+- **L134, "CLI needs Node 24":** the installer offers its own private Node 24 if missing (docs_cli.md).
+
+**Verified and correct**
+- **URLs:** all doc pages, `/llms-full.txt`, `/openapi.json`, `leaderboard.md`, `/runs/&lt;id&gt;`, `/v1/announcements`, `/v1/runs/current`, `/v1/runs/{id}/feed|logs/query|llm-calls|frame?t=`, `/v1/models/status` (warm GPU status), `PUT /v1/teams/me/secrets/{name}`.
+- **CLI:** `login`, `token`, `upgrade`, `scout [--env]`, `models proxy` (8765), `test-run --dry-run/--follow`, `submit --follow`, `cancel`, `final --best-of 1|3`, `status [id]`, `logs --follow`, `package --out`, `mcp`, `--json`.
+- **Env vars:** `ATIRA_TOKEN`, `QWEN_`/`CLEF_BASE_URL`/`_API_KEY`, `CDP_URLS`, `DISPLAY=:n`, `HTTP(S)_PROXY` on 3128, `OPENAI_BASE_URL`/`OPENAI_API_KEY`, `SSL_CERT_FILE`. `HEADLESS=1` and the 360 s timeout come from the starter kit, not the docs.
+- **MCP tools:** all 12 named exist.
+- **Failure classes:** match the openapi enum exactly.
+- **Exit codes 3/5/6/7:** correct but partial. 5 also covers 400/413, 6 also a submission already in evaluation (409/429), 7 also `submit --follow` not completing.
+- **Rules:** the 29-rule count, rule numbers, site ids, scoring weights (bid 5×5, no_bid 75), ranking order, best-of-3 and the hosted model limits all match message-2.txt and docs_scoring.md.</result>
+<usage><subagent_tokens>112554</subagent_tokens><tool_uses>22</tool_uses><duration_ms>118521</duration_ms></usage>
+</task-notification>

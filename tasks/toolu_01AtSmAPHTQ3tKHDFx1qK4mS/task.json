@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01AtSmAPHTQ3tKHDFx1qK4mS",
+  "agent_id": "a7ef24543be0d0d88",
+  "subagent_type": "general-purpose",
+  "task_description": "Review rules/scoring accuracy",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 59456,
+    "cache_read_tokens": 128864,
+    "output_tokens": 707,
+    "api_call_count": 4
+  },
+  "started_at": "2026-10-10T16:24:49.960514+02:00",
+  "completed_at": "2026-10-10T16:25:33.453997+02:00"
+}

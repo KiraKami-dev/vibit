@@ -1,0 +1,207 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4K5VBJRJ0N0XFVSTGRJV544",
+  "session_id": "489c5ab0-057b-4583-b76a-581eee01412c",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-10T15:10:38.366821Z",
+  "branch": "main",
+  "checkpoints_count": 15,
+  "save_step_count": 10,
+  "files_touched": [
+    "CLAUDE.md",
+    "agent/.gitignore",
+    "agent/browsers.py",
+    "agent/pyproject.toml",
+    "agent/uv.lock"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "694444ca0bc2",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 92,
+    "cache_creation_tokens": 142132,
+    "cache_read_tokens": 4571044,
+    "output_tokens": 38589,
+    "api_call_count": 43,
+    "subagent_tokens": {
+      "input_tokens": 70,
+      "cache_creation_tokens": 317605,
+      "cache_read_tokens": 1942661,
+      "output_tokens": 29525,
+      "api_call_count": 35
+    }
+  },
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-10T15:10:38.310982Z",
+    "agent_lines": 97,
+    "agent_removed": 0,
+    "human_added": 4895,
+    "human_modified": 36,
+    "human_removed": 0,
+    "total_committed": 5028,
+    "total_lines_changed": 5028,
+    "agent_percentage": 1.9291964996022277,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 263,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1252,
+      "user_lines_removed": 43,
+      "agent_lines_added": 303,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "agent/.gitignore": 1,
+        "agent/browser_tools.py": 336,
+        "agent/browsers.py": 15,
+        "agent/extract.py": 200,
+        "agent/llm.py": 29,
+        "agent/pyproject.toml": 5,
+        "agent/tracing.py": 21,
+        "agent/uv.lock": 419,
+        "agent/worker.py": 90,
+        "dev/smoke.py": 58,
+        "docs/plan.md": 78
+      },
+      "user_removed_per_file": {
+        "agent/pyproject.toml": 1,
+        "agent/uv.lock": 33,
+        "docs/plan.md": 9
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 812,
+      "user_lines_removed": 9,
+      "agent_lines_added": 743,
+      "agent_lines_removed": 34,
+      "user_added_per_file": {
+        "agent/browser_tools.py": 336,
+        "agent/extract.py": 200,
+        "agent/llm.py": 29,
+        "agent/tracing.py": 21,
+        "agent/worker.py": 90,
+        "dev/smoke.py": 58,
+        "docs/plan.md": 78
+      },
+      "user_removed_per_file": {
+        "docs/plan.md": 9
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 812,
+      "user_lines_removed": 9,
+      "agent_lines_added": 743,
+      "agent_lines_removed": 34,
+      "user_added_per_file": {
+        "agent/browser_tools.py": 336,
+        "agent/extract.py": 200,
+        "agent/llm.py": 29,
+        "agent/tracing.py": 21,
+        "agent/worker.py": 90,
+        "dev/smoke.py": 58,
+        "docs/plan.md": 78
+      },
+      "user_removed_per_file": {
+        "docs/plan.md": 9
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 813,
+      "user_lines_removed": 9,
+      "agent_lines_added": 743,
+      "agent_lines_removed": 34,
+      "user_added_per_file": {
+        "agent/browser_tools.py": 336,
+        "agent/extract.py": 200,
+        "agent/llm.py": 30,
+        "agent/tracing.py": 21,
+        "agent/worker.py": 90,
+        "dev/smoke.py": 58,
+        "docs/plan.md": 78
+      },
+      "user_removed_per_file": {
+        "docs/plan.md": 9
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 822,
+      "user_lines_removed": 9,
+      "agent_lines_added": 743,
+      "agent_lines_removed": 34,
+      "user_added_per_file": {
+        "agent/browser_tools.py": 343,
+        "agent/extract.py": 200,
+        "agent/llm.py": 30,
+        "agent/tracing.py": 23,
+        "agent/worker.py": 90,
+        "dev/smoke.py": 58,
+        "docs/plan.md": 78
+      },
+      "user_removed_per_file": {
+        "docs/plan.md": 9
+      }
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 880,
+      "user_lines_removed": 9,
+      "agent_lines_added": 764,
+      "agent_lines_removed": 34,
+      "user_added_per_file": {
+        "agent/browser_tools.py": 384,
+        "agent/extract.py": 200,
+        "agent/llm.py": 44,
+        "agent/tracing.py": 23,
+        "agent/worker.py": 93,
+        "dev/smoke.py": 58,
+        "docs/plan.md": 78
+      },
+      "user_removed_per_file": {
+        "docs/plan.md": 9
+      }
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1635,
+      "agent_lines_removed": 34
+    },
+    {
+      "checkpoint_number": 10,
+      "user_lines_added": 8,
+      "user_lines_removed": 2,
+      "agent_lines_added": 1635,
+      "agent_lines_removed": 34,
+      "user_added_per_file": {
+        "agent/extract.py": 6,
+        "agent/worker.py": 2
+      },
+      "user_removed_per_file": {
+        "agent/extract.py": 2
+      }
+    }
+  ]
+}

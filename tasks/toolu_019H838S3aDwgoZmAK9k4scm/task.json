@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019H838S3aDwgoZmAK9k4scm",
+  "agent_id": "a003c6e1270276714",
+  "subagent_type": "general-purpose",
+  "task_description": "Fact-check CLAUDE.md vs docs",
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 110636,
+    "cache_read_tokens": 955483,
+    "output_tokens": 9775,
+    "api_call_count": 13
+  },
+  "started_at": "2026-10-10T17:04:39.41536+02:00",
+  "completed_at": "2026-10-10T17:06:37.846631+02:00"
+}

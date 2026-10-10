@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01F2jkxtN61PYqhe4zpjY5gU",
+  "agent_id": "a195a5022644be2ee",
+  "subagent_type": "general-purpose",
+  "task_description": "Review structure and agent design",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 55824,
+    "cache_read_tokens": 298009,
+    "output_tokens": 2194,
+    "api_call_count": 6
+  },
+  "started_at": "2026-10-10T16:24:58.410447+02:00",
+  "completed_at": "2026-10-10T16:25:57.864979+02:00"
+}
