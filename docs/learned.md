@@ -44,3 +44,5 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - Goal wording costs time: "acknowledge the tender documents" sent the model to read every document (35 s);
   "tick the form's acknowledgement (no need to open them)" fixed it.
 - After the bid is in, the platform closes the run's model token; the final model call gets 401. Caught now.
+- Faster v1 submission (thinking by phase, fill_in, TAN hand-off): quality 10 in 2:34 min for $0.011, against 4:41 and
+  $0.024 for the first v1; no quality loss, cost x time about 4x better.
