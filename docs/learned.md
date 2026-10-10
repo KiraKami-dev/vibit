@@ -19,3 +19,6 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   total consistency score 0 even with every position omitted and total 0; positions need v2.
 - v1 submission: review passed, quality 10, 4:41 min, $0.024; team rank #4. Submit from a clean `git archive` export
   of agent/ so unfinished files never reach the package reviewer.
+- The scouting logins are global demo logins shared by every team: local bid-form and TAN runs collide with other
+  teams (TAN request numbers jump). Use local runs for reading only; verify bid-form changes with test runs, which get
+  fresh logins (up to 5 per team at once, 3 more waiting).
