@@ -173,3 +173,12 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   The search goal now only asks for every hit of the group (no requirement shown), and a stopped search worker's
   hit list is read from its kept views. Gate recovery runs only on a sign-in form or a known gate path, since some
   views redirect and looked like a dropped session.
+- Partial runs of 8c7ab8f (37, 59, 51 and soak 19, 31, 10): the bid form shows positions in its own order, and the
+  thinking-off form model named the next position of its sorted list; configure_position said "not on the page"
+  and the model clicked "omit" on the shown position, which had values (3 of 6 runs; reproduced live). It now
+  enters the bid position the page shows and lists the ones still to enter; early returns are traced.
+- Other causes in those runs: a spec model copied "1 set = 5 pieces" and parse_int took the 1 (a set position bid
+  at a fifth of its pieces, shifting setup pool, bonus and packaging of the other members); a guessed control label
+  for an attribute the form has no control for failed whole positions; one live run mapped no price breakdown
+  fields at all; under model load (p50 11 s, p95 91 s) every 30 s try of the mail plan timed out and no mail kind
+  was searched. All fixed on branch worktree-agent-a525dcbc767c5a2b1.

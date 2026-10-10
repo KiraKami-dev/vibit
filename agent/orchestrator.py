@@ -60,6 +60,7 @@ MAIL_RETRY_SECONDS = 90.0  # mail time a kind's second try needs
 MAIL_TAB_STAGGER = 4.0  # seconds between the mail tabs' sign-ins
 MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "540"))  # from the orchestrator's start
 FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys before planning from the brief alone
+PLAN_PATIENT_TIMEOUT = 90.0  # per call when the quick mail plan failed: a loaded model answers in up to ~90 s
 REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at least this much research time left
 
 
@@ -530,8 +531,7 @@ class Orchestrator:
                 f"{f} {v}" for f, v in fact.value.items() if f.endswith("_key") or f == "condition_group")
                 for k, fact in positions.items())
             sites = {s["siteId"]: s["url"] for s in self.task["access"]}
-            kinds = await asyncio.wait_for(research_mail.plan_searches(self.task["brief"], sites, findings),
-                                           max(1.0, self.mail_deadline - time.monotonic()))
+            kinds = await self._plan_mail(sites, findings)
             self.mail_kinds = [k for k in kinds if k.site == site]
             elsewhere = [f"{k.name} on {k.site}" for k in kinds if k.site != site]
             if elsewhere:  # another mail site would be its own job (the plan names every website it needs)
@@ -542,6 +542,28 @@ class Orchestrator:
             board.problem("mails", f"{type(error).__name__}: {str(error)[:200]}")
         finally:
             board.finish("mail")
+
+    async def _plan_mail(self, sites: dict[str, str], findings: str) -> list:
+        """
+        The mail plan, with a patient second try: under platform load (model p50 11 s, p95 91 s in one soak run)
+        every attempt of the short-timeout plan call timed out, and without a plan no mail kind was searched at all
+        (discount, surcharges, packaging and bonus lost).
+        """
+        # (timeout per call, budget for all its retries): the quick try gets about two attempts, not seven
+        tries = ((research_mail.PLAN_TIMEOUT, 2.5 * research_mail.PLAN_TIMEOUT), (PLAN_PATIENT_TIMEOUT, None))
+        timeouts = [t for t, _ in tries]
+        for i, (timeout, budget) in enumerate(tries):
+            left = self.mail_deadline - time.monotonic()
+            try:
+                return await asyncio.wait_for(
+                    research_mail.plan_searches(self.task["brief"], sites, findings, timeout=timeout),
+                    max(1.0, min(left, budget or left)))
+            except Exception as error:
+                if i == len(timeouts) - 1 or self.mail_deadline - time.monotonic() < 2 * PLAN_PATIENT_TIMEOUT:
+                    raise
+                self.board.problem("mails", f"plan failed ({type(error).__name__}: {str(error)[:120]}); "
+                                            f"planning again with {PLAN_PATIENT_TIMEOUT:g} s per call")
+        raise AssertionError("unreachable")
 
     async def _mail_tab(self, site: str, i: int) -> SiteSession:
         await asyncio.sleep(MAIL_TAB_STAGGER * i)

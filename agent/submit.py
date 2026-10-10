@@ -18,7 +18,8 @@ import llm
 from briefing import Briefing
 from browser_tools import Deps, SiteSession
 from calc import position_key
-from configurator import FillPlan, complete_positions, fill_position, find_control, german, position_on_page
+from configurator import (FillPlan, complete_positions, fill_position, find_control, german, resolve_position,
+                          unmapped)
 from extract import locate
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
@@ -180,6 +181,7 @@ class PositionDesk:
         self.entered: set[str] = set()
         self.choices: dict[str, dict[str, str]] = {}
         self.next_button = ""
+        self.asked_unmapped = False
 
     @property
     def tools(self) -> tuple:
@@ -196,35 +198,65 @@ class PositionDesk:
         position and goes on (never the one that omits or adds a position); needed once. `choices`: only when a
         call reported that no option equals an attribute: control label -> the option that means the same.
         """
-        session, plan, position = ctx.deps.session, self.plan, position.strip()
+        session, plan, asked = ctx.deps.session, self.plan, position.strip()
+
+        def refuse(reason: str, text: str) -> str:  # every early return is traced: the run logs show why
+            session.trace.event(session.name, "configure_refused", position=asked, reason=reason,
+                                fields=fields or {}, text=text[:300])
+            return text
+
         known = set().union(*self.entries.values()) - {"position"}
         if fields:  # later calls add to or correct the mapping, they never drop what was mapped before
             given = {label: name.strip() for label, name in fields.items()}
             unknown = sorted({name for name in given.values() if name not in known})
-            if unknown:
-                return f"Unknown value names {unknown}; use only: {', '.join(sorted(known))}. Call again."
+            if unknown:  # drop only the unknown names; the rest of the mapping still counts
+                given = {label: name for label, name in given.items() if name in known}
             plan.fields = {label: name for label, name in plan.fields.items() if name not in given.values()}
             plan.fields.update(given)
+            if unknown and not plan.fields:
+                return refuse("unknown_names", f"Unknown value names {unknown}; use only: "
+                                               f"{', '.join(sorted(known))}. Call again.")
         if confirm_button:
             plan.confirm = confirm_button
         if next_button:
             self.next_button = next_button
-        entry = self.entries.get(position)
-        if entry is None:
-            return (f"No values for position {position!r}: leave it out with the form's option to omit a position. "
-                    + self.so_far(session))
-        if not plan.fields:
-            return "Give fields (control label -> value name) for the controls of this form first."
-        if self.failures.get(position, 0) >= 3:
-            return (f"Position {position} failed three times: leave it out with the form's option to omit a "
-                    f"position. {self.so_far(session)}")
-        if time.monotonic() > self.deadline - SIGNING_RESERVE:
-            return ("Time is short: leave this and every remaining position out and go on to signing. "
-                    + self.so_far(session))
         async with session.lock:
-            if not position_on_page(await session.look(), position):
-                return (f"Position {position} is not on the page now. Configure the position the page shows, by "
-                        "its own number.")
+            view = await session.look()
+            position, shown = resolve_position(asked, self.entries, view)
+            if position is None or position not in shown:  # a page between two states: look again once settled
+                await session.settle()
+                view = await session.look()
+                position, shown = resolve_position(asked, self.entries, view)
+        if position is None:
+            if shown:  # several of the bid's positions on one page: the model must name one of them
+                return refuse("ambiguous", f"Name the position this page is about by its own number (one of "
+                                           f"{', '.join(shown)}), then call again.")
+            return refuse("no_values", f"No values for position {asked!r} (the page shows none of this bid's "
+                                       f"positions {', '.join(sorted(self.entries, key=position_key))}): leave it "
+                                       f"out with the form's option to omit a position. {self.so_far(session)}")
+        if position not in shown:
+            return refuse("not_on_page", f"Position {position} is not on the page now. Configure the position "
+                                         "the page shows, by its own number; omit only a position that is not one "
+                                         f"of {self.remaining()}.")
+        entry = self.entries[position]
+        if not plan.fields:
+            return refuse("no_fields", f"Position {position} has values to enter. Give fields (control label -> "
+                                       f"value name) for the controls of this form, then call again; do not omit it.")
+        if self.failures.get(position, 0) >= 3:
+            return refuse("failed", f"Position {position} failed three times: leave it out with the form's option "
+                                    f"to omit a position. {self.so_far(session)}")
+        if time.monotonic() > self.deadline - SIGNING_RESERVE:
+            return refuse("time", "Time is short: leave this and every remaining position out and go on to "
+                                  "signing. " + self.so_far(session))
+        values, labels = unmapped(view, entry, plan.fields)
+        if values and labels and not self.asked_unmapped:  # asked once per run; the next call fills as mapped
+            self.asked_unmapped = True
+            return refuse("unmapped", f"Nothing entered yet. This bid has values for {', '.join(values)}, but no "
+                                      f"control is mapped to them, while these fields of the page are not mapped: "
+                                      f"{'; '.join(labels)}. Call again now with fields that add every one of them "
+                                      "that takes such a value (the mapping you gave stays); leave out fields that "
+                                      "match none.")
+        async with session.lock:
             log: list[str] = []
             try:
                 remembered = self.choices.setdefault(position, {})
@@ -254,7 +286,14 @@ class PositionDesk:
                     f"it. {self.so_far(session)}\n\n{view}")
         self.entered.add(position)
         then = moved or " Check it, then save and continue with the form's next/continue button."
-        return f"Position {position} entered: {'; '.join(log)}.{then} {self.so_far(session)}\n\n{view}"
+        which = "" if position == asked else f" (the page showed {position}, not {asked!r}; {position} was entered)"
+        return (f"Position {position} entered{which}: {'; '.join(log)}.{then} {self.so_far(session)} Still to "
+                f"enter when the form shows them: {self.remaining()}.\n\n{view}")
+
+    def remaining(self) -> str:
+        """The bid's positions not entered yet: the form may show them in any order; none of them is omitted."""
+        left = sorted(set(self.entries) - self.entered, key=position_key)
+        return ", ".join(left) or "none"
 
     def so_far(self, session: SiteSession) -> str:
         """The running net total, told after every position so the totals step needs no arithmetic."""
@@ -316,9 +355,10 @@ def _positions(answer: dict | None, desk: PositionDesk, filled: bool) -> str:
                        "number format);")
     names = sorted({key for entry in desk.entries.values() for key in entry} - {"position"})
     return head + f"""- enter exactly these positions: {', '.join(sorted(desk.entries))}. The form shows one position
-  at a time, in its own order. On every position page, first call configure_position() with the number the page
-  shows: it enters all values of a position of this bid and saves it with the next/continue button you name, or
-  tells you to omit it. Never pick options or type position values yourself;
+  at a time, in its own order (often not this list's order). On every position page, first call
+  configure_position() with the number the page shows: it enters all values of a position of this bid and saves it
+  with the next/continue button you name, or tells you to omit it. Never omit a position of this list unless
+  configure_position() told you to omit that very position. Never pick options or type position values yourself;
 - configure_position() needs, once, which control takes which value: map each control's label (as your view shows
   it) to one of these value names: {', '.join(names)}. Choices that open further choices (attributes of the
   material) map to the attribute with the same meaning; the material/catalogue number control to material_number;

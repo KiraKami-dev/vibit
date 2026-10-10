@@ -15,6 +15,8 @@ from configurator import (  # noqa: E402
     match_option,
     parse_number,
     position_on_page,
+    resolve_position,
+    unmapped,
 )
 
 
@@ -91,6 +93,32 @@ class Controls(unittest.TestCase):
         self.assertFalse(position_on_page(VIEW, "2.1"))
         self.assertFalse(position_on_page(VIEW, "10"))
 
+    def test_unmapped(self):
+        page = ('Qty [e7 textbox "Qty" value=""]\nPrice [e8 textbox "Price" value=""]\n'
+                'Base [e9 textbox "Base per piece" value=""]\n[e10 button "Next"]')
+        entry = {"position": "1", "quantity": 4, "unit_price": 2.5, "base_unit_price": 2.0, "bore": "40"}
+        self.assertEqual(unmapped(page, entry, {"Qty": "quantity", "Price": "unit_price"}),
+                         (["base_unit_price"], ["Base per piece"]))
+        full = {"Qty": "quantity", "Price": "unit_price", "base per piece": "base_unit_price"}
+        self.assertEqual(unmapped(page, entry, full), ([], []))
+
+    def test_resolve_position_page_wins(self):
+        page = "## Item 3.07\nStep 4\nShape [e7 select \"Shape\" options: a | b]\n[e9 button \"Skip item\"]"
+        bid = ["3.01", "3.02", "3.07"]
+        # the model names the next item of its own list while the form shows another one of the bid
+        self.assertEqual(resolve_position("3.02", bid, page), ("3.07", ["3.07"]))
+        self.assertEqual(resolve_position("3.07", bid, page), ("3.07", ["3.07"]))
+        self.assertEqual(resolve_position("Item 3.07 (pump)", bid, page), ("3.07", ["3.07"]))
+        # the page shows an item outside the bid: nothing to enter there (the caller tells the model to omit it, or
+        # that the named bid item is not on the page and only items outside the bid are omitted)
+        other = page.replace("3.07", "3.05")
+        self.assertEqual(resolve_position("3.05", bid, other), (None, []))
+        self.assertEqual(resolve_position("3.02", bid, other), ("3.02", []))
+        # no item on the page at all (a page in transition): the named bid item, reported as not on the page
+        blank = "## Totals\n[e7 textbox \"Net\" value=\"\"]"
+        self.assertEqual(resolve_position("3.02", bid, blank), ("3.02", []))
+        self.assertEqual(resolve_position("9.99", bid, blank), (None, []))
+
 
 class Positions(unittest.TestCase):
     def test_complete_only(self):
@@ -103,6 +131,54 @@ class Positions(unittest.TestCase):
         self.assertEqual(list(entries), ["1"])
         self.assertEqual(entries["1"]["diameter"], "10")
         self.assertEqual(complete_positions({**answer, "decision": "no_bid"}), {})
+
+
+FORM = """<h2>Item 3.07</h2>
+<label>Qty <input name="q"></label>
+<label>Net price <input name="p"></label>
+<label>Article <select name="m"><option value="">Choose</option><option value="x">M-7 / 16 bar</option></select>
+</label>
+<label>Weeks <select name="w"><option value="">Choose</option><option value="3">3 weeks</option></select></label>
+"""
+
+
+class FillPosition(unittest.TestCase):
+    def test_guessed_label_without_control_is_skipped(self):
+        import asyncio
+
+        from configurator import FillPlan, fill_position
+        from extract import observe
+        from playwright.async_api import async_playwright
+
+        class Session:
+            def __init__(self, page):
+                self.page = page
+
+            async def look(self):
+                return await observe(self.page, "1")
+
+            async def settle(self):
+                pass
+
+        async def run():
+            async with async_playwright() as playwright:
+                browser = await playwright.chromium.launch(headless=True)
+                page = await browser.new_page()
+                await page.set_content(FORM)
+                entry = {"position": "3.07", "material_number": "M-7", "quantity": 4, "unit_price": 2.5,
+                         "lead_time_weeks": 3, "pressure": "16"}
+                plan = FillPlan(fields={"Qty": "quantity", "Net price": "unit_price", "Article": "material_number",
+                                        "Weeks": "lead_time_weeks", "Pressure stage": "pressure"})
+                log: list[str] = []
+                error = await fill_position(Session(page), entry, plan, log)
+                values = [await page.input_value(f"[name={n}]") for n in "qpmw"]
+                await browser.close()
+                return error, log, values
+
+        error, log, values = asyncio.run(run())
+        self.assertIsNone(error)
+        self.assertEqual(values, ["4", "2,50", "x", "3"])
+        self.assertTrue(any("Pressure stage" in line and "skipped" in line for line in log))
 
 
 if __name__ == "__main__":
