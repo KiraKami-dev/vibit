@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M4M2M84M8ZG2TRMS9QRJD9XT",
+  "strategy": "manual-commit",
+  "branch": "sim-portals",
+  "checkpoints_count": 4,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 201,
+    "cache_creation_tokens": 249511,
+    "cache_read_tokens": 20478150,
+    "output_tokens": 84208,
+    "api_call_count": 101,
+    "subagent_tokens": {
+      "input_tokens": 46,
+      "cache_creation_tokens": 365100,
+      "cache_read_tokens": 1221109,
+      "output_tokens": 25791,
+      "api_call_count": 23
+    }
+  }
+}

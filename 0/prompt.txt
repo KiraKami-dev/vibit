@@ -1,0 +1,649 @@
+is it possible to reverse engineer all the portals
+
+
+<pasted_content id="6eeb">
+Website    URL    Username    Password
+Tender portal
+Vergabeportal
+atira-rfq-tender-portal.kyora.run    u_9c3cb06a5d21b197    uJC8-80QSb7rblI_k4tH
+Supplier portal
+Lieferantenportal
+atira-rfq-customer-portal.kyora.run    u_9c3cb06a5d21b197    k2sBynnldp0mqU4MviqI
+ERP    atira-rfq-erp.kyora.run    u_9c3cb06a5d21b197    vuUcG2MsDEafLhoMjfS5
+Webmail
+Werkpost
+atira-rfq-mail.kyora.run    u_9c3cb06a5d21b197    ldPxYRdvI__aVKKqOWIy
+</pasted_content id="6eeb">
+
+
+i hope you still have challenge context : https://ehl-challenge.atira.ai/challenges/rfq
+
+use this repo to understand rea it and then how we can simulate our own portals to test different traps and cases that could occur
+https://github.com/morluto/rea/
+
+---
+
+<task-notification>
+<task-id>a21ebb20a06ff8fb2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-akshatkhair-Documents-Projects-error404ai-ehl-finals/71c86c9d-1e25-4237-8d5a-3b6c47f3e9b5/tasks/a21ebb20a06ff8fb2.output</output-file>
+<status>completed</status>
+<summary>Agent "Understand morluto/rea repo" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>`morluto/rea` exists and is public, but it is an evidence-capture tool, not a clone or mock generator. It can record your four portals' structure and API shapes; the simulator you would still write yourselves. I read it remotely via `gh api` only; nothing was cloned, executed or installed.
+
+## 1. What it is
+
+- **Purpose:** "REA: Reverse Engineer Anything" describes itself as "One MCP for reverse engineering across binaries, applications, and runtime behavior" (`README.md`). It is a real program: a local CLI plus stdio MCP server, shipped with an agent skill.
+- **Scope:** mostly native binaries (Hopper, Ghidra, IDA), Electron/JavaScript apps, .NET, Android and firmware. Websites are one row of the target table: "Page structure, scripts, network observations and requested screenshots", requiring "A Chrome-family browser".
+- **Language and license:** TypeScript primary (about 12.8 MB), with Java, Python and Swift bridges under `bridge/`. MIT (`LICENSE`).
+- **Maturity:**
+  - Created 2026-04-14; last push 2026-10-10, with several commits an hour that day.
+  - Latest release `rea-agents-6.3.0`, dated 2026-10-09.
+  - 71,030 stars, 14,899 forks, 131 open issues, about 41 MB, 2,842 tree entries.
+  - Top contributors: morluto (1,127 commits), N0zoM1z0 (413), kaoru0822-kitauji (352).
+  - The star and fork counts are very high for a six-month-old repo; I did not check whether they are organic.
+- **Entry points:** npm package `rea-agents`, with bins `rea` and `rea-agents` pointing at `scripts/rea.mjs` (`package.json`). `rea mcp` starts the server; `npx rea-agents setup` registers it with agents.
+- **Web-relevant commands** (`docs/browser-observation.md`, `docs/web-runtime.md`, `docs/browser-scenario-contract.md`, `docs/web-network-captures.md`, `docs/website-script-export.md`):
+  - `list-browser-targets`, `inspect-web-page`, `analyze-web-bundle`, `observe-web-session`
+  - `capture-web-screenshot`, `compare-web-captures`, `compare-web-screenshots`
+  - `observe-web-execution`, `inspect-web-event-listeners`
+  - `capture-browser-scenario`, `inspect-web-network-capture`, `export-web-scripts`
+  - `discover-webmcp-tools`
+  
+  Each has an MCP tool of the same name in snake_case.
+
+## 2. Method for websites
+
+There are three separate providers with different authority.
+
+**A. Passive CDP attach** (`docs/browser-observation.md`, `src/browser/Cdp*.ts`)
+- Input is a loopback CDP endpoint of a Chrome you started yourself with `--remote-debugging-port=9222 --user-data-dir=...`, plus a target ID.
+- "This is a passive reverse-engineering capability, not a general browser automation or remote-control surface."
+- "REA does not launch, own, or terminate this browser."
+- It captures "DOM structure, accessibility nodes, scripts, resources, safe response/DOM metadata, attach-window network and console metadata, WebSocket frame sizes, workers, quota", with script sources and storage key names optional.
+- It is deliberately value-free:
+  - "DOM snapshots retain node types, node names, value lengths, and attribute names, but not text or attribute values."
+  - JSON bodies, only with `--include-json-body-shapes`, are "converted immediately to complete value-free typed paths, types and observation counts, and discarded."
+  - "Cookies and authorization headers are never retained."
+- `analyze-web-bundle` statically parses scripts for "chunk edges, route and endpoint candidates, vendor fingerprints", with optional source-map fetching.
+- `observe-web-execution` adds V8 precise coverage and request initiator stacks (`docs/web-runtime.md`).
+- Coverage starts only at attach: "`prior_activity_available` is always `false`".
+
+**B. Playwright scenario capture** (`docs/browser-scenario-contract.md`, `src/browser/Playwright*.ts`)
+- Input is a declarative JSON scenario: a browser (launch with an executable path, or connect to loopback CDP), a `start_url`, and `actions` from a fixed vocabulary; the examples show `click`, `wait_for` and `wait_for_timeout`.
+- Captures per step or at end: `dom`, `accessibility`, `url`, `screenshot`, `history`, `storage`, plus event families (`console`, `page-errors`, `network` and others).
+- Network content is opt-in: `"capture": {"network": {"request_body": true, "response_body": true, "header_values": true}}`.
+- "Captured bodies retain base64 bytes, byte count, media type, and SHA-256". This is the only web mode that keeps full response bodies.
+
+**C. Offline capture inspection** (`docs/web-network-captures.md`, `src/browser/history/`, `bridge/mitmproxy/capture.py`)
+- Input is a HAR 1.2 file, or a native mitmproxy flow file (needs mitmdump 12.2.3 on Linux).
+- "This is an offline operation: recorded URLs are never fetched, and no browser or proxy listener is started."
+- The output is "an inspection representation, not a reconstructed HAR file."
+
+**Outputs.** Everything is a JSON "Evidence" record with provenance, coverage and limitations. `export-web-scripts` writes captured JavaScript to a directory for `analyze-javascript-application`. I found no OpenAPI output, spec generator or site cloner.
+
+**Skill pack** (`.agents/skills/reverse-engineer-anything/SKILL.md`, version 37, plus `references/*.md`)
+- It is routing and discipline guidance for an agent using the MCP tools.
+- It tells the agent to pick the first tool by target type, work summary-first, and keep a finding ledger.
+- "Every conclusion must distinguish observations, inferences, and unknowns."
+- `references/runtime-observation.md`: "never claim REA clicked, navigated, evaluated page JavaScript, invoked IPC, captured prior activity, or contained the page's network."
+- `docs/mcp-prompts.md` lists six MCP prompts (such as `investigate_feature` and `verify_reconstruction`); none is web-clone oriented.
+
+## 3. Dependencies and authenticated sites
+
+- **Runtime:** Node "^22.19.0 || ^24.11.0 || &gt;=26.0.0" and npm. No LLM API key; your agent is the LLM.
+- **Web dependencies:** `playwright-core` 1.58.2 (no bundled browser, so you supply a Chrome-family executable), `ws`, `parse5`, `@babel/parser`, `har-schema`, `ajv`, `zod`. mitmproxy is optional and Linux-only.
+- **Passive mode login:** you log in by hand in the dedicated Chrome profile and REA attaches afterwards. This is the simplest fit for your scouting logins. Session cookies are never returned.
+- **Scenario mode login:** launch mode "always uses a provider-owned temporary profile", so there is no reuse of an existing session. Your options are:
+  - Seed storage or cookies: "Form, storage, and cookie values are either literal strings or declared secret references."
+  - Script the login with env-backed secrets: "declared secret values are redacted automatically".
+  - Use connect mode against an already logged-in browser.
+- **Unconfirmed:** I did not see a fill/type action in the excerpts I read. Check the action vocabulary in `src/browser/PlaywrightScenarioActions.ts` before relying on scripted login.
+- **Redaction:** Authorization, Cookie and Set-Cookie header values are always nulled.
+
+## 4. Runnable replica or mock server
+
+No. Code search for "mock server" hit only tests and docs. The "replay" hits I checked (`src/domain/conformanceReplay.ts`, process capture) are not HTTP replay; that search returned 120 hits and I did not review them all. The README's "build a version for your project" means the agent writes code from the evidence with ordinary coding tools.
+
+## 5. Risky or surprising
+
+- **Setup modifies agent config.** `npx rea-agents setup` writes MCP registrations and skills into `~/.claude/skills`, `~/.agents/skills` and other agent config files (`docs/installation.md`). It claims a plan, approval and backups first. It can also download and install Hopper.
+- **The skill nudges agents to fetch code.** `SKILL.md` says "use `npx -y rea-agents@latest`" when no CLI is installed. That pulls unpinned code that changes several times a day; pin a version if you use it.
+- **Telemetry.** I found no analytics SDK (no posthog; "sentry" and "telemetry" hits were unrelated strings). The README says "REA analyzes targets locally." I searched but did not audit `src/`. `rea update` and setup contact the npm registry.
+- **Instructions aimed at AI agents.** `AGENTS.md` has contributor rules plus an auto-inserted Turborepo block ("This is NOT the Turborepo you know..."). The skill and prompt files are agent instructions by design. I saw nothing resembling exfiltration or hidden directives, and followed none of it.
+- **Crawling and bypass.** I found no crawler and no anti-bot or protection-bypass features. The CDP provider "deliberately does not expose generic CDP commands, `Runtime.evaluate`, WebMCP invocation, navigation, input, downloads".
+- **Scenario mode has no origin allowlist.** "there is no separate origin allowlist or request-interception layer".
+- **Real data in captures.** With body or text capture enabled, Evidence files contain real portal data. "Accessibility text, script content, query values... may contain application secrets".
+- **Churn.** The latest commit includes a breaking change (`fix(web)!`), and the project is at major version 6 after six months.
+
+## 6. Reusability for your four portals
+
+**Useful**
+- **Page structure:** `inspect-web-page` with `--include-accessibility-text --include-json-body-shapes --include-storage-keys` on a manually logged-in Chrome. You get the DOM/accessibility skeleton, form structure, and the XHR list with method, status, MIME type and value-free JSON shapes. Because it captures shape but not data, it suits simulators built on invented data.
+- **Navigation flow:** `observe-web-session` over a 10–30 second window while you click through one flow, to get the ordered navigation and request sequence.
+- **Route and endpoint candidates:** `analyze-web-bundle`, for any portal that is an SPA.
+- **Simulator fidelity checks:** `capture-browser-scenario` against your local simulator (the docs' own examples target `http://127.0.0.1:3000`), with `compare-web-captures` and `compare-web-screenshots` to diff simulator against reference structure.
+- **HAR route:** export a HAR from DevTools and run `inspect-web-network-capture ... har`. This keeps bodies, so handle it carefully.
+
+**Not provided, so build yourselves**
+- The simulator itself (Flask, Express or static HTML with invented data).
+- Any OpenAPI or spec synthesis.
+- Trap-case logic.
+- Multi-page crawling: there is none, so each page or flow is one manual capture.
+
+**Limitations for server-rendered portals**
+- Default DOM capture drops text and attribute values, so for layout and labels you need the accessibility-text option or a scenario `dom` capture.
+- Passive mode misses requests made before attach; reload after attaching.
+
+**Is it worth it?** For four small portals, REA is heavyweight; Chrome DevTools HAR export or the claude-in-chrome `read_page` and `read_network_requests` tools give broadly the same raw material with less setup. REA's distinct value is value-free shape capture and capture diffing.
+
+**Fair-play check.** Your Atira rules prohibit copying website values into the agent package. Shape-only capture feeding simulators with invented data looks consistent with that, but body or text captures of the real portals should stay out of the package and prompts.</result>
+<usage><subagent_tokens>93278</subagent_tokens><tool_uses>16</tool_uses><duration_ms>131402</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad78b9a9ce49ab522</task-id>
+<tool-use-id>toolu_0112MjzKDqx1GqEDLX2hhUxF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-akshatkhair-Documents-Projects-error404ai-ehl-finals/71c86c9d-1e25-4237-8d5a-3b6c47f3e9b5/tasks/ad78b9a9ce49ab522.output</output-file>
+<status>completed</status>
+<summary>Agent "Check platform rules on simulation" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All quotes below come from `https://ehl-challenge.atira.ai/llms-full.txt`, which contains every page you listed, so I did not fetch the individual `.md` files separately. I did not log in, call any API, or touch the `*.kyora.run` sites. Each quote is labelled with its source page.
+
+**Short answer:** the docs explicitly allow studying the portals with the scouting logins and using what you learn about how they work. They say nothing at all about local simulators, mock sites or test harnesses. The hard lines are: no values copied from the public scenario in the package, no pre-solved answers, no fixed script or crawler, and no attacking the sites.
+
+## A. Scouting
+
+**What it is for**
+- rfq.md, "Scout them yourself": "Logins for every website, with the public data. Click around as much as you like. None of it is scored."
+- rfq.md: "Develop on your machine against the public websites with the scouting logins (`atira scout --env`), then test in the sandbox".
+- Participant guide: "the scouting logins the organizers publish open the public websites to you and your agent. `atira scout --env` exports them the way a run gets its logins, so your agent runs on your machine against the real websites."
+- cli.md, `scout` command: "The published scouting logins for the public websites; `--env` prints them as shell exports for running your agent locally".
+- cli.md: "`scout` needs no sign-in for the logins. It prints the logins the organizers published, how long they are valid, and what happens to an answer: these are demo logins, so an answer entered on the website that takes it is acknowledged without counting."
+- faq.md: "Can I run my agent outside the sandbox? While you develop, yes, anywhere, with the scouting logins."
+
+**What you may do with what you learn**
+- fair-play.md, "Allowed": "Using what you learned with the scouting logins and in test runs about how the websites work."
+- fair-play.md, "Pre-solving": "Exploring the sites with an assistant is fine."
+- fair-play.md: "On your own machine (developing with the scouting logins) your agent starts its own browsers; that is up to you."
+
+**Limits the docs do state**
+- fair-play.md, "Not allowed": "Attacking the platform, the websites, the sandbox or other teams; sharing scored-run data."
+- The scouting logins expire or can be revoked: api.md says the scouting endpoint returns `expires_at` and `until_revoked`.
+- Rule 10 (rfq.md) says of the sites: "Sites and positions can be investigated in parallel; no shared request quota or mandatory site order applies." This is a bid rule about agent runs, not a scouting policy.
+
+**Where the docs are silent**
+- **Rate limits on the portals:** none stated. The only 429s documented are platform-side (one submission in evaluation, three test runs queued).
+- **Automated crawling during development:** not addressed. Every "crawler" prohibition is about the submitted agent, for example "a crawler that collects the websites and hands everything to the model at the end" (fair-play.md).
+- **Scraping, storing or mirroring public site content on your own machine:** not addressed.
+- **"Reverse engineering":** the phrase does not appear.
+- **Terms of use, robots policy, code of conduct:** none in the docs.
+- **Hidden endpoints or other teams' data:** not mentioned specifically; only the general "attacking" sentence covers this.
+- **Sharing scouting data:** not addressed. Only "sharing scored-run data" is prohibited, and the scouting logins are themselves published on the public challenge page.
+
+**My inference:** manual and agent-driven exploration through the normal UI is clearly sanctioned. Bulk crawling for study is not prohibited in words. Probing for undocumented endpoints or other teams' data plausibly falls under "attacking the websites", so I would treat it as off-limits or ask the organizers.
+
+## B. What may not go into the package
+
+**Hardcoding**
+- fair-play.md, at a glance: "copying values from the websites into your package (prices, material numbers, totals, discounts, logins, TANs), including in prompts and notes, also as defaults or fallbacks. Using what the task brief tells every team, like the sales director's mailbox, is fine."
+- fair-play.md, "Not allowed": "Hardcoding values copied from the public scenario or its websites into code, config, prompts or notes, including defaults and fallbacks: tender references, material numbers, prices, totals, discounts, logins and TANs. Facts the task brief states for every scenario, such as the sales director's mailbox, are rules you may use."
+- fair-play.md, "How it is checked": "the reviewer rejects copied scenario values in code or config, even in defaults or fallbacks."
+
+**Pre-solving**
+- fair-play.md: "working out the answer yourself, or having an AI assistant do it, and putting the result in your package."
+
+**Scripts and crawlers**
+- fair-play.md: "a fixed click path, or a crawler that grabs everything for one model call. A model has to choose where to go, what to search for and what matters."
+- building-an-agent.md: "Rejected in review: a fixed script that clicks through known pages with the model unused or only as a fallback, and a crawler that collects the websites and hands everything to the model at the end."
+- Rule 11 (rfq.md) lists what helpers may do: "extract a selected page, parse a selected document, paginate a model-selected result set, calculate, validate, retry and fill forms. They must not autonomously discover and traverse the websites to assemble the complete task evidence before model-directed investigation."
+
+**Other package and run prohibitions (fair-play.md)**
+- "Bundling or running a local model, or reaching any model other than through the proxy."
+- "Contacting hosts other than the API and the challenge's websites, or trying to get data out of the sandbox."
+- Starting your own browsers in the sandbox.
+- submitting.md: "No secrets: the run gets everything it needs from the environment."
+
+**Review mechanics worth knowing**
+- fair-play.md: the reviewer is "a coding agent that reads your whole package in an isolated VM."
+- fair-play.md: "Notes and docs addressed to the reviewer are not evidence of compliance and do not count against you on their own. Instructions trying to steer the reviewer's verdict do."
+- cli.md: the packer leaves out `.git`, `node_modules`, `.DS_Store` and "whatever `.gitignore` files exclude". `atira test-run --dry-run` shows "what would be uploaded, and what is left out".
+- submitting.md: organizers ask teams to link their GitHub repo "so they can review the code, for example to compare a winning submission with its source." The app "reads the contents of the repositories you grant it".
+
+**Site copies, fixtures, dev-only material, simulators**
+- The docs are silent on all of these. The words mock, simulator, fixture, harness, clone and replica do not appear.
+- Dev-only material kept outside the package is not explicitly addressed. Every prohibition is worded in terms of "your package" or "code, config, prompts or notes".
+
+**My inference**
+- A simulator with invented data, kept out of the tarball, breaks no stated rule.
+- A captured copy of the public portals inside the package would very likely be rejected as copied public-scenario values.
+- Because the linked repo is readable by organizers, anything in that repo (captured pages, public-scenario values, a worked public answer) is visible to them even if `.gitignore` or packaging keeps it out of the tarball. The docs do not say how repo-only material is judged.
+- Invented simulator values are not "copied from the public scenario", but an automated reviewer cannot tell invented from copied. Keeping the simulator out of the package avoids a false flag.
+
+## C. How the private dataset differs from public-1
+
+- start.md and rfq.md: "It is similar, not the same: the same jobs, the same bid rules and the same answer format, but different websites (other software, layout, navigation and site names), other content and data, and the information split differently across them. Your agent has to handle them as it finds them. That run weighs most when we pick the winners, so don't tune your agent to the public scenario."
+- scoring.md and fair-play.md: "the same jobs (a tender portal, a supplier portal, an ERP and a webmail inbox), the same bid rules and the same answer format, but different software, with a different look, navigation and site names, other content and data, and the information split differently across them."
+- scoring.md adds: "each run's brief states the bid rules."
+- Rule 19 (rfq.md): "These calculation rules apply to both practice and private datasets."
+- scoring.md: "Opted-in teams get up to three attempts on the same private scenario(s)." The number of private scenarios is not stated.
+- scoring.md: "Runs on the private dataset show quality, eligibility, cost and time without a breakdown."
+
+**What stays the same:** the four roles, the 29 rules, the answer schema and the scoring.
+
+**What changes:** software, layout, navigation, site names, all content and data, and which site holds which information.
+
+**Not stated:**
+- whether the private sites are still German;
+- whether the specific obstacles (cookie wall, SAP-style transaction codes, F4 popup, TAN signing, ZIP and iframe documents) recur;
+- whether the answer is still entered on a site rather than by API. The run contract supports both `submission.kind` values, so read `submission` at run time.
+
+**My inference:** pixel- or DOM-faithful copies of the public portals have low value. Several structurally different simulators that vary UI, navigation and information split, while exercising the same rules, match what the docs describe.
+
+## D. Bid rules, answer schema, scoring, eligibility
+
+rfq.md says "The brief states these rules in full." I summarised the rule text on the challenge page; I did not fetch the brief from the scouting endpoint, so it may carry more detail.
+
+**The 29 rules**
+1. **Quantity:** tender quantity, overridden by the latest clarification that changes that position.
+2. **Requirement:** the position's requirement in the specification revision marked current.
+3. **Material:** the active ERP material matching bore, stroke, pressure, mounting and certification exactly; if a position has none, the answer is no bid.
+4. **Unit price:** the price condition valid on the scenario date, at the highest quantity scale reached, minus the approved discount, rounded half-up to the cent.
+5. **Discount:** the most recent sales-director approval for this exact tender; otherwise 0 %.
+6. **Lead time:** from-stock lead time when stock covers the quantity, otherwise production lead time.
+7. **Total:** sum of quantity × unit price, rounded half-up to the cent.
+8. **Decision:** bid with one entry per tender position; no bid with no positions and total 0 when a material is missing.
+9. **Partial submission:** positions can be explicitly omitted (Position auslassen / Teilpunkte) and earn no position points; you must still sign and submit. A missing active material still requires no_bid; omission is not a substitute decision.
+10. **Finding records:** the spec names a Kataloggruppe per requirement; search the ERP by group and compare attributes. Empty or over-broad searches list nothing; narrow to at most 20 results. Mail search ANDs words (tender reference plus topic); check inbox and archive.
+11. **Agent requirement:** a model chooses navigation, searches and documents at run time; helpers may extract, parse, paginate, calculate, validate, retry and fill forms, but must not autonomously traverse the sites first.
+12. **Commercial clauses:** Q&amp;A may assign a position to a Konditionsgruppe, resolved in the latest Konditionsregeln mail from kalkulation@ at the bidder mailbox domain for the exact reference. Its prose decides whether discount applies to base only, base plus mass surcharge, or neither. Setup fees are always excluded; the group overrides the default even for the same material; the default is base-only.
+13. **Withdrawn answers:** a Q&amp;A answer may withdraw (zurückziehen) an earlier one by number; ignore its quantity change and use the latest remaining change, else the tender quantity.
+14. **Scoped amendments:** after choosing the governing revision, apply Q&amp;A technical amendments naming that revision and requirement, only for the named attributes. Latest dated amendment wins per attribute; amendments to other revisions do not apply.
+15. **Shared stock:** sum final quantities of all positions using the same material; stock must cover the whole sum or all use production delivery. No partial allocation; price scales stay per position.
+16. **Conditional discount:** the latest exact-reference approval may require a minimum undiscounted net order value (final quantities × per-position scale prices, excluding mass surcharges and setup fees, half-up to cents). Threshold is inclusive; on failure use 0 % with no fallback to older approvals; for no_bid it yields 0 %.
+17. **Units:** convert Satz using the governing spec's pieces per set; scales, inventory, allocation weights and bid quantities use final pieces. Carton rounding affects packaging cost only.
+18. **Pricing breakdown:** `base_unit_price`, `surcharge_per_unit`, `packaging_per_unit`, `rebate_total` are optional with independent credit, all net EUR. The first three are per piece; `rebate_total` is for the whole position. Enter 0.00 for a known zero, blank for unanswered; do not feed rounded breakdowns back into the final formula.
+19. The calculation rules apply to both practice and private datasets; missing calculation fields lose only their own points.
+20. **Technical derivation:** for a requirement marked nutzbarer Weg, apply scoped amendments, then add twice the per-end reserve from the revision-specific Technikfreigabe, and match that nominal stroke in the ERP. Other attributes unchanged.
+21. **Authority and time:** resolve each key from the latest record no later than the scenario date for the exact reference. Authorized subject/sender pairs: Technikfreigabe/technik, Verpackungstarife/logistik, Terminfreigabe/logistik, Devisenfixing/finanzen, Rüstpools/kalkulation, Projektbonus/finanzen. A newer record replaces the older; a failed quantity condition does not revive it; unrelated references and future-dated records never apply.
+22. **Currency:** the valid condition names its currency and FX key. Normalize the price unit, pick the per-position scale, convert with EUR per currency unit, half-up to cents; that converted base price feeds all later calculations and thresholds.
+23. **Packaging:** Q&amp;A assigns the tariff key; ERP gives pieces per carton. Charge ceil(final pieces / carton size) cartons per position; do not raise the bid quantity; packaging is not discounted.
+24. **Delivery:** Q&amp;A assigns a commitment key; apply it only if its material matches and pooled final demand for that material is within its inclusive ceiling, else use shared-stock delivery. Commitments may differ by position for the same material.
+25. **Shared setup:** Q&amp;A names pool members; ERP gives allocation mass (distinct from surcharge mass); the Rüstpools mail gives the single pool fee. Allocate by quantity × allocation mass using the mail's cent-allocation rule and add to the position's ordinary setup fee. `surcharge_per_unit` is before discount, excluding packaging and bonus.
+26. **Project bonus:** the finance mail gives marginal percentage bands on the eligible undiscounted EUR goods total. Round the aggregate half-up, then allocate proportionally by largest remainders in cents (ties by ascending position id). `rebate_total` is the whole-position credit, zero for non-members, independent of discount clauses.
+27. **Final price:** clause-discounted base + clause-discounted mass surcharge + (ordinary setup + allocated shared setup + carton cost − allocated project bonus) / final pieces. Use unrounded components, round half-up once; `total_net` is the sum of quantity × rounded unit price.
+28. **Metal indices:** use the latest exact-reference Preisindizes mail from kalkulation@ at the bidder mailbox domain; if it lists validity windows, use the rate whose inclusive window contains the scenario date, not the last one listed.
+29. **Scoring in bid cases:** see the weights below.
+
+**Answer schema (rfq.md, JSON Schema draft 2020-12, `additionalProperties: false` at both levels)**
+
+Top level:
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `tender_reference` | string, max 100 chars | yes |
+| `decision` | string, `"bid"` or `"no_bid"` | yes |
+| `currency` | string, const `"EUR"` | yes |
+| `discount_percent` | number, 0 to 100 | yes |
+| `positions` | array, max 100 items | yes |
+| `total_net` | number, ≥ 0 | yes |
+| `notes` | string, max 4000 chars | no |
+
+Each position:
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `position` | string, max 20 chars | yes |
+| `material_number` | string, max 50 chars | yes |
+| `quantity` | integer, ≥ 0 | yes |
+| `unit_price` | number, ≥ 0 | yes |
+| `lead_time_weeks` | integer, ≥ 0 | yes |
+| `base_unit_price` | number, ≥ 0 | no |
+| `surcharge_per_unit` | number, ≥ 0 | no |
+| `packaging_per_unit` | number, ≥ 0 | no |
+| `rebate_total` | number, ≥ 0 | no |
+
+The largest answer is 65,536 bytes.
+
+**Scoring weights (rule 29 and scoring.md)**
+- **Bid case:** decision 5, tender reference 5, discount percent 5, total net 5, arithmetic consistency 5.
+- **Conditional checks:** withdrawn Q&amp;A quantity check 5 and dated metal-index check 5, each only "when present".
+- **Positions:** 75 minus those checks, split evenly across positions. Within each: material 20 %, quantity 15 %, base price 15 %, surcharge 10 %, packaging 10 %, project bonus 10 %, final unit price 10 %, delivery/lead time 10 %.
+- **No-bid case (scoring.md):** "decision 75, tender reference 5, no positions 5, a total of 0 15. A wrong decision costs its points but leaves the other fields their credit."
+- **Comparison (scoring.md):** "Money is compared to the cent. Positions are matched by their position number; extra or duplicate positions cost one position's share each."
+- **Arithmetic (scoring.md):** defined as "every position, and a total that is their sum".
+
+**Eligibility**
+- scoring.md: "For RFQ: the right tender reference; a wrong decision (bid or no_bid) costs quality points instead."
+- start.md: "A bid that is not eligible ranks after every eligible one."
+- scoring.md: "A run without an answer scores quality 0 and is not eligible."
+
+**Ranking:** eligible first, then quality, then cost × time (cost floored at $0.01, time at 1 s), then submission ID.
+
+## E. Run contract for pointing an agent at different sites
+
+**How the agent gets sites and credentials**
+- run-contract.md: `GET $CHALLENGE_API_URL/v1/runs/current` with header `x-api-key: $CHALLENGE_RUN_TOKEN` returns:
+  - `brief` (Markdown, with the rules);
+  - `access` ("one entry per website: `siteId`, `url`, and `credentials` (`username`, `password`)");
+  - `submission`;
+  - `answer_url` (API submissions only) and `answer_schema`;
+  - `started_at`, `expires_at`, spend so far;
+  - `llm_proxy_url`, `llm_providers`, `llm_base_urls`, `llm_env`.
+- cli.md gives the env shape: `CHALLENGE_SITE_ACCESS` is `[{"siteId", "url", "credentials": {"username", "password"}}]`.
+- Public site ids are `tender-portal`, `customer-portal`, `erp`, `mail`. Private site names differ, so do not key on these ids or hostnames (my inference from section C).
+- run-contract.md: "Site logins are issued per run and only work while that run is live."
+
+**Sandbox env vars**
+- `CHALLENGE_API_URL`, `CHALLENGE_RUN_TOKEN`, `CHALLENGE_SITE_ACCESS`, `LLM_PROXY_URL`
+- `&lt;MODEL&gt;_BASE_URL` / `&lt;MODEL&gt;_API_KEY` (for example `QWEN_*`, `CLEF_*`)
+- `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, `MISTRAL_SERVER_URL`, `TOGETHER_BASE_URL`
+- `CDP_URL`, `CDP_URLS`, `BROWSER_COUNT`, `DISPLAY`
+- `HTTP_PROXY` / `HTTPS_PROXY` (`http://127.0.0.1:3128`), `NO_PROXY`, `NODE_USE_ENV_PROXY`
+- your team secrets
+
+**Local env vars from `atira scout --env`**
+- `CHALLENGE_SCOUTING`, `CHALLENGE_SCOUTING_URL`, `CHALLENGE_SITE_ACCESS`
+- `CHALLENGE_SITE_&lt;ID&gt;_URL` (for example `CHALLENGE_SITE_TENDER_PORTAL_URL`)
+- hosted-model `&lt;MODEL&gt;_BASE_URL` / `&lt;MODEL&gt;_API_KEY` pointing at the local proxy with key `local`
+- cli.md: "There is no run token". Locally there are no `CDP_URL`, `CDP_URLS`, `BROWSER_COUNT` or `DISPLAY` and no egress proxy: "your agent starts its own browsers."
+
+**Answer submission**
+- `submission` is either `{"kind": "api", "url": ...}` or `{"kind": "site", "siteId": ..., "url": ...}`.
+- RFQ uses `site`: the bid is entered in the tender portal configurator and signed with a TAN from the webmail.
+- run-contract.md: "the site forwards it to the platform, shows the same validation issues in German, and confirms with a receipt."
+- For `api` targets: `POST $ATIRA_API/v1/runs/current/answer` with `x-api-key` and JSON.
+- `400` with `{"issues": [{"path", "message"}]}`: "Nothing is recorded and the clock keeps running; fix it and send it again."
+- `202`: "accepted and final. The run ends, the token and the website logins stop working, and a test run returns its score and breakdown. Your agent then has 10 seconds to exit before the platform stops it."
+- For RFQ the API answer endpoint "answers `409`".
+- scoring.md: "A well-formed answer is final, even if it is wrong."
+
+**Local run mode**
+- There is no `atira` command that runs your agent locally or against arbitrary sites. The documented local flow is `eval "$(atira scout --env)"` and then your own run command (for example `uv run python agent.py`).
+- `atira models proxy [--port &lt;port&gt;]` is "a local proxy to them on 127.0.0.1 (port 8765)". Calls are "free, recorded and never ranked". It needs `atira login`.
+- With your own key you can also use `$API/llm/&lt;provider&gt;/…` with header `x-atira-team-key: &lt;token&gt;` outside runs.
+- `atira test-run &lt;dir&gt;` always runs in the platform sandbox on `public-1`; nothing documents pointing it elsewhere.
+
+**My inference:** because the agent takes sites from `CHALLENGE_SITE_ACCESS` and the brief/schema from `CHALLENGE_SCOUTING`, a local simulator only needs to set those variables in the same shape. An agent that follows `submission.kind` will work against a simulator whose "tender portal" accepts the answer. The docs neither describe nor forbid this.
+
+## F. Security testing
+
+- The only explicit statement is in fair-play.md under "Not allowed": "Attacking the platform, the websites, the sandbox or other teams; sharing scored-run data."
+- Related, also fair-play.md: "Contacting hosts other than the API and the challenge's websites, or trying to get data out of the sandbox."
+- Consequence, fair-play.md: "Breaking these rules gets the submission rejected before it runs, or removed later; repeated or deliberate attempts get the team disqualified."
+- Nothing in the docs permits security testing, and there is no bug-bounty, responsible-disclosure or pen-testing allowance. "Attacking" is not defined.
+
+**My inference:** treat vulnerability scanning, endpoint fuzzing, auth bypass attempts, trying to reach other teams' runs or data, and load testing as prohibited. Ordinary authenticated use of the UI with the scouting logins is what the docs sanction.
+
+One source outside the docs: the Atira MCP server's own instructions in this environment say "Never copy values from run logs, answers, screenshots or the websites into the package (prompts and notes included), and don't replace the model with a fixed script or a crawl-then-one-shot call: the reviewer rejects both." That matches fair-play.md.</result>
+<usage><subagent_tokens>90265</subagent_tokens><tool_uses>11</tool_uses><duration_ms>123767</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4857bde8a8f820e8</task-id>
+<tool-use-id>toolu_01YbTnZnv7ddsDbps83oThCc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-akshatkhair-Documents-Projects-error404ai-ehl-finals/71c86c9d-1e25-4237-8d5a-3b6c47f3e9b5/tasks/a4857bde8a8f820e8.output</output-file>
+<status>completed</status>
+<summary>Agent "Explore repo portal handling" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Simulator compatibility report: `error404ai_ehl_finals` (branch `reverse-engineering-portals`)
+
+Nothing was modified. There is no mock, fixture or fake site of the four portals in the repo today, and no local scorer or answer-schema file. The agent can be pointed at localhost with one env var plus a real model endpoint; no platform API stub is required.
+
+I used one `entire graph search`, then direct reads (the task named the files).
+
+## 1. How the agent learns URLs and logins
+
+**Run contract** (`agent/run.py`)
+- `load_run()` (33-59) has two modes:
+  - No `CHALLENGE_RUN_TOKEN`: reads the whole run from the env var `CHALLENGE_SCOUTING` as JSON and returns `(run, None)`. No HTTP call at all (39-46).
+  - With a token: `GET $CHALLENGE_API_URL/v1/runs/current` with headers `x-api-key: &lt;token&gt;`, `Accept: application/json`, `User-Agent: atira-starter-kit/3`. It retries 5 times and aborts on 401/403/404 (47-59).
+- Run JSON shape (docstring 36-37): `brief` (markdown), `access` (list of `{siteId, url, credentials}`), `submission` (`{kind: "api"|"site", url}`), `answer_schema`, `started_at`, `expires_at`.
+- Keys actually read by the code:
+  - `task["brief"]`, `task["access"][i]["siteId"|"url"]`, `task.get("submission", {})` in `briefing.py:31-47`.
+  - `site["credentials"]["username"|"password"]` in `browser_tools.py:230-232`.
+  - `task["submission"]["kind"]` and `task.get("run_id")` in `agent.py:186-187`.
+  - `expires_at` in epoch milliseconds, optional; when absent `seconds_left` is infinite (`run.py:62-69`) and `agent.py:29,123` caps the run at `LOCAL_SECONDS = 20 * 60`.
+- `submit_answer()` (72-81) is never reached: `solve()` always returns `None` (`agent.py:180`), because the bid is a "site" submission entered in the portal. `answer_schema` is not read anywhere in `agent/` (only mentioned in README and `test_kit.py:23`).
+
+**Minimal simulator contract**
+```
+CHALLENGE_SCOUTING='{"brief": "...", "access": [{"siteId": "...", "url": "http://127.0.0.1:PORT/", "credentials": {"username": "...", "password": "..."}} x4], "submission": {"kind": "site", "url": "..."}, "expires_at": &lt;optional epoch ms&gt;}'
+QWEN_BASE_URL, QWEN_API_KEY    # a real OpenAI-compatible endpoint
+unset CHALLENGE_RUN_TOKEN CDP_URL CDP_URLS
+```
+- `dev/run-local.sh:15` runs `eval "$(atira scout --env)"`, which sets `CHALLENGE_SCOUTING` and the model variables together. A simulator entry point must set `CHALLENGE_SCOUTING` after that eval, or set the model variables itself.
+
+**Brief** (`agent/briefing.py`)
+- One LLM call extracts `Briefing` (13-24): `tender_reference`, `company_name`, `vat_id`, `scenario_date`, `bid_site`, `mail_site`, `tender_site`, `spec_site`, `erp_site`, `submission_steps` (copied word for word).
+- Validator (36-45): every role must be a `siteId` from `access` (one site may play several roles), and every digit-bearing token in the non-role fields must appear verbatim in the brief.
+- So the simulated brief must state, in prose:
+  - the tender reference, company name, VAT id and scenario date;
+  - which site plays which role;
+  - the submission steps, including what to choose for no_bid (`submit.py:129-130` relies on "as the brief's submission steps describe it").
+- `agent.py:56-74` `scenario_time()` parses the scenario date as ISO `YYYY-MM-DD[THH:MM[:SS]][Z|±hh:mm]` or `D.M.YYYY[ HH:MM]`, with an optional IANA zone name in the text, else UTC.
+
+**Browsers** (`agent/browsers.py`)
+- With no `CDP_URLS`/`CDP_URL`, it launches its own Chromium (`HEADLESS=1` hides it) and gives each site its own context at 1280x800 (`more_contexts`, 49-64; used at `agent.py:127`).
+- All tabs of one site share that context's cookies. The sim must tolerate many concurrent tabs per login:
+  - up to 5 ERP tabs (`research.py:27`);
+  - about 5 mailbox tabs: approvals, fx, 2 release folders, plus the signing tab;
+  - 3 tender tabs: positions, answers, bid.
+
+**Models** (`agent/llm.py:41-69`, `agent/models.py`)
+- Only Qwen is used (`agent.json` lists `"models": ["qwen"]`, `"browsers": 4`). Clef has helper code but is never called.
+- Requests go to `$QWEN_BASE_URL/chat/completions` with model `qwen3.8-flash-next` (`AGENT_MODEL` overrides).
+- They are streamed and use tool calls, with `extra_body={"chat_template_kwargs": {"enable_thinking": bool}}`, `temperature=0.2` and `parallel_tool_calls=False`.
+- Any substitute endpoint must accept that unknown `extra_body` key.
+- The simulator needs a real model; `atira models proxy` on `127.0.0.1:8765` is the existing path (`run-local.sh:9`).
+
+**Platform API stub**
+- Not needed in scouting mode.
+- To exercise token mode, stub `GET /v1/runs/current`. `agent/tests/test_kit.py:30-63` already has a scripted `FakeServer` for `/v1/runs/current`, `/v1/runs/current/answer`, `/v1/chat/completions` and `/v1/decide`.
+
+## 2. What the agent assumes about the sites
+
+All browser interaction goes through `SiteSession` and `TOOLS` in `agent/browser_tools.py`, with the page text built by `agent/extract.py`. The code holds no selectors, paths or labels specific to a portal. The site-specific behaviour comes from the model following goal prompts.
+
+**Automatic helpers** (`settle()`, 165-188, run after every action, up to 6 rounds)
+
+| Primitive | Lines | What it relies on |
+| --- | --- | --- |
+| Login | 219-240 | Any visible `input[type=password]`; the first visible non-password/hidden/checkbox/radio/submit/button input in its ancestor `&lt;form&gt;`; submits by pressing Enter in the password field. At most 2 logins per settle. Re-login after expiry works only because the login form reappears. |
+| Cookie consent | 242-259 | A visible `button` or `input[type=submit]` whose text matches `cookie` and an accept/reject word; prefers `notwendig|erforderlich|necessary|essential|ablehnen|reject|decline`. |
+| Human check | 66-88, 261-273 | `input[type=range]` whose aria-label, label or parent text matches `entsperr|unlock|zieh|slide|schieb`: sets it to max and fires `input` and `change`. `input[type=checkbox]` whose label matches `roboter|robot|mensch|human`: clicked. Runs in every frame. |
+| Transient error page | 90-92, 275-289 | Body text under 1500 chars matching `vorübergehend nicht verfügbar|temporarily unavailable|service unavailable|bad gateway|...`: reloads. |
+| Decoy modals | 30-62 | Init script closes `dialog[open]` (modal), `[role=dialog][aria-modal=true]` and `[role=alertdialog]` through a button named `×|✕|x|schließen|close|dismiss|später|...` or carrying `data-close`. Never follows links inside. |
+| Browser dialogs | 154-156 | `window.confirm` and `alert` are auto-accepted. |
+| Popups | 150-152 | A new window becomes the active page. |
+| Navigation | 158-163 | `page.goto(wait_until="domcontentloaded", timeout=30000)`, then waits for `networkidle` (2.5 s). |
+
+- The receipt-number gate (copy a number shown in a canvas `aria-label`) and the terms checkbox are left to the model (plan.md:156-157).
+- The regexes use real umlauts (`vorübergehend`, `schließen`); ASCII transliterations like "voruebergehend" would not match.
+
+**Page view** (`extract.py` `WALK_JS`, 11-171)
+- Drops elements that are `hidden`, `aria-hidden=true`, `inert`, `display:none` or `visibility:hidden` (24-28).
+- Opens every `&lt;details&gt;` (97).
+- Emits `role=tooltip` text as `(tooltip: ...)` even when CSS-hidden, unless `hidden` or `aria-hidden` (115-118).
+- Emits `[img: ...]` for canvas, img and svg from `aria-label`, `alt` or `title` (121-125).
+- Walks same-origin iframes inline as `[frame src]...[/frame]`, and cross-origin ones separately (126-139, 174-190).
+- Emits `(datetime=...)` for `&lt;time datetime&gt;` (153) and `(title: ...)`.
+- Strips zero-width characters (13), puts ` | ` after table cells (157), and keeps `&lt;pre&gt;` line breaks.
+- Interactive elements get `data-ar="eN"` refs: `a[href]`, button, select (first 60 options listed), textarea, input, ARIA roles, `[onclick]`.
+- Not handled: shadow DOM, canvas-drawn text without a label, CSS `::after` content, `opacity:0` or off-screen decoys.
+
+**Model tools** (380-658)
+- `goto(url)`: refuses any URL whose netloc differs from the site's (384). Each simulated site therefore needs its own host:port, and links must stay on it.
+- `click`, `fill(ref, text, submit)` (Enter submits; range inputs set by JS), `select` (by label, then value), `check`, `back`, `read_more(offset)` (view capped at 14,000 chars).
+- `read_all_pages(ref)` (504-589):
+  - follows the same-named link or button repeatedly, incrementing numeric page links;
+  - stops on a disabled or absent control, an unchanged page, or repeated content (handles "past the end repeats the last page");
+  - handles a paging control inside an iframe and "load more" lists that grow;
+  - limits: 15 pages or 45,000 chars per call.
+- `read_pages(urls)`: up to 8 same-site URLs per call.
+- `note()` and all `record_*` tools are grounded: any digit-bearing token must appear verbatim in a view the session saw (`unseen_values`, 628-639).
+  - The sim must render values as plain text exactly once-formatted. The model copies; `agent/parse.py` interprets.
+
+**Parsing assumptions** (`agent/parse.py`)
+- Numbers: "de" or "en" formats; locale tags such as `(de-DE)` or `(en-US)` inside the string decide (28, 46-51). An ambiguous `1.234` with no stated format is rejected.
+- Dates: ISO, `d.m.y`, `m/d/y`, month names, and `(datetime=ISO)` wins. Timezones: IANA names, offsets, `MEZ/MESZ/CET/EET...`.
+- Units: `Stück|St|Stk|pcs|...` and `Satz|Sätze|Set` (`calc.py:48-55`).
+
+**Research goals** (`agent/research.py`)
+- **Tender positions** (186-216): find the tender by reference, possibly take a "declare interest" step, read the bill of quantities. Per position: number, quantity, unit, and the spec requirement it refers to. Max 15 steps.
+  - The BoQ must name a requirement id that the spec also uses.
+- **Tender Q&amp;A** (218-253): read every page with `read_all_pages`. Records quantity changes, withdrawals and attribute amendments, each with answer number and date (UTC preferred).
+- **Spec** (257-304): identify the revision the site marks current (status in history or tooltip), read every requirement.
+  - Fields: id, bore, stroke, pressure, mounting, certification, catalogue group, pieces per set, usable-stroke flag and reserve key.
+- **ERP choose** (403-449): search the catalogue by catalogue group, read the whole result list, open candidate records, record candidates with status and active flag, choose an exact active match.
+- **ERP facts** (463-502): unrestricted free stock, stock and production lead times, and every price condition (validity, currency, FX key, price unit, all scales).
+  - ERP lookups start only for requirements that have a `catalogue_group` (310).
+- **Mail** (506-618): for each topic, per folder (inbox, then archive), search "tender reference + ONE topic word" (AND search), read the list, open hits. Message date from `(datetime=...)`.
+  - Topics: discount approvals, FX fixings ("Devisenfixing"), technical releases ("Technikfreigabe").
+- **Not researched at all**: metal index, packaging tariffs, Konditionsgruppen, setup fees and pools, delivery commitments, project bonus, carton size, masses.
+
+**Planning** (`agent/bidplan.py`)
+- Sender local parts are hardcoded: `leitung` (179), `finanzen` (207), `technik` (229), at the bidder mailbox's domain. The domain comes from the mailbox address shown in the webmail (`agent.py:91`), so the webmail must display the signed-in address.
+- Reference match is exact after `strip()`.
+- no_bid requires all of (344-352, 495-497):
+  - the model chose no material;
+  - `all_candidates_read`;
+  - every candidate is inactive or differs on a numeric attribute;
+  - tender and spec are complete, and the revision is known.
+- Unit price is base less discount only (5-6, 561).
+
+**Bid entry and TAN** (`agent/submit.py`)
+- Goal text (123-172):
+  - register company name, VAT id and contact email;
+  - choose main offer (not alternative), or decline for no_bid;
+  - handle one position per page in any order;
+  - pick the material through dependent choices confirmed one at a time ("options may be sorted as text");
+  - quantity in pieces; numbers in German format without thousands separators;
+  - base price and lead time only where a field exists; other breakdown fields left empty;
+  - use "the form's explicit option to omit a position"; never add positions;
+  - do not go back (it clears later steps);
+  - acknowledge the tender documents but not own terms.
+- Read-back (201-291): on the summary page the model calls `report_summary()`. Reported values must be on the current view (265). They are compared by position digits, material substring, and numbers read with either separator. One correction is allowed, then the offending position is omitted or the bid is signed as is.
+  - The sim's summary page should list per position: omitted or not, material, quantity, unit price, base price, lead time, plus discount and net total.
+- TAN (394-411, 443-458): after requesting a TAN in the form, a separate mailbox tab is reloaded at the mailbox start URL. The model finds the newest TAN message for the exact reference, "the one with the highest request number", without searching. One try is 45 s and 10 steps.
+  - The TAN mail must appear on the mailbox start page, newest first, and contain the tender reference.
+- Success is whatever the model reads as a confirmation (`SubmissionResult.submitted`, 46-50). There is no machine-readable receipt.
+- An LLM 401/403 after a TAN was handed out is treated as "submitted" (482-492), because the real platform ends the run on submit.
+
+**`agent/worker.py`**
+- A generic pydantic-ai loop (96-165).
+- The system prompt (20-48) tells the model to ignore fake browser toolbars, never follow "accept and continue" links, and prefer the plain title link over look-alike buttons.
+
+## 3. What is recorded about the real sites
+
+- **`docs/plan.md:38-105`** is the only structural write-up (public-1 scouting, 2026-10-10). In brief:
+  - Cross-site (40-53): login then `/consent`; decoy modals; fake browser chrome; hidden decoy text and a prompt injection in every mail; collapsed `&lt;details&gt;`; values in canvas `aria-label`s and tooltips; U+200B in references; locale tags; mixed date orders; 3 rows per page with "Weitere laden"; searches with more than 20 hits show nothing; flaky HTTP-200 error pages; session expiry to `/login?returnTo=`.
+  - Tender portal (57-74): `?tab=documents`, `?tab=questions`, `/submission`; three "Oeffnen" controls of which two are decoys; Q&amp;A in two nested iframes; the six-step configurator with its traps; TAN valid 5 minutes, each request invalidating the previous one.
+  - Webmail (78-83): slider plus robot gates; `/messages/&lt;id&gt;`; Posteingang and Archiv searched separately with AND search; look-alike references such as `&lt;ref&gt;-A`; full timestamp in `&lt;time datetime&gt;`.
+  - Supplier portal (87-92): access gate with a Belegnummer in a canvas; oldest revision first; status only in a tooltip; viewer iframe `viewer?revision=X&amp;page=N`; "Originalwortlaut" in details.
+  - ERP (96-105): unlock gate; MM03, MMBE, VK13; `/search?transaction=..&amp;q=..`; blocked-stock trap; one condition record per page; scales under `view=scales`.
+- **`docs/learned.md`** has behavioural notes: sites run on the scenario clock (13-14), TAN "newest" is the highest request number, an empty mail folder costs the full request limit (50), and the `(datetime=...)` fix (48-49).
+- **`CLAUDE.md`** has the task/trap table and scoring. The 29 rules and the answer schema live only on the platform (`/challenges/rfq.md`), not in the repo.
+- **`starter/`** (untracked) is a pristine copy of the Atira starter kit with its own `.venv`:
+  - `solve()` is a stub;
+  - `run.py` is identical to `agent/run.py`;
+  - `browsers.py` and `models.py` are older than the `agent/` versions;
+  - `agent.json` has no `browsers` key;
+  - it holds no site data.
+- **`.claude/worktrees/`** has two worktrees:
+  - `monitoring` on branch `monitoring` at 58af24c;
+  - `stage-dashboard` on branch `monitor-dashboard-tmp` at ac57a2a, locked, with an extra `dev/stage_dashboard/`.
+- **Mocks and fixtures**: no HAR, recorded HTML or fake portal exists. The only fakes are tiny and generic:
+  - `agent/tests/test_extract.py:14-30`: an inline HTML page with invented values.
+  - `agent/tests/test_research.py:18-45`: a Playwright `context.route("**/*")` fake "shop.test" with paged lists and an iframe. This is a ready pattern for serving simulated pages without a server.
+  - `agent/tests/test_kit.py:30-63`: the `FakeServer`.
+- **Traces**: `agent/traces/` (gitignored) holds about 26 local run traces.
+  - Their `view` events contain the full extracted text of real pages, and `steps` events the model's click paths. This is the closest thing to recorded site content.
+  - Some directories are labelled `-fallback`, `-hand`, `-nobid`, `-full`, `tan-*`; no script in the repo produces those labels.
+  - Per `CLAUDE.md`, nothing copied from them may go into code, fixtures or notes.
+- **`experiments/`**: `runs.jsonl` (6 platform runs with per-field points), `local-runs.jsonl`, `run-cache.json`.
+- **Reverse-engineering notes**: despite the branch name, there are none beyond plan.md. HEAD equals the v2 commit 4baae71 plus the uncommitted diff.
+
+## 4. Uncommitted diff (5 files, +38/-21)
+
+- **`agent/parse.py`** (+6): new `_MACHINE = re.compile(r"\(datetime=([^)\s]+)\)")`. `parse_datetime` now uses the ISO timestamp inside `(datetime=...)` when present, instead of the local time shown before it. This fixes the shifted-date bug in learned.md:48. Test: `test_parse.py` `test_machine_timestamp_wins`.
+- **`agent/bidplan.py`** (2 lines, 344-348): the `differs()` check behind `certain_no_match` iterates only over numeric keys (bore, stroke, pressure), not all `MATCH_KEYS`. A candidate that differs only in mounting or certification wording no longer justifies no_bid. `test_bidplan.py` `no_match` now makes the candidate differ on `pressure="250"` instead of `mounting="Gabel"`.
+- **`agent/research.py`**:
+  - `PARTS` now includes `"releases"` by default (623).
+  - `releases()` searches inbox and archive in parallel, one tab each, via the new `folders=` parameter of `_lookup` (520-529, 579-602). `_lookup` accumulates `mail_complete` across calls.
+  - New `ERP_NEEDS_SECONDS = 150`: an ERP lookup for a usable-stroke requirement waits for the releases until `left - 150 s` instead of the fixed 60 s (380-382).
+- Net effect: the usable-stroke path (rule 20) is being switched on end to end, and no_bid is made more conservative.
+
+## 5. `calc.py`, tests, oracle
+
+**`agent/calc.py`** (537 lines, pure, Decimal) implements far more than is wired in.
+
+| Rule area | Where |
+| --- | --- |
+| Quantity changes and withdrawals (1, 13) | `resolve_quantity` 259 |
+| Satz to pieces (17) | `to_pieces` 269 |
+| Scoped amendments (14) | `apply_amendments` 286 |
+| Nominal stroke (20) | `nominal_stroke` 303 |
+| Exact match (3) | `matching_materials` 318 |
+| Authority (21) | `latest_authoritative` 333 |
+| Valid condition and per-position scale (4) | 342, 350 |
+| FX and price unit, HALF_UP to cents (22) | `_base_eur` 411 |
+| Metal index window (28) | `metal_rate` 358 |
+| Conditional discount (5, 16) | `effective_discount` 438 |
+| Discount scope / Konditionsgruppen (12) | `DiscountScope` 58 |
+| Pooled stock and commitments (6, 15, 24) | `lead_time` 449 |
+| Packaging cartons | 513-518 |
+| Setup pool with 5 cent-allocation variants (25) | `allocate_cents` 378 |
+| Marginal bonus bands with largest-remainder split (26) | `bonus_credit` 368 |
+| Single final rounding (27) | 521-523 |
+| no_bid | 463-467 |
+
+- **Oracle entry point**: `calculate(BidInput) -&gt; BidResult`, and `BidResult.answer()` (233-246) returns the answer-shaped dict.
+  - Top level: `tender_reference`, `decision`, `currency`, `discount_percent`, `positions[]`, `total_net`, `notes`.
+  - Per position: `position`, `material_number`, `quantity`, `unit_price`, `lead_time_weeks`, `base_unit_price`, `surcharge_per_unit`, `packaging_per_unit`, `rebate_total`.
+- A scenario generator can build a `BidInput` from its ground truth and use this as the oracle. It is the team's own reading of the rules, not validated against the platform beyond base price, quantity, material and discount.
+- **Wired into the live agent** via `bidplan.py`: quantity, amendments, stroke derivation, match, authority, condition, scale, FX, discount threshold and pooled lead time. Surcharge, setup, packaging, bonus, commitments and discount scope are not wired.
+
+**Tests** (`agent/tests/`)
+- Plain `unittest`, no pytest or conftest. Each file does `sys.path.insert` of `agent/`. Run with `cd agent &amp;&amp; uv run python -m unittest discover -s tests`.
+- Fixtures are inline builder functions with invented values:
+  - `test_calc.py:50-70`: `cond`, `mat`, `pos`, `bid`.
+  - `test_bidplan.py:36-100`: `tpos`, `req`, `cand`, `cond`, `facts`, `erp`, `approval`, `fixing`, `findings`, `plan`.
+- `test_bidplan.py` builds a `Findings` object and asserts on `build_plan`. That is the natural seam for "scenario to expected plan" tests without a browser.
+- `test_extract.py` and `test_research.py` launch headless Chromium.
+
+**Answer schema and validator**: none locally. The schema arrives only as `task["answer_schema"]` at runtime and is unused.
+
+## 6. Dev scripts and where a simulator hooks in
+
+- **`dev/run-local.sh`**:
+  1. checks the proxy on `127.0.0.1:8765`;
+  2. runs `eval "$(atira scout --env)"`;
+  3. runs `cd agent &amp;&amp; HEADLESS=1 TRACE_DIR=agent/traces/&lt;utc stamp&gt; uv run --no-sync python agent.py`;
+  4. runs `dev/track.py local --trace ...`, `track.py report` and `dashboard.py`.
+- **`dev/track.py local`** (`summarise_trace`, 109-166) is not a scorer. It records requests, tokens, per-worker stats, errors and the `result` event (`submitted`, `confirmation`, omitted count) to `experiments/local-runs.jsonl`.
+- **`dev/test-run.sh`**: runs `atira test-run ./agent --follow`, then `track.py platform &lt;run&gt;`. Real scoring exists only here.
+- **`dev/smoke.py`**: one worker per site. `GOALS` is keyed by the public-1 siteIds `tender-portal`, `customer-portal`, `erp`, `mail` (31-36), so a simulator would have to reuse those ids or the script raises `KeyError`.
+- **`dev/research_check.py`**: runs only `research()` and prints the `Findings` JSON. Parts are selectable; `RESEARCH_SECONDS` and `TRACE_DIR` apply. It is useful for per-trap checks against a sim without bid entry.
+- **`dev/dashboard.py`**: platform runs only. Its `FIELDS` and `TOP` tuples (31-37) list the scored field names.
+
+**What a "run against simulated portals" entry point needs**
+1. Start four servers on distinct host:ports.
+2. Export `CHALLENGE_SCOUTING` with the shape from section 1, after or instead of `atira scout --env`, keeping `QWEN_BASE_URL` and `QWEN_API_KEY`.
+3. Run `agent.py` unchanged with `TRACE_DIR` set.
+4. Read the signed bid from the simulator's own state. The agent returns nothing; the trace's `plan` event (`agent.py:161-165`) and `result` event (178) show intent only.
+5. Diff the signed bid against the `calc.calculate` oracle, using the per-field weights in `docs/plan.md:131-133`.
+
+**Things the sim must get right**
+- Keep it outside `agent/`: fair play, and `atira test-run` uploads untracked files in the package directory.
+- Run a scenario clock independent of wall time.
+- A new TAN request invalidates the previous one; TAN mails get rising request numbers.
+- Session expiry redirects to a login form.
+- If realism is wanted, cut model access after submit.</result>
+<usage><subagent_tokens>195924</subagent_tokens><tool_uses>28</tool_uses><duration_ms>164964</duration_ms></usage>
+</task-notification>
