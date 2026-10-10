@@ -19,8 +19,6 @@ from urllib.parse import urljoin, urlparse
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, RunContext
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
 
 import llm
 from browser_tools import Deps, SiteSession, _click
@@ -392,15 +390,18 @@ def ungrounded(record: BaseModel, text: str, skip: tuple[str, ...] = ("date",)) 
 
 
 def reader_model():
-    """The run's model with a longer timeout, for thinking readers that write long typed answers."""
-    base = llm.model()
-    return OpenAIChatModel(base.model_name, provider=OpenAIProvider(
-        openai_client=base.client.with_options(timeout=READER_TIMEOUT, max_retries=2)))
+    """The run's model; readers get their longer deadline per call from reader_settings()."""
+    return llm.model()
+
+
+def reader_settings():
+    """Thinking on, with a whole-call deadline long enough for readers that write long typed answers."""
+    return llm.settings(thinking=True, timeout=READER_TIMEOUT)
 
 
 async def _read(output_type, instructions: str, text: str, prompt: str):
     agent = Agent(reader_model(), output_type=output_type, instructions=instructions,
-                  model_settings=llm.settings(thinking=True), retries=3)
+                  model_settings=reader_settings(), retries=3)
 
     @agent.output_validator
     def _grounded(records):

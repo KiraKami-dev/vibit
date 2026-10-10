@@ -44,6 +44,7 @@ from research_tender import (
     keep_results_tool,
     paging_tool,
     reader_model,
+    reader_settings,
     ungrounded,
 )
 from worker import run_worker
@@ -335,7 +336,7 @@ class KindResult:
 async def read_message(view: str, kind: Kind, reference: str) -> MailRecord | None:
     record_type = MailRecord[kind.schema.content]  # type: ignore[valid-type]
     agent = Agent(reader_model(), output_type=record_type, instructions=READ_INSTRUCTIONS,
-                  model_settings=llm.settings(thinking=True), retries=3)
+                  model_settings=reader_settings(), retries=3)
 
     @agent.output_validator
     def _grounded(record):
