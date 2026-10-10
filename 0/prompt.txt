@@ -297,3 +297,7 @@ Ok. Can we submit a scoring of v1 then?
 <status>completed</status>
 <summary>Background command "Retry the v1 submission without a timeout" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+Can you enable all entire features, e.g. see here: https://hack.entire.io/ehl-munich-2026/ (I should have access)
