@@ -9,6 +9,8 @@ Finished runs are recorded with dev/track.py (experiment "soak") and summarised 
 quality, minutes, cost, and the problems, stops and failed phases the run's log shows. Stop it with Ctrl-C; runs
 already started keep going on the platform.
 """
+from __future__ import annotations
+
 import argparse
 import json
 import re
