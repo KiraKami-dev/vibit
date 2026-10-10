@@ -1177,3 +1177,49 @@ Files are in `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_fina
 ---
 
 Ok, what is the state of the subagents? Which ones are done, which ones are running and for how long?
+
+---
+
+<task-notification>
+<task-id>a8dbd5d3b3a7a21da</task-id>
+<tool-use-id>toolu_01HKrqY4azpDhyrzyNR96fJf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a8dbd5d3b3a7a21da.output</output-file>
+<status>completed</status>
+<summary>Agent "Finish model timeouts (Opus)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've finished the task in the worktree and found a real bug along the way: the per-mode timeouts the previous agent added never fired on slow calls. The test it was fixing was already correct in commit 55fc457. All 108 tests pass after the rebase, and there's one commit, `90c0cc4` "Use per-mode model timeouts with retry logging", on branch `worktree-agent-a78d2a106642d0cc6`. Nothing was pushed or merged.
+
+**The bug.** When the model takes longer than about 35 s, the proxy sends the response headers and then a newline every ~15 s until it finishes or gives up at 300 s. The client's read timeout only measures the gap between chunks, so it never fired. In a raw curl check, one thinking-on call ran 300 s and received only 18 newline bytes. With the commit as it was, a thinking-on call hung for over 275 s with no retry.
+
+**What changed:**
+- **`agent/llm.py`:**
+  - **Whole-call deadline:** `model()` now uses a small HTTP client subclass that turns the per-request timeout into a deadline for the whole call. When it expires it raises `ReadTimeout`, and the OpenAI client then retries. The call log marks cut-off calls as `incomplete`.
+  - **Defaults:** thinking-off is now 45 s instead of 30 s. Thinking-on stays at 90 s.
+  - **Retries:** `LLM_RETRIES=0` now turns retries off.
+  - **`env_seconds()`:** the old `_positive()` is now public.
+- **`agent/research.py`:** `_slow_model()` set `LLM_TIMEOUT` temporarily to get a longer timeout on the client. The per-request timeout from `settings()` overrides that, so it didn't work. It's replaced by `_read_settings(thinking)`, which passes `LLM_READ_TIMEOUT` (default 90 s) through `llm.settings(..., timeout=...)`.
+- **`agent/tests/test_llm.py`:** three new tests check that a slow trickling body times out, that late headers time out, and that a normal call is read in full.
+
+**Measured against the proxy on 127.0.0.1:8765.** `atira scout --env` hung, so I read the proxy address from the proxy's log instead.
+
+| Call | Duration | Notes |
+|---|---|---|
+| Thinking-off, 12 at once | 2.3 to 4.3 s | 2 of the 12 hung until the proxy returned 502 at 300 s, which is the case the deadline now cuts off |
+| Thinking-on, 8 at once | 26 to 41 s | All finished within the 90 s deadline with no retry |
+| Short thinking-on | 6 to 8 s | No retry |
+| Long thinking-on, 45 s deadline | 45 s | Cut off as expected, retried once, then failed |
+| Thinking-off copying 80 table rows | ~85 s | Shows that time grows with the length of the answer, not only the mode |
+
+I chose 45 s for thinking-off because steps take 2 to 5 s and it leaves room for the 30 to 36 s calls the mail agent saw. Calls that write long answers should pass their own timeout.
+
+**For the mail and tender agents (please pass this on):** the `reader_model()` workaround in `research_tender.py`, which `research_mail.py` imports, no longer works on this branch. The per-request timeout from `llm.settings()` beats the client timeout set with `with_options(timeout=180)`, so those readers currently get 90 s. They should use `llm.model()` and pass the timeout per call:
+```python
+Agent(llm.model(), ..., model_settings=llm.settings(thinking=True, timeout=180))
+```
+Setting `LLM_TIMEOUT_THINKING` or `LLM_TIMEOUT` changes the default for every call in that mode. I left both files alone, as the coordinator asked.
+
+**Rebase:** it applied cleanly onto the current main (now at `65f4aa9`). Main's `llm.thinking(phase, default)` and the `THINKING_*` switches had already been in the base, and the briefing and submit code still use them.
+
+**Commit message:** reworded as you specified, keeping the `Entire-Checkpoint:` line. Only `agent/` files are in the commit; nothing under `.claude/` was staged.</result>
+<usage><subagent_tokens>91641</subagent_tokens><tool_uses>42</tool_uses><duration_ms>2542273</duration_ms></usage>
+</task-notification>
