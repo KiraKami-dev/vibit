@@ -330,3 +330,7 @@ ade language, easy to understnad and less words
 ---
 
 ~/Downloads/error404.ai-v3 Check this repository. This is what I worked with in the Claude GUI, which told me the changes in these specific files that can improve our run, maybe with more cost. We are trying to do it while thinking, so do these ones: make changes in the files with the same name. You just understand and make the changes in this repository, but do not touch the main branch. Only do it in the current separate branch on which we have been working. Once done, don't start anything. Just let me know, and we'll start on a specific data
+
+---
+
+just start on test data now, in the sandbox theirs, atira one, error404.ai · run_df14f82a49438b67, can you run specifically on this one? before doing anything, pull the latest main and then check both, ofc mine should be the latest cuz i'm trying my own stuff on my branch. when done, 1st try the above mentioned run, then just run it on a new one
