@@ -44,6 +44,9 @@ button.m{font:inherit;font-size:12px;padding:2px 10px;border:1px solid var(--lin
 button.m.on{color:var(--acc);border-color:var(--acc)}
 .legend{display:flex;flex-wrap:wrap;gap:4px 14px;padding:6px 8px 4px;font-size:12px;color:var(--mute)}
 .legend i{display:inline-block;width:10px;height:3px;margin-right:5px;vertical-align:middle;border-radius:2px}
+.tip{position:absolute;display:none;pointer-events:none;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.08);padding:8px 10px;font-size:12px;min-width:160px;z-index:5}
+.tip b{display:block;margin-bottom:4px}.tip div{display:flex;justify-content:space-between;gap:14px;padding:1px 0}
+.tip div.us{color:var(--usink);font-weight:600}
 ul.feed{list-style:none;margin:0;padding:0}
 ul.feed li{padding:7px 12px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:12px}
 ul.feed li:first-child{border-top:0}
@@ -60,9 +63,9 @@ ul.feed li:first-child{border-top:0}
 
 <section>
   <h2>What each team is doing in test runs</h2>
-  <p class="hint">One line per test run, coloured by team, from the moment the stage first shows it. Thick dots are runs live right now.
+  <p class="hint">Cumulative model calls (or cost) over each team's test run. Hover for every team's value at that moment.
     <span id="metricBtns" style="margin-left:8px"></span></p>
-  <div class="card" style="padding:8px"><svg id="lines" viewBox="0 0 900 300" width="100%"></svg><div id="legend" class="legend"></div></div>
+  <div class="card" style="padding:10px 10px 4px;position:relative;overflow:visible"><svg id="lines" viewBox="0 0 900 380" width="100%" style="display:block"></svg><div id="tip" class="tip"></div><div id="legend" class="legend"></div></div>
 </section>
 
 <section>
@@ -196,29 +199,68 @@ function lines(){
   $('metricBtns').innerHTML=[[2,'Calls'],[3,'Cost']].map(([i,l])=>`<button class="m ${METRIC===i?'on':''}" data-m="${i}">${l}</button>`).join('');
   document.querySelectorAll('#metricBtns button').forEach(b=>b.onclick=()=>{METRIC=+b.dataset.m;render()});
   const live=new Set(S.window.map(r=>r.id));
-  const R=S.all.filter(r=>/test/i.test(r.kind||'')&&r.samples.length>=2&&now-r.last<1800);
-  if(!R.length){svg.innerHTML='<text x="450" y="150" text-anchor="middle">Collecting test runs…</text>';$('legend').innerHTML='';return}
-  const names=[...new Set(S.all.map(r=>r.team))].sort();
-  const W=900,H=300,m={l:52,r:14,t:10,b:28};
-  const xmax=Math.max(120,...R.map(r=>r.samples[r.samples.length-1][1]));
-  const ymax=Math.max(METRIC===3?0.01:5,...R.map(r=>r.samples[r.samples.length-1][METRIC]))*1.08;
-  const X=v=>m.l+v/xmax*(W-m.l-m.r),Y=v=>H-m.b-v/ymax*(H-m.t-m.b);
-  const yfmt=v=>METRIC===3?'$'+(v<1?v.toFixed(2):v.toFixed(1)):Math.round(v);
-  let o='';
-  for(let i=0;i<=4;i++){const v=ymax*i/4;o+=`<line x1="${m.l}" x2="${W-m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text x="${m.l-6}" y="${Y(v)+4}" text-anchor="end">${yfmt(v)}</text>`}
-  const step=xmax>900?300:xmax>400?120:60;
-  for(let x=0;x<=xmax;x+=step)o+=`<text x="${X(x)}" y="${H-8}" text-anchor="middle">${Math.round(x/60*10)/10}m</text>`;
-  const ordered=[...R].sort((a,b)=>(a.team===US)-(b.team===US));   // ours drawn last, on top
-  for(const r of ordered){
-    const c=teamColor(r.team,names),isLive=live.has(r.id),u=r.team===US;
-    const pts=r.samples.map(s=>X(s[1]).toFixed(1)+','+Y(s[METRIC]).toFixed(1)).join(' ');
-    const e=r.samples[r.samples.length-1];
-    o+=`<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="${u?3:1.6}" stroke-opacity="${isLive||u?1:.4}"><title>${esc(r.team)}</title></polyline>`;
-    if(isLive)o+=`<circle cx="${X(e[1])}" cy="${Y(e[METRIC])}" r="${u?5:3.5}" fill="${c}"><title>${esc(r.team)} · ${fmtT(e[1])} · ${e[2]} calls · ${usd(e[3])}</title></circle>`;
+  // one line per team: its furthest-along test run seen in the last 30 min
+  const best={};
+  for(const r of S.all){
+    if(!/test/i.test(r.kind||'')||r.samples.length<2||now-r.last>1800)continue;
+    const cur=best[r.team],lastS=r.samples[r.samples.length-1][1];
+    if(!cur||lastS>cur.samples[cur.samples.length-1][1])best[r.team]=r;
   }
+  const R=Object.values(best);
+  if(!R.length){svg.innerHTML='<text x="450" y="190" text-anchor="middle">Collecting test runs…</text>';$('legend').innerHTML='';return}
+  const names=[...new Set(S.all.map(r=>r.team))].sort();
+  const W=900,H=380,m={l:54,r:170,t:14,b:34};
+  const xmax=Math.ceil(Math.max(180,...R.map(r=>r.samples[r.samples.length-1][1]))/60)*60;
+  const rawY=Math.max(METRIC===3?0.01:10,...R.map(r=>r.samples[r.samples.length-1][METRIC]));
+  const nice=v=>{const e=10**Math.floor(Math.log10(v));return [1,2,2.5,5,10].map(k=>k*e).find(k=>k>=v)};
+  const ymax=nice(rawY*1.05);
+  const X=v=>m.l+v/xmax*(W-m.l-m.r),Y=v=>H-m.b-v/ymax*(H-m.t-m.b);
+  const yfmt=v=>METRIC===3?'$'+(v<0.1?v.toFixed(3):v.toFixed(2)):String(Math.round(v));
+  let o='';
+  for(let i=0;i<=4;i++){const v=ymax*i/4;o+=`<line x1="${m.l}" x2="${W-m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="#eeeeec"/><text x="${m.l-8}" y="${Y(v)+4}" text-anchor="end">${yfmt(v)}</text>`}
+  const step=xmax>900?300:xmax>420?120:60;
+  for(let x=0;x<=xmax;x+=step)o+=`<line x1="${X(x)}" x2="${X(x)}" y1="${m.t}" y2="${H-m.b}" stroke="#f4f4f2"/><text x="${X(x)}" y="${H-14}" text-anchor="middle">${x/60}m</text>`;
+  o+=`<text x="${m.l}" y="${H-1}" style="font-size:10px">time since run start</text>`;
+  const ends=[];
+  const order=[...R].sort((a,b)=>(a.team===US)-(b.team===US));
+  for(const r of order){
+    const c=teamColor(r.team,names),isLive=live.has(r.id),u=r.team===US;
+    const d='M'+r.samples.map(q=>X(q[1]).toFixed(1)+' '+Y(q[METRIC]).toFixed(1)).join(' L');
+    const e=r.samples[r.samples.length-1];
+    if(u)o+=`<path d="${d} L${X(e[1])} ${Y(0)} L${X(0)} ${Y(0)}Z" fill="${c}" fill-opacity=".10"/>`;
+    o+=`<path d="${d}" fill="none" stroke="${c}" stroke-width="${u?3.2:2}" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${isLive||u?1:.55}"/>`;
+    o+=isLive?`<circle cx="${X(e[1])}" cy="${Y(e[METRIC])}" r="${u?5.5:4}" fill="${c}" stroke="#fff" stroke-width="1.5"/>`
+              :`<circle cx="${X(e[1])}" cy="${Y(e[METRIC])}" r="3.5" fill="#fff" stroke="${c}" stroke-width="1.6"/>`;
+    ends.push({team:r.team,c,u,live:isLive,x:X(e[1]),y:Y(e[METRIC]),val:e[METRIC]});
+  }
+  // direct labels in the right gutter, pushed apart so they never overlap
+  const L=[...ends].sort((a,b)=>a.y-b.y);let prev=-99;
+  for(const l of L){l.ly=Math.max(l.y,prev+14);prev=l.ly}
+  const over=L.length?L[L.length-1].ly-(H-m.b):0;if(over>0)for(const l of L)l.ly-=over;
+  for(const l of L){
+    o+=`<path d="M${l.x+7} ${l.y} L${W-m.r+8} ${l.ly}" stroke="${l.c}" stroke-opacity=".35" fill="none"/>`;
+    const nm=l.team.length>17?l.team.slice(0,16)+'…':l.team;
+    o+=`<text x="${W-m.r+12}" y="${l.ly+4}" style="fill:${l.u?'#b45309':'#1c1917'};font-weight:${l.u?700:500};font-size:12px">${esc(nm)}</text>`;
+    o+=`<text x="${W-m.r+12+nm.length*6.4+6}" y="${l.ly+4}" style="font-size:11px">${yfmt(l.val)}</text>`;
+  }
+  o+=`<line id="xh" x1="0" x2="0" y1="${m.t}" y2="${H-m.b}" stroke="#a8a29e" stroke-dasharray="3 3" visibility="hidden"/>`;
   svg.innerHTML=o;
-  const teams=[...new Set(R.map(r=>r.team))].sort((a,b)=>(b===US)-(a===US)||a.localeCompare(b));
-  $('legend').innerHTML=teams.map(t=>`<span><i style="background:${teamColor(t,names)}"></i>${esc(t)}</span>`).join('');
+  $('legend').innerHTML=`<span><i style="background:#f59e0b;height:4px"></i>${esc(US)} (us)</span><span>● live now</span><span>○ left the stage window (last value seen)</span><span>One line per team: its furthest-along test run in the last 30 min</span>`;
+  // hover readout: every team's value at the pointer's time
+  const tip=$('tip');
+  svg.onmousemove=ev=>{
+    const bb=svg.getBoundingClientRect(),px=(ev.clientX-bb.left)/bb.width*W;
+    const t=(px-m.l)/(W-m.l-m.r)*xmax;
+    if(t<0||t>xmax){svg.onmouseleave();return}
+    const rows=R.map(r=>{const sm=r.samples;if(t>sm[sm.length-1][1]||t<sm[0][1])return null;
+      let i=sm.findIndex(q=>q[1]>=t);if(i<0)i=sm.length-1;return {team:r.team,v:sm[i][METRIC]}}).filter(Boolean).sort((a,b)=>b.v-a.v);
+    const xh=svg.querySelector('#xh');xh.setAttribute('x1',px);xh.setAttribute('x2',px);xh.setAttribute('visibility','visible');
+    tip.innerHTML=`<b>${fmtT(t)} into the run</b>`+(rows.map(r=>`<div class="${r.team===US?'us':''}"><span>${esc(r.team)}</span><span>${yfmt(r.v)}</span></div>`).join('')||'<div class="mute">no run reached this point</div>');
+    tip.style.display='block';
+    const cb=svg.parentElement.getBoundingClientRect();
+    tip.style.left=Math.min(ev.clientX-cb.left+14,cb.width-190)+'px';tip.style.top=Math.max(4,ev.clientY-cb.top-20)+'px';
+  };
+  svg.onmouseleave=()=>{tip.style.display='none';const xh=svg.querySelector('#xh');if(xh)xh.setAttribute('visibility','hidden')};
 }
 function runLog(){
   const ev=[],now=S.polled_at;
