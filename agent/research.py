@@ -736,7 +736,10 @@ class Erp:
         for attempt in range(2):  # retry once: the ERP sometimes drops the session mid-search
             await self._enter()
             try:
-                session = await self._tab(req.requirement_id if not attempt else f"{req.requirement_id}+")
+                try:  # a tab that does not open (SiteSession.start gave up) costs this attempt, not the research
+                    session = await self._tab(req.requirement_id if not attempt else f"{req.requirement_id}+")
+                except Exception:
+                    continue
                 report, _ = await run_worker(session, SEARCH_GOAL.format(group=req.catalog_group, want=_want(req)),
                                              SearchReport, deadline=self.deadline, max_steps=14,
                                              **_worker_kwargs(notes=False))
@@ -778,7 +781,10 @@ class Erp:
         for attempt in range(2):  # a second pass, keeping what was read, when facts are missing
             await self._enter()
             try:
-                session = await self._tab(number if not attempt else f"{number}+")
+                try:  # a tab that does not open costs this attempt, not the research
+                    session = await self._tab(number if not attempt else f"{number}+")
+                except Exception:
+                    continue
                 _keep_views(session, views)
                 if link:
                     await self.open(session, link)
@@ -816,10 +822,20 @@ class Erp:
 
     async def collect(self) -> ErpResearch:
         """Wait for every started requirement and the materials they inspect."""
-        results = [await self.tasks[k] for k in sorted(self.tasks, key=calc.position_key)]
+        results = []
+        for k in sorted(self.tasks, key=calc.position_key):
+            try:
+                results.append(await self.tasks[k])
+            except Exception as error:  # one failed requirement must not cost the others
+                results.append(RequirementResearch(requirement_id=k, problems=[
+                    f"research failed: {type(error).__name__}: {str(error)[:160]}"]))
         materials = {}
         for number, task in self.materials.items():
-            record = await task
+            try:
+                record = await task
+            except Exception as error:
+                self.trace.event("erp", "material_failed", material=number, error=f"{type(error).__name__}")
+                continue
             if record is not None:
                 materials[number] = record
         return ErpResearch(requirements=results, materials=materials,
