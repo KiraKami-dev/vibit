@@ -14,6 +14,17 @@ circles for 25 steps, its retry was the same attempt again, and without requirem
 | `llm.py` (defaults) | As in the submitted package: stream watchdog on by default (`LLM_STREAM_WATCHDOG=0` turns it off), call cap 150 s (was 300). |
 | `tests/test_v3.py` | Loop guard, `Stuck` leaving a model run, the race (winner, cancel, cutoff, strategies). |
 
+## After the first v3 test runs
+
+| File | Change |
+| --- | --- |
+| `research.py` (revision) | `_choose_revision`: two judgements at once, one with the navigator's report, one from the page alone; a third call that sees both decides when they differ. |
+| `research.py` (ERP) | `Erp._candidates`: an optional second candidate search by another route beside the prescribed catalogue-group search (`AGENT_ERP_RACE=1`). Off by default: in two sandbox runs where it started it never returned a list before the restarted first search did. `Erp._enter` is safe to cancel (tab slot given back, shared sign-in shielded). |
+| `tests/test_parallel.py` | Both, without browsers or models. |
+
+A second mail search by idle tabs was tried in one run (100, 14:16) and dropped: it started twice and was stopped
+after 40 s and 7 s when the first search returned.
+
 ## Environment variables (all optional)
 
 | Variable | Default | What |
@@ -24,6 +35,8 @@ circles for 25 steps, its retry was the same attempt again, and without requirem
 | `AGENT_LOOP_WINDOW` / `AGENT_LOOP_REPEATS` / `AGENT_LOOP_STOP` | 10 / 3 / 3 | Loop guard |
 | `AGENT_FORM_SECONDS` / `AGENT_SIGNING_RESERVE` | 360 / 180 | Form and signing time |
 | `AGENT_MAIL_SECONDS` | 600 | Mail research time from the orchestrator's start |
+| `AGENT_ERP_RACE` / `AGENT_ERP_SECOND_AFTER` / `AGENT_ERP_ALT_TABS` | 0 / 40 / 3 | ERP second search: on, seconds before it starts, how many at once |
+| `AGENT_REVISION_JUDGES` | 2 | 1 = a single revision judgement |
 | `AGENT_STRONG_MODEL` | unset | Model name for the `explore` attempt, e.g. one your provider key allows |
 | `AGENT_STRONG_BASE_URL` / `AGENT_STRONG_API_KEY` | `OPENAI_BASE_URL` / `OPENAI_API_KEY` | Its endpoint and key (team secret) |
 
@@ -32,3 +45,5 @@ circles for 25 steps, its retry was the same attempt again, and without requirem
 - `specification variant_start` ×3, then `specification winner attempt=…` with `since_start` well before 5:30.
 - `loop` events: which attempt looped, and whether it was stopped.
 - `calc answer` with positions; the form's `configure_position` calls finishing before signing.
+- `erp second_search_start` (should be absent when the first searches work), `erp second_search` with `added`.
+- `revision_disputed` when the two revision judgements differ.

@@ -153,3 +153,14 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   page. Tender documents and Q&A run in two tabs and positions post before the Q&A; a run without complete positions
   still answers (reference, decision, discount, total 0). Test runs: 100 (12.5 min, $0.177) and 100 (13.5 min, $0.184); one earlier run had a
   full research answer (82 offline) but signing timed out (fixed on main by the signing reserve).
+- v3 (three spec strategies, loop guard, cutoff) on main de33a85, first test run: 100 in 15:04, $0.173, 363 calls.
+  The fast attempt won the spec race 51 s after the orchestrator started; ERP searches took 12 to 34 s each and
+  the materials were read by about 130 s; nine mail kinds over four tabs took 37 to 90 s each (done by 278 s);
+  a mail rework after verify cost another 145 s. Bid form: 352 s, of which 172 s were two slow page loads of the
+  bid site and 46 s a stalled model call (caught by the stream watchdog); the five positions took 83 s; summary
+  check plus signing 50 s (TAN round trip 12 s). The form and signing times were enough with 207 s to spare, but
+  only because research ended 130 s before its deadline: with a slow bid site the form needs about 350 s.
+- Two starts before that failed on the platform side ("platform failed, not your agent"): such runs do not count.
+- After the accepted bid the model token is revoked: the signing worker ends with a 401 and the sign-only last pass
+  starts and fails at once. Harmless, but it reads like an error in the log.
+

@@ -337,7 +337,13 @@ async def _extract_page(text: str, document: str, revision: str, context: str, t
         return None
 
 
-async def _choose_revision(history: RevisionHistory, view: str, context: str) -> CurrentRevision | None:
+REVISION_JUDGES = int(os.environ.get("AGENT_REVISION_JUDGES", "2"))  # 1 = a single judgement, as before v3
+
+
+async def _judge_revision(history: RevisionHistory, view: str, context: str, *, listing: bool = True,
+                          opinions: str = "") -> CurrentRevision | None:
+    """One judgement of the governing revision. `listing` adds the navigator's report of the revisions and their
+    statuses; without it the judge reads the page alone. `opinions` are earlier judgements that disagreed."""
     ids = {r.revision.strip() for r in history.revisions}
     agent = Agent(llm.model(), output_type=CurrentRevision, instructions=CHOOSE_REVISION,
                   model_settings=_read_settings(True), retries=3)
@@ -348,14 +354,42 @@ async def _choose_revision(history: RevisionHistory, view: str, context: str) ->
             raise ModelRetry(f"Choose one of the listed revisions: {sorted(ids)}")
         return out
 
-    listing = "\n".join(f"- {r.revision}: {r.status}" for r in history.revisions)
-    prompt = (f"{context}\n\nDocument: {history.document}\nRevisions as reported:\n{listing}\n\n"
-              f"The revision history page:\n{_strip_refs(view)[:12000]}")
+    reported = "\n".join(f"- {r.revision}: {r.status}" for r in history.revisions)
+    prompt = f"{context}\n\nDocument: {history.document}\n"
+    if listing:
+        prompt += f"Revisions as reported:\n{reported}\n"
+    if opinions:
+        prompt += f"\n{opinions}\n"
+    prompt += f"\nThe revision history page:\n{_strip_refs(view)[:12000]}"
     try:
         return (await agent.run(prompt)).output
     except Exception as error:
         print(f"[research] revision choice failed: {type(error).__name__}: {str(error)[:200]}", flush=True)
         return None
+
+
+async def _choose_revision(history: RevisionHistory, view: str, context: str, trace: Trace | None = None,
+                           name: str = "") -> CurrentRevision | None:
+    """
+    The governing revision, judged twice at once: one judge sees the navigator's report and the page, the other
+    the page alone (so a misreported status is not simply repeated). When they name different revisions, a third
+    call that sees both judgements decides. Every later fact hangs on this choice, and two calls side by side
+    take no longer than one.
+    """
+    if REVISION_JUDGES < 2:
+        return await _judge_revision(history, view, context)
+    first, second = await asyncio.gather(_judge_revision(history, view, context),
+                                         _judge_revision(history, view, context, listing=False))
+    if first is None or second is None or same_revision(first.revision, second.revision):
+        return first or second
+    if trace:
+        trace.event(name, "revision_disputed", first=first.revision, first_why=first.why,
+                    second=second.revision, second_why=second.why)
+    opinions = (f"Two readers of this page disagree. One chose {first.revision}: {first.why}. The other chose "
+                f"{second.revision}: {second.why}. Check the statuses yourself, as reported above (some may only "
+                f"show in tooltips, which the page text lacks) and on the page, and decide.")
+    final = await _judge_revision(history, view, context, opinions=opinions)
+    return final or first
 
 
 SALVAGE_VIEWS = 12  # requirement pages read from what the open-revision worker showed, beyond read_document
@@ -453,7 +487,7 @@ async def research_spec(session: SiteSession, briefing: Briefing, *, context: st
         session.trace.event(session.name, "spec_salvaged", revisions=[r.revision for r in history.revisions])
     result.document = history.document
     result.revisions = [SpecRevision(revision=r.revision, status_shown=r.status) for r in history.revisions]
-    choice = await _choose_revision(history, session.view, goal_context)
+    choice = await _choose_revision(history, session.view, goal_context, session.trace, session.name)
     if choice is None:
         return finish("no current revision chosen")
     result.current_revision = choice.revision.strip()
@@ -714,6 +748,22 @@ async def _read_material(number: str, corpus: str, trace: Trace, name: str) -> M
 
 
 MAX_INSPECT = int(os.environ.get("ERP_MAX_INSPECT", "10"))
+# v3, off unless AGENT_ERP_RACE=1: next to the search the brief prescribes, a second worker looks for the same
+# catalogue group's materials by another route. The prescribed search always finishes and its hits come first;
+# the second one only adds. Off by default: in two sandbox runs where it started (slow first searches) it never
+# returned a list before the restarted first search did, and only added load.
+ERP_SEARCH_RACE = os.environ.get("AGENT_ERP_RACE", "0") == "1"
+ERP_ALT_TABS = int(os.environ.get("AGENT_ERP_ALT_TABS", "3"))  # second searches at once, of the ERP's tabs
+# The second search starts once the first has run this long (measured: a first search that works returns within
+# 12 to 34 s), or at once when the first returns without hits; so it costs nothing while the first one works.
+ERP_SECOND_AFTER = float(os.environ.get("AGENT_ERP_SECOND_AFTER", "40"))
+
+SEARCH_ALT_HINT = """\
+Strategy for this attempt: another worker is already using the material search help with the group as the term.
+Reach the same list by another route this system offers: another search field or search help variant, a list or
+report of materials that can be restricted to a catalogue group, or the menu. If a search shows nothing or says
+it is too broad or empty, read what it asks for and adjust how the group is entered accordingly (never leave the
+group out). Return the hits of exactly that group; if no route lists them, return an empty list."""
 
 
 def incomplete(record: MaterialRecord) -> list[str]:
@@ -749,6 +799,7 @@ class Erp:
         self.tasks: dict[str, asyncio.Task] = {}
         # a few tabs at once: when the ERP drops its session, every open tab signs in again at the same moment
         self.tabs = asyncio.Semaphore(int(os.environ.get("ERP_TABS", "8")))
+        self.alt_tabs = asyncio.Semaphore(ERP_ALT_TABS)
         self.started_at: float | None = None
 
     def warm_up(self) -> asyncio.Task:
@@ -768,14 +819,19 @@ class Erp:
 
     async def _enter(self) -> None:
         """Before a worker starts: a tab slot, and the session signed in and not about to time out. When it sat
-        idle for long (the ERP logs out after a few minutes), one tab signs in again before the others pile in."""
-        await self.warm_up()
+        idle for long (the ERP logs out after a few minutes), one tab signs in again before the others pile in.
+        Safe to cancel: the shared sign-in goes on for the other workers, and the tab slot is given back."""
+        await asyncio.shield(self.warm_up())
         await self.tabs.acquire()
-        async with self.lock:
-            if not self.busy and time.monotonic() - self.active_at > self.idle_limit:
-                self.ready = None
-                await self.warm_up()
-            self.busy += 1
+        try:
+            async with self.lock:
+                if not self.busy and time.monotonic() - self.active_at > self.idle_limit:
+                    self.ready = None
+                    await asyncio.shield(self.warm_up())
+                self.busy += 1
+        except BaseException:
+            self.tabs.release()
+            raise
 
     def _leave(self) -> None:
         self.tabs.release()
@@ -809,35 +865,107 @@ class Erp:
             except Exception:  # already gone
                 continue
 
-    async def requirement(self, req: EffectiveRequirement) -> RequirementResearch:
-        out = RequirementResearch(requirement_id=req.requirement_id)
+    async def _search(self, req: EffectiveRequirement, tag: str, *, hint: str = "", thinking: bool = False,
+                      stop_on_loop: bool = False, tries: int = 2, delay: float = 0.0) -> SearchReport | None:
+        """One search for a requirement's candidates, in its own tab; None when the worker returned nothing."""
+        if delay:
+            await asyncio.sleep(delay)
+        goal = SEARCH_GOAL.format(group=req.catalog_group, want=_want(req)) + (f"\n\n{hint}" if hint else "")
         report = None
-        for attempt in range(2):  # retry once: the ERP sometimes drops the session mid-search
+        for attempt in range(tries):  # the ERP sometimes drops the session mid-search
             await self._enter()
             try:
                 try:  # a tab that does not open (SiteSession.start gave up) costs this attempt, not the research
-                    session = await self._tab(req.requirement_id if not attempt else f"{req.requirement_id}+")
+                    session = await self._tab(tag if not attempt else f"{tag}+")
                 except Exception:
                     continue
-                report, _ = await run_worker(session, SEARCH_GOAL.format(group=req.catalog_group, want=_want(req)),
-                                             SearchReport, deadline=self.deadline, max_steps=14,
-                                             **_worker_kwargs(notes=False))
-                await self._close(session)
+                try:
+                    report, _ = await run_worker(session, goal, SearchReport, deadline=self.deadline, max_steps=14,
+                                                 **_worker_kwargs(notes=False, thinking=thinking, loop_guard=True,
+                                                                  stop_on_loop=stop_on_loop))
+                finally:  # also when a faster search made this one unnecessary
+                    await self._close(session)
             finally:
                 self._leave()
             if report is not None:
                 break
-        if report is None:
+        return report
+
+    async def _second_search(self, req: EffectiveRequirement, start: asyncio.Event) -> SearchReport | None:
+        """The search by another route: begins when `start` is set, or after ERP_SECOND_AFTER seconds."""
+        try:
+            await asyncio.wait_for(start.wait(), ERP_SECOND_AFTER)
+        except asyncio.TimeoutError:
+            pass
+        self.trace.event("erp", "second_search_start", requirement=req.requirement_id)
+        async with self.alt_tabs:  # a few at once, so second searches never crowd out the prescribed ones
+            return await self._search(req, f"{req.requirement_id}~alt", hint=SEARCH_ALT_HINT, thinking=True,
+                                      stop_on_loop=True, tries=1)
+
+    def _inspect(self, report: SearchReport | None) -> None:
+        """Start the detail workers of a search's hits (shared per material), without waiting for them."""
+        for c in (report.candidates if report else [])[:MAX_INSPECT]:
+            self.material(c.material_number.strip(), c.link.strip())
+
+    async def _candidates(self, req: EffectiveRequirement) -> tuple[SearchReport | None, SearchReport | None]:
+        """
+        The prescribed search and, alongside it, a second one by another route: (first, second) reports.
+        The prescribed search is never cut short. With hits, it settles the matter and a second search still
+        running (or not yet begun) is stopped. A second search that is faster gets its hits inspected at once;
+        when the prescribed search found nothing, the second begins at once if it has not, and is waited for.
+        """
+        start = asyncio.Event()
+        first = asyncio.create_task(self._search(req, req.requirement_id))
+        second = asyncio.create_task(self._second_search(req, start)) if ERP_SEARCH_RACE else None
+
+        def result(task: asyncio.Task | None) -> SearchReport | None:
+            if task is None or not task.done() or task.cancelled() or task.exception() is not None:
+                return None
+            return task.result()
+
+        try:
+            if second is not None:
+                await asyncio.wait({first, second}, return_when=asyncio.FIRST_COMPLETED)
+                if not first.done():  # the second search is in first: a head start for its hits
+                    early = result(second)
+                    self.trace.event("erp", "second_search_first", requirement=req.requirement_id,
+                                     hits=len(early.candidates) if early else 0)
+                    self._inspect(early)
+            await asyncio.wait({first})
+            report = result(first)
+            if second is not None and not (report and report.candidates) and not second.done():
+                start.set()
+                self.trace.event("erp", "waiting_for_second_search", requirement=req.requirement_id)
+                await asyncio.wait({second})
+            return report, result(second)
+        finally:
+            for task in (first, second):
+                if task is not None and not task.done():
+                    task.cancel()
+
+    async def requirement(self, req: EffectiveRequirement) -> RequirementResearch:
+        out = RequirementResearch(requirement_id=req.requirement_id)
+        report, other = await self._candidates(req)
+        if report is None and other is None:
             out.problems.append("search worker returned no result")
             return out
-        out.search_term = report.search_term
-        out.candidates = [Candidate(material_number=c.material_number.strip(), link=c.link.strip(),
+        out.search_term = (report or other).search_term
+        if other is not None and other.candidates:
+            extra = {c.material_number.strip() for c in other.candidates} - {
+                c.material_number.strip() for c in (report.candidates if report else [])}
+            self.trace.event("erp", "second_search", requirement=req.requirement_id, term=other.search_term,
+                             hits=len(other.candidates), added=sorted(extra))
+        by_number: dict[str, CandidateSeen] = {}
+        for found in (report, other):  # the prescribed search's hits first; the second search only adds
+            for c in (found.candidates if found else []):
+                by_number.setdefault(c.material_number.strip(), c)
+        out.candidates = [Candidate(material_number=number, link=c.link.strip(),
                                     bore=_num(c.bore), stroke=_num(c.stroke), pressure=_num(c.pressure),
                                     mounting=c.mounting, certification=c.certification)
-                          for c in report.candidates]
+                          for number, c in by_number.items()]
         # every hit of the model's search is inspected (the rules cap a usable search at 20 hits); which one fits is
         # the model's choice below, once the details are known
-        out.inspected = list(dict.fromkeys(c.material_number for c in out.candidates))[:MAX_INSPECT]
+        out.inspected = [c.material_number for c in out.candidates][:MAX_INSPECT]
         if len(out.candidates) > MAX_INSPECT:
             out.problems.append(f"{len(out.candidates)} hits, inspected the first {MAX_INSPECT}")
         links = {c.material_number: c.link for c in out.candidates}
