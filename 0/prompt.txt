@@ -2155,3 +2155,30 @@ fix incoming, sqlite is burning rn
 </pasted_content id="c6ab">
 
 " Still I guess trimming efficiency if this happens in the final test phase is good...
+
+---
+
+You just care about having a good submission. What are you currently working on? And how did the last rounds turn out?
+
+---
+
+<task-notification>
+<task-id>bw4h5snsi</task-id>
+<summary>Monitor event: "soak test-run summaries, both runners"</summary>
+<event>00:12 run_7d02b63f45fd7746 de33a85 quality=None 0.0min $0.000 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+Can we maybe also use the one on device instance possible? And until they upgrade the parallelism or so until they improve their systems?
+
+---
+
+<task-notification>
+<task-id>b14miv1ku</task-id>
+<tool-use-id>toolu_018d7a76pUS5QPfs1f8q2v6y</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/b14miv1ku.output</output-file>
+<status>completed</status>
+<summary>Background command "Check the latest soak runs" completed (exit code 0)</summary>
+</task-notification>
