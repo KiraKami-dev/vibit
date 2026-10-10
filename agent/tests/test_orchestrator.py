@@ -197,5 +197,31 @@ class BoardEvents(unittest.TestCase):
         self.assertEqual(set(asyncio.run(scenario())), {"a"})
 
 
+class MailPlan(unittest.TestCase):
+    def test_plan_tries_again_with_a_patient_timeout(self):
+        import time
+
+        import orchestrator
+        import research_mail
+        calls = []
+
+        async def plan(brief, sites, findings="", timeout=0.0):
+            calls.append(timeout)
+            if len(calls) == 1:
+                raise RuntimeError("Request timed out.")
+            return ["kind"]
+
+        o = bare_orchestrator()
+        o.task, o.mail_deadline = {"brief": "b"}, time.monotonic() + 1000
+        original = research_mail.plan_searches
+        research_mail.plan_searches = plan
+        try:
+            self.assertEqual(asyncio.run(o._plan_mail({}, "")), ["kind"])
+        finally:
+            research_mail.plan_searches = original
+        self.assertEqual(calls, [research_mail.PLAN_TIMEOUT, orchestrator.PLAN_PATIENT_TIMEOUT])
+        self.assertTrue(any("planning again" in p for p in o.board.problems))
+
+
 if __name__ == "__main__":
     unittest.main()
