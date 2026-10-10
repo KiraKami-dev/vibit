@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Ut67YAtPyiPKu5GsNMdQwc",
+  "agent_id": "a6d6f18cc58d1c5d9",
+  "subagent_type": "general-purpose",
+  "task_description": "Review experiment tracking setup",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 34539,
+    "cache_read_tokens": 238866,
+    "output_tokens": 3566,
+    "api_call_count": 6
+  },
+  "started_at": "2026-10-10T18:00:08.758508+02:00",
+  "completed_at": "2026-10-10T18:01:08.126756+02:00"
+}
