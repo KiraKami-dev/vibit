@@ -20,6 +20,7 @@ from tracing import Trace
 
 SETTLE_SECONDS = 45  # upper bound for waiting on a page and its helpers after one action
 MAX_VIEW = 14000  # characters of a page shown at once; read_more pages through the rest
+LOOP_VISITS = 3  # arriving on one page this often in a session gets the model a loop hint
 
 # Closes modal <dialog>s and aria-modal popups through their own close button as soon as they open, and records
 # what it closed. Links inside popups ("accept and continue") are never followed.
@@ -109,6 +110,8 @@ class SiteSession:
     seen: str = ""  # every view's text this session, to check notes against
     shown: tuple = ()  # (url, title, view) the model has now, so an unchanged page is not sent again
     base: tuple = ()  # the same for the latest view it got in full; changes are told against this one
+    visits: dict[str, int] = field(default_factory=dict)  # page URL -> times the model arrived on it
+    last_url: str = ""
 
     @property
     def name(self) -> str:
@@ -285,6 +288,13 @@ class SiteSession:
         notes = []
         if len(self.pages) > 1:
             notes.append(f"Windows open: {len(self.pages)} (you are in the newest)")
+        if offset == 0 and page.url != self.last_url:
+            self.last_url = page.url
+            self.visits[page.url] = self.visits.get(page.url, 0) + 1
+            if self.visits[page.url] >= LOOP_VISITS:  # a loop guard: paging back and forth finds nothing new
+                notes.append(f"Note: you have arrived on this page {self.visits[page.url]} times; going back and "
+                             f"forth between the same pages shows nothing new. Act on what this page offers (open "
+                             f"an entry, its menu or its actions) or take another route.")
         if self.events:
             notes.append("Since your last action: " + "; ".join(self.events))
             self.events.clear()

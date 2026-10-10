@@ -59,6 +59,9 @@ async def start_session(session: SiteSession, attempts: int = 2) -> SiteSession:
     for attempt in range(attempts):
         try:
             await asyncio.wait_for(session.start(), SESSION_START_SECONDS)
+            if session.page.url.startswith("chrome-error:") or not session.view.strip():
+                # a failed navigation still "starts": the tab shows the browser's error page and nothing else
+                raise ConnectionError(f"the start page did not load ({session.page.url[:80]})")
             return session
         except Exception as error:
             session.trace.event(session.name, "start_failed", attempt=attempt + 1,
@@ -363,8 +366,9 @@ class Orchestrator:
         board = self.board
         try:
             first = await self.session(site, "mail")
-            others = await asyncio.gather(*(self.session(site, f"mail{i + 2}") for i in range(MAIL_TABS - 1)))
-            self.mail_sessions = [first, *others]
+            others = await asyncio.gather(*(self.session(site, f"mail{i + 2}") for i in range(MAIL_TABS - 1)),
+                                          return_exceptions=True)  # fewer tabs is slower, not fatal
+            self.mail_sessions = [first, *(s for s in others if isinstance(s, SiteSession))]
             positions = await board.wait("position", timeout=min(FINDINGS_WAIT, max(1.0, self.left())))
             findings = "\n".join(f"- position {k}: " + ", ".join(
                 f"{f} {v}" for f, v in fact.value.items() if f.endswith("_key") or f == "condition_group")
