@@ -135,3 +135,5 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   search without a match means no_bid.
 - One run with the mail kinds on site_tools.search/collect kept nothing in three kinds (150 s each; paging
   followed a message list into a session expiry); kept on the paging tool for now.
+- First v2 sandbox test run (orchestrator branch 405b1f4): quality 100, eligible, about 10 min, 308 model calls,
+  $0.134. The full pipeline works in the sandbox; the variance across repeats decides what to submit.
