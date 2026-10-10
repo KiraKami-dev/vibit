@@ -1,32 +1,40 @@
-"""Your agent's entry point: agent.json runs `uv run --no-sync python agent.py`, in the sandbox and on your machine.
+"""
+The agent's entry point: agent.json runs `uv run --no-sync python agent.py`, in the sandbox and on your machine.
 
-The kit only does the plumbing: run.py reads the run and submits an answer, browsers.py attaches to the run's
-browsers, models.py calls the hosted Qwen and Clef. Everything else is yours to build, in `solve` below.
-Docs: $API/docs/building-an-agent.md, $API/docs/run-contract.md, and the rules: $API/docs/fair-play.md
+v1: read the brief, then sign and submit a bid with every position omitted (eligible, decision and reference
+points). Workers for the specification, ERP and pricing come in v2+. See docs/plan.md.
 """
 import asyncio
 import json
 import sys
+import time
 
 import browsers
-import models  # noqa: F401  models.ask_qwen, models.ask_clef: see models.py
 import run as contract
+from briefing import read_brief
+from browser_tools import SiteSession
 from playwright.async_api import async_playwright
+from submit import Mailbox, submit_bid
+from tracing import Trace
+
+SAFETY_SECONDS = 90  # the answer must be in before the run expires
+LOCAL_SECONDS = 20 * 60  # the scouting run does not expire; behave like a scored run
 
 
 async def solve(task: dict, page) -> dict | None:
-    """TODO: your agent goes here.
-
-    `task` is the run: task["brief"] (the task and its rules), task["access"] (each website's url and login),
-    task["submission"] (where the answer goes) and task["answer_schema"]. `page` is a Playwright page in browser 1.
-
-    For an "api" submission, return the answer and main() submits it. For a "site" submission, enter the answer on
-    that website yourself, then return None.
-
-    Mind the clock: a scored run has 20 minutes, and `contract.seconds_left(task)` says how many are left. Every part
-    of the answer scores on its own, so stop and submit your best answer about a minute before the end; an answer
-    that comes too late scores 0.
-    """
+    """Enter the bid on the run's website (a "site" submission) and return None."""
+    trace = Trace()
+    left = min(contract.seconds_left(task), LOCAL_SECONDS)
+    deadline = time.monotonic() + left - SAFETY_SECONDS
+    briefing = await read_brief(task)
+    trace.event("briefing", "done", **briefing.model_dump(exclude={"submission_steps"}))
+    sites = {site["siteId"]: site for site in task["access"]}
+    bid_context, mail_context = await browsers.more_contexts(page, 2)
+    bid = SiteSession(sites[briefing.bid_site], bid_context, trace)
+    mail = SiteSession(sites[briefing.mail_site], mail_context, trace)
+    await asyncio.gather(bid.start(), mail.start())
+    result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline)
+    trace.event("result", "done", result=result.model_dump() if result else None)
     return None
 
 
@@ -39,7 +47,7 @@ async def main() -> int:
         browser, page = await browsers.connect(playwright)  # more browsers: browsers.connect(playwright, 1), ...
         answer = await solve(task, page)
     if answer is None:
-        print("No answer to submit: build your agent in solve() in agent.py", flush=True)
+        print("No answer to submit through the API: the bid is entered on the website", flush=True)
         return 0
     if not token:
         print("Your answer (locally nothing is submitted):", json.dumps(answer, ensure_ascii=False), flush=True)

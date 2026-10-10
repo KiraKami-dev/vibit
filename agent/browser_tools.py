@@ -155,12 +155,20 @@ class SiteSession:
                 await page.wait_for_load_state("networkidle", timeout=2500)
             except Exception:
                 pass
-            if (await self._login(page) or await self._cookies(page) or await self._error_page(page)
-                    or await self._human_check(page)):
+            if (await self._safely(self._login, page) or await self._safely(self._cookies, page)
+                    or await self._safely(self._error_page, page) or await self._safely(self._human_check, page)):
                 page = self.page
                 continue
             break
         await self._collect_closed(page)
+
+    async def _safely(self, helper, page: Page) -> bool:
+        """A helper that fails (a slow page, a detached element) just did nothing; the model sees the page as is."""
+        try:
+            return await helper(page)
+        except Exception as error:
+            self.trace.event(self.name, "helper_error", helper=helper.__name__, error=str(error).splitlines()[0][:160])
+            return False
 
     async def _login(self, page: Page) -> bool:
         password = page.locator("input[type=password]:visible")
@@ -176,7 +184,10 @@ class SiteSession:
         creds = self.site["credentials"]
         await user.first.fill(creds["username"])
         await password.first.fill(creds["password"])
-        await password.first.press("Enter")
+        try:
+            await password.first.press("Enter", timeout=5000)
+        except Exception:
+            pass  # the form was sent; the page is still loading, which settle waits for
         self.events.append("signed in with this run's login")
         self.trace.event(self.name, "helper", action="login", url=page.url)
         await asyncio.sleep(0.3)
@@ -304,6 +315,7 @@ class Deps:
 
     session: SiteSession
     notes: dict[str, str] = field(default_factory=dict)
+    refused: dict[str, int] = field(default_factory=dict)
 
 
 async def goto(ctx: RunContext[Deps], url: str) -> str:
@@ -395,6 +407,10 @@ async def note(ctx: RunContext[Deps], key: str, value: str) -> str:
     missing = unseen_values(value, ctx.deps.session.seen)
     if missing:
         ctx.deps.session.trace.event(ctx.deps.session.name, "note_refused", key=key, missing=missing[:10])
+        ctx.deps.refused[key] = ctx.deps.refused.get(key, 0) + 1
+        if ctx.deps.refused[key] > 2:
+            return (f"Not noted, again. Stop trying to note {key!r}; continue with your goal from what the current "
+                    f"page shows.")
         return (f"Not noted: {', '.join(missing[:10])} appear on no page you have seen. Note only values copied "
                 f"from a page; open the page again if you need to check.")
     ctx.deps.notes[key] = value

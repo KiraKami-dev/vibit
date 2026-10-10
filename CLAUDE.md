@@ -9,13 +9,29 @@ per team). The agent lives in `agent/` and is built on the Atira starter kit. Ke
   site scouting notes and the roadmap v0 to v5. Read it first. Its scouting notes describe public-1 only: they inform
   generic helpers, they must never become hardcoded paths, labels, values or prompt text (the private final run uses
   other software, layouts and data).
-- `agent/`: starter kit (`run.py`, `browsers.py`, `models.py`, `agent.py` with the `solve()` stub) plus the new harness
-  modules `llm.py`, `extract.py`, `browser_tools.py`, `worker.py`, `tracing.py`. Planned, not yet present: `roles.py`,
-  `evidence.py`, `calc.py`, `submit.py`. `agent.json` has no `browsers` key yet (default 1; the plan wants 4).
+- `agent/`: starter kit (`run.py`, `browsers.py`, `models.py`) plus the harness (`llm.py`, `extract.py`,
+  `browser_tools.py`, `worker.py`, `tracing.py`) and v1: `agent.py` `solve()` reads the brief (`briefing.py`), then
+  `submit.py` signs a bid with every position omitted, fetching the contact address and TAN from the webmail.
+  `calc.py` holds the deterministic bid rules (tested, not wired in yet). `agent.json` asks for 2 browsers.
 - `dev/smoke.py`: the v0 check (one worker per site logs in and reads a page). From the repo root:
   `eval "$(atira scout --env)"; HEADLESS=1 uv run --project agent python dev/smoke.py [siteId ...]`
-- Next: finish v0, then v1 (a signed, eligible bid), then v2 to v4 for field points. Use `git status` and
-  `atira status` for the current state; do not trust dated numbers in this file.
+- Next: v2 to v4 for field points (research workers for spec, ERP, tender Q&A and mail, wired into `calc.py`). Use
+  `git status` and `atira status` for the current state; do not trust dated numbers in this file.
+
+## Tracking runs (always)
+
+Every local run, test run and submission goes into `experiments/runs.jsonl` (append-only, committed), rendered to
+`docs/experiments.md`. Use the wrappers, which run and record in one go, from the repo root:
+
+```sh
+dev/run-local.sh v1 "what changed"      # local run on the scouting sites, headless; needs `atira models proxy`
+dev/test-run.sh v1 "what changed"       # sandbox test run, followed to the end, score recorded
+python3 dev/track.py platform <sub_id> --version v1 --note "..."   # after `atira submit`
+```
+
+Commit `experiments/runs.jsonl` and `docs/experiments.md` with the code change they measured. After a run that taught
+something (a failure mode, a speed-up, a score change), add a bullet under "What we tried and learned" in
+`docs/experiments.md`. Notes never contain credentials or values copied from the sites.
 
 ## Platform docs (source of truth; re-read, they change)
 

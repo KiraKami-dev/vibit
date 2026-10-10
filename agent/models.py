@@ -13,7 +13,7 @@ Any other provider works with your own key, through the run's metering proxy: se
 """
 import os
 
-import httpx  # comes with the OpenAI SDK
+import httpx2 as httpx  # comes with the OpenAI SDK
 from openai import AsyncOpenAI
 
 QWEN_MODEL = "qwen3.8-flash-next"

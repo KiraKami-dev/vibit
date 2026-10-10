@@ -11,7 +11,7 @@ import llm
 from browser_tools import TOOLS, Deps, SiteSession, unseen_values
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.capabilities.process_history import ProcessHistory
-from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.usage import UsageLimits
 
@@ -62,15 +62,21 @@ def _forget_old_views(messages: list[ModelMessage]) -> list[ModelMessage]:
 
 async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, context: str = "",
                      deadline: float | None = None, max_steps: int = 40, thinking: bool = False,
-                     grounded: bool = True) -> tuple[T | None, dict[str, str]]:
+                     grounded: bool = True, tools: tuple = (), notes: bool = True
+                     ) -> tuple[T | None, dict[str, str]]:
     """Work `goal` on the session's website until the model returns `output_type`; None when out of time or steps.
 
     `deadline` is a `time.monotonic()` value. With `grounded`, a result whose values (anything with a digit) appear
-    on no page the worker saw goes back to the model. The notes the model recorded are returned either way.
+    on no page the worker saw goes back to the model. `tools` adds tools beyond the browser ones; `notes=False`
+    drops note() for short lookups that should just return. The notes the model recorded are returned either way.
     """
     deps = Deps(session=session)
-    agent = Agent(llm.model(), output_type=output_type, deps_type=Deps, instructions=INSTRUCTIONS,
-                  tools=TOOLS, model_settings=llm.settings(thinking), retries=2,
+    browser = [tool for tool in TOOLS if notes or tool.__name__ != "note"]
+    instructions = INSTRUCTIONS if notes else INSTRUCTIONS.replace(
+        "Record every fact you establish with note() as soon as you have it, then return the result.",
+        "Return the result as soon as you have it.")
+    agent = Agent(llm.model(), output_type=output_type, deps_type=Deps, instructions=instructions,
+                  tools=[*browser, *tools], model_settings=llm.settings(thinking), retries=4,
                   capabilities=[ProcessHistory(_forget_old_views)])
     if grounded:
         @agent.output_validator
@@ -100,7 +106,7 @@ async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, c
         session.trace.event(session.name, "done", seconds=round(time.monotonic() - started, 1),
                             requests=usage.requests, input_tokens=usage.input_tokens,
                             output_tokens=usage.output_tokens, output=repr(output)[:500])
-    except (asyncio.TimeoutError, UsageLimitExceeded) as error:
-        session.trace.event(session.name, "stopped", reason=type(error).__name__,
+    except (asyncio.TimeoutError, UsageLimitExceeded, UnexpectedModelBehavior) as error:
+        session.trace.event(session.name, "stopped", reason=f"{type(error).__name__}: {str(error)[:200]}",
                             seconds=round(time.monotonic() - started, 1))
     return output, deps.notes
