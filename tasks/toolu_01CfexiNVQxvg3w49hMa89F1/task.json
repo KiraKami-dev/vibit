@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01CfexiNVQxvg3w49hMa89F1",
+  "agent_id": "a525dcbc767c5a2b1",
+  "subagent_type": "general-purpose",
+  "task_description": "Diagnose and fix partial-score runs",
+  "token_usage": {
+    "input_tokens": 314,
+    "cache_creation_tokens": 320718,
+    "cache_read_tokens": 33415786,
+    "output_tokens": 82234,
+    "api_call_count": 157
+  },
+  "started_at": "2026-10-11T00:45:34.516415+02:00",
+  "completed_at": "2026-10-11T01:13:33.351675+02:00"
+}
