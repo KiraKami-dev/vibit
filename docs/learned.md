@@ -85,3 +85,12 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   override broke a later position that was already right).
 - Without "every value is already calculated; do not research" the bid worker wandered into documents and the Q&A
   and burned its 76 steps picking options itself. The goal now says so up front.
+- Phased flow (form phase thinking off) on the offline mock: positions, discount, net total, offer type and
+  declarations right, summary check matched, signed in 93 s and 16 requests. Thinking-off slips seen there and
+  live: the model typed its own net total (now stated in the goal), clicked "omit" on a position without asking
+  configure_position() (goal: call it first on every position page), sent a partial `fields` map that replaced
+  the first one and let an unrelated position count as entered (maps now merge; a position counts only with
+  material, quantity, price and lead time mapped), and "chose" a neighbouring bore for an impossible one via
+  `choices` (numbers must now match exactly; `choices` only for worded attributes, remembered per position).
+- Live on the shared scouting login, a re-login mid-run reset the wizard to its first step; the worker re-entered
+  the form from the start. Another reason to verify signing only in test runs.

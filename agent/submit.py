@@ -164,6 +164,7 @@ class PositionDesk:
         self.plan = FillPlan()
         self.failures: dict[str, int] = {}
         self.entered: set[str] = set()
+        self.choices: dict[str, dict[str, str]] = {}
 
     @property
     def tools(self) -> tuple:
@@ -193,8 +194,8 @@ class PositionDesk:
             return f"No values for position {position!r}: leave it out with the form's option to omit a position."
         if not plan.fields:
             return "Give fields (control label -> value name) for the controls of this form first."
-        if self.failures.get(position, 0) >= 2:
-            return f"Position {position} failed twice: leave it out with the form's option to omit a position."
+        if self.failures.get(position, 0) >= 3:
+            return f"Position {position} failed three times: leave it out with the form's option to omit a position."
         if time.monotonic() > self.deadline - SIGNING_RESERVE:
             return "Time is short: leave this and every remaining position out and go on to signing."
         async with session.lock:
@@ -203,7 +204,9 @@ class PositionDesk:
                         "its own number.")
             log: list[str] = []
             try:
-                error = await fill_position(session, entry, plan, log, choices)
+                remembered = self.choices.setdefault(position, {})
+                remembered.update(choices or {})  # a revisit of the position needs the same picks
+                error = await fill_position(session, entry, plan, log, remembered)
             except Exception as exc:  # a slow or changed page: the model decides to retry or omit
                 error = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
             session.trace.event(session.name, "configure_position", position=position, done=log, error=error)

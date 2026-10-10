@@ -179,8 +179,8 @@ async def fill_position(session, entry: dict, plan: FillPlan, log: list[str],
     A select mapped to a material attribute (a key that is not an answer field) is a choice that narrows the next
     one: after setting it, `plan.confirm` is clicked so the page offers the next level, and the choice must survive
     that round trip. A control still disabled (a choice from an earlier visit not yet confirmed) gets one confirm.
-    `choices` (label -> option text) is the model's pick for such a choice, used only where the attribute is worded
-    differently from every option; answer fields are never overridden.
+    `choices` (label -> option text) is the model's pick for such a choice, used only where a worded attribute
+    matches no option literally; numbers must match exactly, and answer fields are never overridden.
     """
     picked = {clean(label): text for label, text in (choices or {}).items()}
     answer_keys = MONEY_KEYS | COUNT_KEYS | {"material_number", "position"}
@@ -214,12 +214,13 @@ async def fill_position(session, entry: dict, plan: FillPlan, log: list[str],
         if await element.evaluate("e => e.tagName") == "SELECT":
             state = await _select_state(element)
             option, why = match_option(state["options"], value)
-            if option is None and key not in answer_keys and clean(label) in picked:
+            if option is None and key not in answer_keys and clean(label) in picked and parse_number(value) is None:
                 option, why = match_option(state["options"], picked[clean(label)])  # the model's reading
             if option is None:
                 shown = " | ".join(o["text"] for o in state["options"] if o["value"])[:600]
-                hint = "" if key in answer_keys else (f" If one option means the same as {value!r}, call again "
-                                                      f"with choices={{{label!r}: <that option>}}.")
+                worded = key not in answer_keys and parse_number(value) is None
+                hint = (f" If one option means the same as {value!r}, call again with choices={{{label!r}: <that "
+                        f"option>}}." if worded else " A number must match exactly: leave this position out.")
                 return f"{label!r}: {why}. Options: {shown}.{hint}"
             changed = not option.get("selected")
             if changed:
