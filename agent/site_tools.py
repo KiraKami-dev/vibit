@@ -108,15 +108,22 @@ ROWS_JS = r"""
     kids = kids.filter(k => !(k.tagName === 'TR' && k.querySelectorAll('td').length === 0
                               && k.querySelectorAll('th').length));
     kids = kids.filter(k => !['THEAD', 'TFOOT', 'CAPTION', 'COLGROUP', 'SCRIPT', 'STYLE'].includes(k.tagName));
-    if (kids.length < 2) return [];
+    // a list element (table, ul, role=list) is a list even with a single row (one record per page); any other
+    // container needs at least two repeated children
+    const least = listy(container) ? 1 : 2;
+    if (kids.length < least) return [];
     const counts = {};
     for (const k of kids) counts[sig(k)] = (counts[sig(k)] || 0) + 1;
     const best = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
-    return counts[best] >= 2 ? kids.filter(k => sig(k) === best) : [];
+    return counts[best] >= least ? kids.filter(k => sig(k) === best) : [];
+  }
+  function listy(el) {
+    const role = el.getAttribute('role');
+    return ['TABLE', 'TBODY', 'UL', 'OL'].includes(el.tagName) || ['list', 'table', 'grid'].includes(role);
   }
   function score(container) {
     const rows = rowsOf(container);
-    if (rows.length < 2 || container.closest(NAV)) return 0;
+    if (!rows.length || container.closest(NAV)) return 0;
     let chars = 0, links = 0;
     for (const r of rows) {
       const t = clean(r.textContent);
@@ -124,10 +131,7 @@ ROWS_JS = r"""
       if (r.querySelector('a[href],button,[role=link],[role=button]')) links += 1;
     }
     if (chars / rows.length < 6) return 0;
-    const table = container.tagName === 'TABLE' || container.tagName === 'TBODY' || container.tagName === 'UL' ||
-                  container.tagName === 'OL' || container.getAttribute('role') === 'list' ||
-                  container.getAttribute('role') === 'table' || container.getAttribute('role') === 'grid';
-    return (rows.length + links) * (chars / rows.length) * (table ? 1.5 : 1);
+    return (rows.length + links) * (chars / rows.length) * (listy(container) ? 1.5 : 1);
   }
   function pathOf(el) {
     const parts = [];
@@ -146,7 +150,7 @@ ROWS_JS = r"""
       if (e.tagName === 'TABLE' && rowsOf(e).length) { container = e; how = 'table at ref'; break; }
       const parent = e.parentElement;
       if (parent && rowsOf(parent).includes(e)) { container = parent; how = 'list around ref'; break; }
-      if (rowsOf(e).length >= 2 && score(e) > 0) { container = e; how = 'list at ref'; break; }
+      if (rowsOf(e).length && score(e) > 0) { container = e; how = 'list at ref'; break; }
     }
   }
   if (!container && path) {
@@ -171,7 +175,7 @@ ROWS_JS = r"""
                   text: clean(a.innerText || a.textContent || a.getAttribute('aria-label')),
                   href: a.tagName === 'A' ? a.getAttribute('href') : ''});
     }
-    const t = clean(text(r)).replace(/( ; )+/g, ' ; ').replace(/( \| )+$/, '').replace(/^( ; )+|( ; )+$/g, '');
+    const t = clean(text(r)).replace(/( ; )+/g, ' ; ').replace(/^( ; )+|( ; )+$/g, '').replace(/( ?[|;])+$/, '');
     return {text: t, links};
   });
   return {rows, path: pathOf(container), how, tag: container.tagName.toLowerCase()};
@@ -478,9 +482,13 @@ async def extract_fields(session: SiteSession, fields: dict[str, str], *, thinki
                   model_settings=llm.settings(thinking), retries=2)
     asked = "\n".join(f"- {name}: {description}" for name, description in fields.items())
     prompt = f"Fields:\n{asked}\n\nPage text:\n{view}"
-    result = await agent.run(prompt)
+    try:
+        result = await agent.run(prompt)
+    except Exception as error:  # a refused or hung call: the worker goes on reading the view itself
+        session.trace.event(session.name, "extract_failed", error=f"{type(error).__name__}: {str(error)[:160]}")
+        return "extract failed this time; read the values off the current view instead."
     kept, dropped = ground(result.output, view)
-    usage = result.usage()
+    usage = result.usage
     session.trace.event(session.name, "extract", fields=list(fields), kept=list(kept), dropped=dropped,
                         input_tokens=usage.input_tokens, output_tokens=usage.output_tokens)
     lines = [f"Extracted from the current view ({session.page.url}):"]

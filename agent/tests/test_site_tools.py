@@ -76,6 +76,27 @@ function next() {
 </script>
 """
 
+# A register with one record per page behind "next page" links, and an imitation toolbar with repeated children.
+ONE_PER_PAGE = """
+<div class="bar"><a href="/a">←</a><span>Address</span><button>↻</button></div>
+<div class="bar"><a href="/b">Open</a><span>file.html</span><button>×</button></div>
+<h1>Register</h1>
+<table><thead><tr><th>Number</th><th>Title</th></tr></thead><tbody id="rows">
+<tr><td><canvas role="img" aria-label="DOC-001"></canvas></td><td>Guide <button>Actions</button></td></tr>
+</tbody></table>
+<p>Page <span id="p">1</span> of 3</p>
+<a href="#" id="next" onclick="next(); return false;">Nächste Seite</a>
+<script>
+let page = 1;
+function next() {
+  page = Math.min(page + 1, 3);
+  document.getElementById('p').textContent = page;
+  document.getElementById('rows').innerHTML =
+    `<tr><td>DOC-00${page}</td><td>Record ${page} <button>Actions</button></td></tr>`;
+}
+</script>
+"""
+
 # A search form: "many" is refused as too broad, "none" finds nothing, anything else lists two hits.
 SEARCH = """
 <form onsubmit="go(); return false;">
@@ -169,6 +190,16 @@ class PaginateTest(unittest.TestCase):
         listing = run(go())
         self.assertEqual([r.text.split(" | ")[0][:11] for r in listing.rows], ["Subject one", "Subject two"])
         self.assertEqual(listing.how, "list around ref")
+
+    def test_one_record_per_page_table_is_followed(self):
+        async def go():
+            async with _Browser() as b:
+                session = await b.session(ONE_PER_PAGE)
+                return await paginate(session)
+        listing = run(go())
+        self.assertEqual([r.text for r in listing.rows],
+                         ["[img: DOC-001] | Guide Actions", "DOC-002 | Record 2 Actions", "DOC-003 | Record 3 Actions"])
+        self.assertEqual(listing.how, "main list of the page")
 
     def test_page_without_a_list_says_so(self):
         async def go():
