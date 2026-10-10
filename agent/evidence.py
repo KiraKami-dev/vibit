@@ -6,7 +6,7 @@ here is deterministic: locale-tagged numbers ("1.234,50 (de-DE)", "12,345 (en-US
 masses with units, lead times in weeks. Exact attribute matching is a validator over the model-collected facts.
 """
 import re
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from pydantic import BaseModel, Field
@@ -189,7 +189,7 @@ class EffectiveRequirement(BaseModel):
 
 def effective_requirement(req: Requirement, amendments: list[calc.Amendment] | None = None,
                           reserves: dict[str, Decimal] | None = None,
-                          scenario_date: date | None = None) -> EffectiveRequirement:
+                          scenario_date: date | datetime | None = None) -> EffectiveRequirement:
     """
     Hooks for the other workers' facts: scoped amendments from the tender Q&A (already filtered to the right sender
     by the caller; revision and requirement scoping and latest-wins happen here) and the per-end reserve values of

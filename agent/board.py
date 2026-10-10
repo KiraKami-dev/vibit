@@ -121,6 +121,14 @@ class TenderFactsLike(Protocol):
 
 
 @runtime_checkable
+class MailKindLike(Protocol):
+    """`research_mail.plan_searches(brief, sites, findings)` returns a list of these (frozen dataclasses);
+    `sites` maps each siteId of the run to its URL, `site` is the siteId the model placed the record on."""
+    name: str
+    site: str
+
+
+@runtime_checkable
 class MailFactsLike(Protocol):
     """`research_mail.research_mail(sessions, reference, scenario, brief, *, kinds, deadline)` returns this."""
     mailbox: str

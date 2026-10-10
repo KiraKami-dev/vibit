@@ -15,6 +15,7 @@ The tender Q&A and mail research modules are built separately; they are imported
 runs without them (spec + ERP + calc) otherwise. Nothing here names a site, a label or a value of any dataset.
 """
 import asyncio
+import dataclasses
 import os
 import re
 import time
@@ -126,11 +127,12 @@ async def plan_research(task: dict, briefing: Briefing) -> Plan:
 
 def scenario_time(text: str) -> datetime:
     """The scenario date and time as an aware datetime; a bare date counts until its end (rule 21: "no later")."""
-    try:
-        value = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
-        return value if value.tzinfo else value.replace(tzinfo=UTC)
-    except ValueError:
-        pass
+    if re.search(r"\d:\d\d", text):  # a bare ISO date would parse as midnight, the start of the day
+        try:
+            value = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+            return value if value.tzinfo else value.replace(tzinfo=UTC)
+        except ValueError:
+            pass
     day = parse_date(text)
     m = re.search(r"(\d{1,2}):(\d{2})", text)
     if m:
@@ -233,6 +235,9 @@ class Orchestrator:
         self.reference = briefing.tender_reference
         self.scenario = scenario_time(briefing.scenario_date)
         self.scenario_day: date = self.scenario.date()
+        # calc compares two timestamps as instants and anything date-only by day: hand it the brief's own grain.
+        self.scenario_stamp: date | datetime = (self.scenario if re.search(r"\d:\d\d", briefing.scenario_date)
+                                                else self.scenario_day)
         self.rules = rules_text(task["brief"])
         self.plan: Plan | None = None
         self.tender_facts = None
@@ -245,6 +250,7 @@ class Orchestrator:
         self.mail_kinds: list = []
         self.mail_sessions: list[SiteSession] = []
         self.rework: dict[str, object] = {}  # worker -> coroutine function for doubtful facts
+        self.blank_hints: dict[str, set[str]] = {}  # position -> answer fields that stay blank
 
     def left(self) -> float:
         return self.research_deadline - time.monotonic()
@@ -296,7 +302,7 @@ class Orchestrator:
 
     def effective(self, req: Requirement) -> EffectiveRequirement:
         return effective_requirement(req, amendments=self._amendments(), reserves=self._reserves(),
-                                     scenario_date=self.scenario_day)
+                                     scenario_date=self.scenario_stamp)
 
     async def specification(self, site: str, erp_site: str | None) -> None:
         board = self.board
@@ -363,7 +369,12 @@ class Orchestrator:
             findings = "\n".join(f"- position {k}: " + ", ".join(
                 f"{f} {v}" for f, v in fact.value.items() if f.endswith("_key") or f == "condition_group")
                 for k, fact in positions.items())
-            self.mail_kinds = await research_mail.plan_searches(self.task["brief"], findings)
+            sites = {s["siteId"]: s["url"] for s in self.task["access"]}
+            kinds = await research_mail.plan_searches(self.task["brief"], sites, findings)
+            # The tabs carry tagged names (site:mailN); kinds planned on this website are searched in them.
+            here = self.mail_sessions[0].name
+            self.mail_kinds = [dataclasses.replace(k, site=here) if getattr(k, "site", site) == site else k
+                               for k in kinds]
             await self._research_mail(self.mail_kinds)
         except Exception as error:
             board.problem("mails", f"{type(error).__name__}: {str(error)[:200]}")
@@ -457,7 +468,21 @@ class Orchestrator:
         self.chosen = await reselect(effective, self.erp, self.trace)
         self.trace.event("select", "done", chosen=self.chosen)
 
+    def _unknown_clauses(self, p, clause, pool, bonus) -> None:
+        """A position whose Q&A names a key the mails did not resolve: calc would report a zero for that part,
+        which reads as a known zero, so the report field and the unit price it feeds are left blank instead."""
+        fields = set()
+        if getattr(p, "packaging_key", None) and getattr(clause, "packaging", None) is None:
+            fields |= {"packaging_per_unit", "unit_price"}
+        if getattr(p, "setup_pool_key", None) and p.position not in getattr(pool, "members", []):
+            fields |= {"surcharge_per_unit", "unit_price"}
+        if getattr(p, "bonus_key", None) and p.position not in getattr(bonus, "members", []):
+            fields |= {"rebate_total", "unit_price"}
+        if fields:
+            self.blank_hints.setdefault(p.position, set()).update(fields)
+
     def build_bid(self) -> tuple[calc.BidInput, list[str]]:
+        self.blank_hints = {}
         problems: list[str] = []
         clauses = None
         if self.tender_facts is not None and self.mail_facts is not None and research_mail is not None:
@@ -481,6 +506,8 @@ class Orchestrator:
                 continue
             material = self.erp.materials.get(number) if (number and self.erp) else None
             clause = by_position.get(p.position)
+            self._unknown_clauses(p, clause, getattr(clauses, "setup_pool", None),
+                                  getattr(clauses, "project_bonus", None))
             extra = ({"discount_scope": clause.discount_scope, "setup_fee": clause.setup_fee,
                       "packaging": clause.packaging, "commitment": clause.commitment} if clause
                      else {"setup_fee": getattr(p, "setup_fee", Decimal(0))})
@@ -494,7 +521,7 @@ class Orchestrator:
                                  calc.PositionInput(position=p.position, quantity=p.quantity,
                                                     unit=p.unit if isinstance(p.unit, calc.Unit) else calc.parse_unit(p.unit),
                                                     pieces_per_set=self.requirements[req_id].pieces_per_set, **extra))
-        bid = calc.BidInput(tender_reference=self.reference, scenario_date=self.scenario_day, positions=positions,
+        bid = calc.BidInput(tender_reference=self.reference, scenario_date=self.scenario_stamp, positions=positions,
                             approval=getattr(clauses, "approval", None) or getattr(self.mail_facts, "approval", None),
                             fx_rates=getattr(clauses, "fx_rates", None) or getattr(self.mail_facts, "fx_rates", {}) or {},
                             metal_indices=getattr(clauses, "metal_indices", None)
@@ -514,6 +541,8 @@ class Orchestrator:
             self.board.problem("calc", "no position could be built; the bid form gets no positions")
             return None, None
         result, blank, calc_problems = safe_calculate(bid)
+        for position, fields in self.blank_hints.items():
+            blank.setdefault(position, set()).update(fields)
         problems += calc_problems
         if result is None:
             return None, None
