@@ -2257,3 +2257,24 @@ If this event is something the user would act on now, send a PushNotification. R
 <event>00:29 8c7ab8f local quality=18.9 934s local loop A [ 90.0s] customer-portal start_failed attempt=1 error='TimeoutError: '|[ 90.0s] mail start_failed attempt=1 error='TimeoutError: '|[ 180.0s] customer-portal start_failed attempt=2 error='TimeoutError: '|[ 180.0s] mail start_failed attempt=2 error='TimeoutError: '|</event>
 If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
 </task-notification>
+
+---
+
+Promote it
+
+---
+
+<task-notification>
+<task-id>bw4h5snsi</task-id>
+<summary>Monitor event: "soak test-run summaries, both runners"</summary>
+<event>[Monitor expired after 30m with 5 events delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bifnbspgq</task-id>
+<summary>Monitor event: "local soak scores and sandbox soak results"</summary>
+<event>00:32 run_4c16473513134dea 8c7ab8f quality=100 14.0min $0.141 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
