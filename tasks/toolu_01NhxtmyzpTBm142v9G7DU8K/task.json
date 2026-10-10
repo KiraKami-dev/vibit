@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01NhxtmyzpTBm142v9G7DU8K",
+  "agent_id": "ac9d354450edd835d",
+  "subagent_type": "general-purpose",
+  "task_description": "Overlap bid form with research",
+  "token_usage": {
+    "input_tokens": 338,
+    "cache_creation_tokens": 652798,
+    "cache_read_tokens": 30928820,
+    "output_tokens": 94735,
+    "api_call_count": 169
+  },
+  "started_at": "2026-10-11T00:26:08.995483+02:00",
+  "completed_at": "2026-10-11T01:41:00.024451+02:00"
+}
