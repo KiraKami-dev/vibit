@@ -10,7 +10,7 @@ from typing import TypeVar
 
 import clef
 import llm
-from browser_tools import TOOLS, Deps, SiteSession, unseen_values
+from browser_tools import TOOLS, Deps, SiteSession, Stuck, unseen_values
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.capabilities.process_history import ProcessHistory
 from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
@@ -107,21 +107,26 @@ def _forget_old_views(messages: list[ModelMessage]) -> list[ModelMessage]:
 
 async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, context: str = "",
                      deadline: float | None = None, max_steps: int = 40, thinking: bool = False,
-                     grounded: bool = True, tools: tuple = (), notes: bool = True
+                     grounded: bool = True, tools: tuple = (), notes: bool = True, strong: bool = False,
+                     loop_guard: bool = False, stop_on_loop: bool = False
                      ) -> tuple[T | None, dict[str, str]]:
     """Work `goal` on the session's website until the model returns `output_type`; None when out of time or steps.
 
     `deadline` is a `time.monotonic()` value. With `grounded`, a result whose values (anything with a digit) appear
     on no page the worker saw goes back to the model. `tools` adds tools beyond the browser ones; `notes=False`
     drops note() for short lookups that should just return. The notes the model recorded are returned either way.
+    `strong` uses llm.strong_model() when one is configured (else the default model, as given by `thinking`).
+    `loop_guard` warns the model when a page state keeps coming back; `stop_on_loop` then ends the run (None).
     """
     deps = Deps(session=session)
     browser = [tool for tool in TOOLS if notes or tool.__name__ != "note"]
     instructions = INSTRUCTIONS if notes else INSTRUCTIONS.replace(
         "Record every fact you establish with note() as soon as you have it, then return the result.",
         "Return the result as soon as you have it.")
-    agent = Agent(llm.model(), output_type=output_type, deps_type=Deps, instructions=instructions,
-                  tools=[*browser, *tools, *clef.tools()], model_settings=llm.settings(thinking), retries=4,
+    chosen = llm.strong_model() if strong else None
+    agent = Agent(chosen or llm.model(), output_type=output_type, deps_type=Deps, instructions=instructions,
+                  tools=[*browser, *tools, *clef.tools()],
+                  model_settings=llm.strong_settings() if chosen else llm.settings(thinking), retries=4,
                   capabilities=[ProcessHistory(_forget_old_views)])
     if grounded:
         @agent.output_validator
@@ -134,6 +139,7 @@ async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, c
                                  f"copied from pages; open them again to check.")
             return output
 
+    session.reset_loop(guard=loop_guard, stop=stop_on_loop)
     view = await session.look(fresh=True)
     prompt = f"Website: {session.name} ({session.site['url']})\n\nGoal: {goal}\n"
     if context:
@@ -152,9 +158,11 @@ async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, c
                             requests=usage.requests, input_tokens=usage.input_tokens,
                             cached_tokens=usage.cache_read_tokens, output_tokens=usage.output_tokens,
                             output=repr(output)[:500])
-    except (asyncio.TimeoutError, UsageLimitExceeded, UnexpectedModelBehavior) as error:
+    except (asyncio.TimeoutError, UsageLimitExceeded, UnexpectedModelBehavior, Stuck) as error:
         session.trace.event(session.name, "stopped", reason=f"{type(error).__name__}: {str(error)[:200]}",
                             seconds=round(time.monotonic() - started, 1), requests=usage.requests,
                             input_tokens=usage.input_tokens, cached_tokens=usage.cache_read_tokens,
                             output_tokens=usage.output_tokens)
+    finally:
+        session.reset_loop()  # the next worker on this tab starts without this run's loop options
     return output, deps.notes

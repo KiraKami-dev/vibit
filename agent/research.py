@@ -298,6 +298,9 @@ class SpecPage(BaseModel):
     requirements: list[RequirementSeen]
 
 
+# v3: the finding step is the one that went in circles; it gets more steps (the race deadline bounds it anyway)
+FIND_SPEC_STEPS = int(os.environ.get("AGENT_FIND_SPEC_STEPS", "40"))
+
 FIND_SPEC_GOAL = """\
 Find the buyer's technical specification for the tender in the context (match it by the tender's reference or
 subject; documents may be listed over several pages) and open it. If the site asks for a confirmation before
@@ -367,7 +370,8 @@ def _parse_requirement(seen: RequirementSeen, revision: str) -> Requirement:
 
 async def research_spec(session: SiteSession, briefing: Briefing, *, context: str = "",
                         deadline: float | None = None, on_requirement=None, on_revision=None,
-                        thinking: bool = False) -> SpecResult:
+                        thinking: bool = False, hint: str = "", strong: bool = False,
+                        race: bool = False) -> SpecResult:
     """
     The current specification revision's requirements: a worker finds the document and its revision history
     (navigation, thinking off), a model decides the current revision (thinking on), the worker opens it and pages
@@ -376,6 +380,8 @@ async def research_spec(session: SiteSession, briefing: Briefing, *, context: st
     `on_revision()` runs once the governing revision is chosen (e.g. to warm up the ERP), `on_requirement(req)` as
     soon as each requirement is parsed, so ERP research can start before the last page is read. `thinking`
     turns thinking on for finding the document (a second attempt after a fast one got lost).
+    v3: `hint` adds a search strategy to the finding goal (racing attempts each get a different one), `strong`
+    uses the stronger model when configured, and `race` lets the loop guard end an attempt that goes in circles.
     """
     started = time.monotonic()
     result = SpecResult()
@@ -389,8 +395,11 @@ async def research_spec(session: SiteSession, briefing: Briefing, *, context: st
                             requirements=[r.requirement_id for r in result.requirements], problems=result.problems)
         return result
 
-    history, _ = await run_worker(session, FIND_SPEC_GOAL, RevisionHistory, context=goal_context, deadline=deadline,
-                                  max_steps=25, **_worker_kwargs(notes=False, thinking=thinking))
+    goal = FIND_SPEC_GOAL + (f"\n\n{hint}" if hint else "")
+    history, _ = await run_worker(session, goal, RevisionHistory, context=goal_context, deadline=deadline,
+                                  max_steps=FIND_SPEC_STEPS,
+                                  **_worker_kwargs(notes=False, thinking=thinking, strong=strong, loop_guard=True,
+                                                   stop_on_loop=race))
     if history is None or not history.revisions:
         return finish("no revision history found")
     result.document = history.document
@@ -406,7 +415,8 @@ async def research_spec(session: SiteSession, briefing: Briefing, *, context: st
     for _ in range(2):
         await run_worker(session, OPEN_REVISION_GOAL.format(revision=result.current_revision), Opened,
                          context=goal_context, deadline=deadline, max_steps=12, tools=(read_document,),
-                         **_worker_kwargs(notes=False, grounded=False))
+                         **_worker_kwargs(notes=False, grounded=False, strong=strong, loop_guard=True,
+                                          stop_on_loop=race))
         pages = _DOCUMENTS.pop(id(session), [])
         if pages:
             break

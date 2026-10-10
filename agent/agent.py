@@ -4,6 +4,10 @@ The agent's entry point: agent.json runs `uv run --no-sync python agent.py`, in 
 v2: read the brief, then the orchestrator (planner, findings board, research workers, verifier, calc) builds the
 answer, and submit.py enters and signs the bid with it; without an answer every position is omitted, as in v1.
 AGENT_RESEARCH=0 skips the research (the v1 path). See docs/plan.md.
+
+v3: the specification is found by three racing attempts with different strategies, workers that go in
+circles are warned and (in the race) stopped, the bid form gets more time, and a bid without positions
+still carries the discount. See docs/changes-v3.md for the changes and the environment variables.
 """
 import asyncio
 import json

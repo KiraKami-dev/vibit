@@ -75,12 +75,12 @@ def retries() -> int:
 
 DEFAULT_FIRST_TOKEN = 20.0  # measured: the first chunk came within 9.4 s (p90 5.9 s) in 179 calls, either mode
 DEFAULT_IDLE = 15.0  # text and reasoning tokens arrive at most ~1.5 s apart while the model answers
-DEFAULT_MAX_CALL = 300.0  # a streamed answer is not cut by the proxy: one runaway reasoning ran 814 s
+DEFAULT_MAX_CALL = 150  # a streamed answer is not cut by the proxy: one runaway reasoning ran 814 s
 
 
 def watchdog() -> bool:
     """Whether calls are streamed and judged by progress (LLM_STREAM_WATCHDOG=1) instead of a whole-call deadline."""
-    return os.environ.get("LLM_STREAM_WATCHDOG", "").strip().lower() in ("1", "true", "yes", "on")
+    return os.environ.get("LLM_STREAM_WATCHDOG", "1").strip().lower() in ("1", "true", "yes", "on")
 
 
 def hedge_seconds() -> float:
@@ -385,3 +385,28 @@ def settings(thinking: bool = False, *, timeout: float | None = None) -> ModelSe
         timeout=timeout if timeout is not None else timeout_seconds(thinking),
         extra_body={"chat_template_kwargs": {"enable_thinking": thinking}},
     )
+
+
+# ---------------------------------------------------------------- an optional stronger model (v3)
+#
+# AGENT_STRONG_MODEL names a model on any OpenAI-compatible endpoint: AGENT_STRONG_BASE_URL (default: the run's
+# OPENAI_BASE_URL metering proxy) with AGENT_STRONG_API_KEY (default: OPENAI_API_KEY, kept as a team secret).
+# Unset, every caller that asks for it falls back to the hosted Qwen with thinking on, so nothing breaks without
+# a key. Its calls go through the run's proxy and count toward the run's cost like any other.
+
+
+def strong_model() -> OpenAIChatModel | None:
+    """The stronger model, or None when it is not configured."""
+    name = os.environ.get("AGENT_STRONG_MODEL", "").strip()
+    base = (os.environ.get("AGENT_STRONG_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or "").strip()
+    key = (os.environ.get("AGENT_STRONG_API_KEY") or os.environ.get("OPENAI_API_KEY") or "").strip()
+    if not (name and base and key):
+        return None
+    client = AsyncOpenAI(base_url=base, api_key=key, timeout=env_seconds("LLM_STRONG_TIMEOUT", 120.0),
+                         max_retries=retries(), http_client=_DeadlineClient())
+    return OpenAIChatModel(name, provider=OpenAIProvider(openai_client=client))
+
+
+def strong_settings() -> ModelSettings:
+    """Settings for the stronger model: no Qwen-only fields (chat_template_kwargs), a longer per-call timeout."""
+    return ModelSettings(parallel_tool_calls=False, timeout=env_seconds("LLM_STRONG_TIMEOUT", 120.0))

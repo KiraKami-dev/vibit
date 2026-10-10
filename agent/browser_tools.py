@@ -8,6 +8,7 @@ reload transient error pages and sign in again after a session timeout. What to 
 left to the model through `TOOLS`.
 """
 import asyncio
+import hashlib
 import os
 import re
 import time
@@ -23,6 +24,18 @@ SETTLE_SECONDS = 45  # upper bound for waiting on a page and its helpers after o
 MAX_VIEW = 14000  # characters of a page shown at once; read_more pages through the rest
 START_SECONDS = float(os.environ.get("SESSION_START_SECONDS", "90"))  # one sign-in attempt
 LOOP_VISITS = 3  # arriving on one page this often in a session gets the model a loop hint
+# v3 state loop guard (on only for workers that ask for it, see run_worker(loop_guard=...)): the same page state
+# (URL + page text, refs ignored) STATE_REPEATS times within the last STATE_WINDOW views is a loop. Each loop gets
+# the model a warning; with stop_on_loop the LOOP_STOP-th one ends the worker (Stuck), so a racing attempt that
+# goes in circles frees its time instead of burning it.
+STATE_WINDOW = int(os.environ.get("AGENT_LOOP_WINDOW", "10"))
+STATE_REPEATS = int(os.environ.get("AGENT_LOOP_REPEATS", "3"))
+LOOP_STOP = int(os.environ.get("AGENT_LOOP_STOP", "3"))
+REF_TOKEN = re.compile(r"\be\d+\b")
+
+
+class Stuck(Exception):
+    """A worker went in circles on its website (raised only when its session has stop_on_loop)."""
 
 # Closes modal <dialog>s and aria-modal popups through their own close button as soon as they open, and records
 # what it closed. Links inside popups ("accept and continue") are never followed.
@@ -115,10 +128,37 @@ class SiteSession:
     visits: dict[str, int] = field(default_factory=dict)  # page URL -> times the model arrived on it
     last_url: str = ""
     scripted: bool = False  # the popup closer is installed in this context
+    states: list[str] = field(default_factory=list)  # page-state signatures of this worker run (loop guard)
+    loop_hits: int = 0
+    loop_guard: bool = False
+    stop_on_loop: bool = False
 
     @property
     def name(self) -> str:
         return self.site["siteId"]
+
+    def reset_loop(self, guard: bool = False, stop: bool = False) -> None:
+        """A new worker run starts: forget the page states of the previous one and set its loop options."""
+        self.states, self.loop_hits, self.loop_guard, self.stop_on_loop = [], 0, guard, stop
+
+    def _loop_check(self, url: str) -> str:
+        """Record the current page state; a warning for the model when it is a loop, or Stuck when told to stop."""
+        if not self.loop_guard:
+            return ""
+        signature = hashlib.sha1(f"{url}\n{REF_TOKEN.sub('e', self.view)}".encode()).hexdigest()
+        self.states.append(signature)
+        repeats = self.states[-STATE_WINDOW:].count(signature)
+        if repeats < STATE_REPEATS:
+            return ""
+        self.loop_hits += 1
+        self.trace.event(self.name, "loop", repeats=repeats, hits=self.loop_hits, url=url)
+        if self.stop_on_loop and self.loop_hits >= LOOP_STOP:
+            raise Stuck(f"the same page state came back {repeats} times in {STATE_WINDOW} views, "
+                        f"{self.loop_hits} loop warnings")
+        return (f"Loop warning: this exact page state has now come back {repeats} times in your last "
+                f"{STATE_WINDOW} views; what you did in between found nothing new. Do not repeat those actions. "
+                f"Use a control you have not used yet on this website (another menu, tab, search box, a details, "
+                f"info, versions or history button, a tooltip), or go to the start page and take another route.")
 
     @property
     def page(self) -> Page:
@@ -325,6 +365,10 @@ class SiteSession:
         if self.events:
             notes.append("Since your last action: " + "; ".join(self.events))
             self.events.clear()
+        if offset == 0:
+            warning = self._loop_check(page.url)
+            if warning:
+                notes.append(warning)
         key = (page.url, title, self.view)
         if offset == 0 and brief and key == self.shown:
             return "\n".join([*notes, "The page is unchanged since your last action (same text and refs)."])

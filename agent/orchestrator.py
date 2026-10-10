@@ -32,7 +32,7 @@ from board import Board, Source
 from briefing import Briefing
 from browser_tools import SiteSession
 from evidence import EffectiveRequirement, Requirement, effective_requirement, parse_date, to_position_input
-from research import Erp, ErpResearch, SpecResult, research_spec, reselect
+from research import Erp, ErpResearch, SpecResult, research_spec, reselect, same_revision
 from tracing import Trace
 from verify import confirm_decision, verify_board
 
@@ -46,12 +46,36 @@ except ImportError:  # pragma: no cover
     research_mail = None
 
 SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "480"))  # research ends this long before the end
-FORM_SECONDS = float(os.environ.get("AGENT_FORM_SECONDS", "300"))  # the bid form and signing need this much
+# v3: 360 (was 300). submit.py stops entering positions SIGNING_RESERVE (now 180) before the end, so the form had
+# only 60 s for its first steps and every position; now 180 s. Retune both from a run that enters positions.
+FORM_SECONDS = float(os.environ.get("AGENT_FORM_SECONDS", "360"))  # the bid form and signing need this much
 MAIL_TABS = int(os.environ.get("MAIL_TABS", "4"))
 SPEC_RETRY_SECONDS = 240.0  # research time a second specification attempt needs to still feed the ERP
 SELECT_SECONDS = 75.0  # the final material choice (a model call per requirement, in parallel)
 MAIL_TAB_STAGGER = 4.0  # seconds between the mail tabs' sign-ins
-MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "540"))  # from the orchestrator's start
+MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "600"))  # from the orchestrator's start (v3: was 540)
+
+# v3: the specification is found by several attempts at once, each with its own strategy, in its own tab of the
+# same website. The first that returns requirements wins and the others stop; a hard cutoff from the
+# orchestrator's start leaves the ERP and the bid form their time. Racing replaces the old "fast attempt, then
+# the same again with thinking" sequence, which lost 346 s to two identical failures.
+SPEC_RACE_SECONDS = float(os.environ.get("AGENT_SPEC_RACE_SECONDS", "330"))
+SPEC_STAGGER = 3.0  # seconds between the attempts' sign-ins (simultaneous sign-ins to one site hung locally)
+SPEC_VARIANTS = [v.strip() for v in os.environ.get("AGENT_SPEC_VARIANTS", "fast,search,explore").split(",")
+                 if v.strip()]
+SPEC_STRATEGIES = {
+    "fast": {"thinking": False, "strong": False, "hint": ""},
+    "search": {"thinking": True, "strong": False, "hint": (
+        "Strategy for this attempt: start with the website's own search or document filter. Search for the tender "
+        "reference, then for words of the tender's subject, and open the matching document from the hits. Use "
+        "menus and long lists only if searching finds nothing.")},
+    "explore": {"thinking": True, "strong": True, "hint": (
+        "Strategy for this attempt: first get an overview. Look at every menu, tab and section the start page "
+        "offers and decide where documents and their versions could be before you open lists. Once the document "
+        "is open, its revision history may sit behind a tab, a versions, history, changes or revisions link, a "
+        "details or info button, a tooltip, an expandable section or an embedded viewer: check each of those "
+        "before paging. Never page back and forth through the same list.")},
+}
 FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys before planning from the brief alone
 REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at least this much research time left
 
@@ -230,6 +254,7 @@ class Orchestrator:
         self.task, self.briefing, self.contexts, self.trace = task, briefing, contexts, trace
         self.access = {s["siteId"]: s for s in task["access"]}
         self.deadline = deadline
+        self.started = time.monotonic()
         self.research_deadline = deadline - SUBMIT_SECONDS
         self.board = Board(trace)
         self.reference = briefing.tender_reference
@@ -345,17 +370,26 @@ class Orchestrator:
                 if erp:
                     erp.start(self.effective(req))
 
-            self.spec = await research_spec(session, self.briefing, context=context, deadline=self.research_deadline,
-                                            on_requirement=on_requirement)
-            if not self.spec.requirements and self.left() > SPEC_RETRY_SECONDS:
-                # The fast (thinking off) navigator sometimes loses its way in the document list: once more, from a
-                # fresh tab, thinking.
-                for problem in self.spec.problems:
-                    board.problem("specification", f"first attempt: {problem}")
-                session = await self.session(site, "spec2")
-                self.spec = await research_spec(session, self.briefing, context=context,
-                                                deadline=self.research_deadline, on_requirement=on_requirement,
-                                                thinking=True)
+            # Racing attempts may settle on different revisions: the first revision whose requirements arrive is
+            # kept, and requirements of any other revision are refused (and reported).
+            lock: dict[str, str | None] = {"revision": None, "variant": None}
+            conflicts: set[str] = set()
+
+            def accept(tag: str):
+                def take(req: Requirement) -> None:
+                    if lock["revision"] is None:
+                        lock["revision"], lock["variant"] = req.revision, tag
+                        self.trace.event("specification", "revision_locked", revision=req.revision, variant=tag)
+                    elif not same_revision(req.revision, lock["revision"] or ""):
+                        if tag not in conflicts:
+                            conflicts.add(tag)
+                            board.problem("specification", f"{tag} read revision {req.revision}, but "
+                                          f"{lock['variant']} read {lock['revision']} first, which is kept")
+                        return
+                    on_requirement(req)
+                return take
+
+            self.spec = await self._spec_race(site, context, accept, lock)
             for req in self.spec.requirements:
                 on_requirement(req)
             for problem in self.spec.problems:
@@ -369,6 +403,70 @@ class Orchestrator:
         finally:
             board.finish("requirement")
             board.finish("material")
+
+    async def _spec_race(self, site: str, context: str, accept, lock: dict) -> SpecResult:
+        """Run the specification strategies at once; the first that returns requirements of the kept revision
+        wins and the rest are cancelled. Without a winner by the cutoff, whatever requirements streamed in stand."""
+        board = self.board
+        names = [n for n in SPEC_VARIANTS if n in SPEC_STRATEGIES] or ["fast"]
+        cutoff = min(self.research_deadline, self.started + SPEC_RACE_SECONDS)
+        racing = len(names) > 1
+
+        async def attempt(i: int, name: str) -> tuple[str, SpecResult]:
+            await asyncio.sleep(SPEC_STAGGER * i)
+            strategy = SPEC_STRATEGIES[name]
+            tag = "spec" if i == 0 else f"spec{i + 1}"
+            session = await self.session(site, tag)
+            self.trace.event("specification", "variant_start", variant=tag, strategy=name,
+                             strong=bool(strategy["strong"] and llm.strong_model() is not None))
+            result = await research_spec(session, self.briefing, context=context, deadline=cutoff,
+                                         on_requirement=accept(tag), thinking=strategy["thinking"],
+                                         hint=strategy["hint"], strong=strategy["strong"], race=racing)
+            return tag, result
+
+        pending = {asyncio.create_task(attempt(i, name)) for i, name in enumerate(names)}
+        finished: list[tuple[str, SpecResult]] = []
+        winner: tuple[str, SpecResult] | None = None
+        try:
+            while pending and winner is None:
+                done, pending = await asyncio.wait(pending, timeout=max(0.0, cutoff + 5 - time.monotonic()),
+                                                   return_when=asyncio.FIRST_COMPLETED)
+                if not done:
+                    break  # the cutoff: the remaining attempts are cancelled below
+                for task in done:
+                    if task.cancelled():
+                        continue
+                    error = task.exception()
+                    if error is not None:
+                        board.problem("specification", f"an attempt failed: {type(error).__name__}: {str(error)[:160]}")
+                        continue
+                    tag, result = task.result()
+                    finished.append((tag, result))
+                    self.trace.event("specification", "variant_done", variant=tag, revision=result.current_revision,
+                                     requirements=len(result.requirements), problems=result.problems[:5])
+                    kept = lock["revision"] is None or same_revision(result.current_revision, lock["revision"] or "")
+                    if result.requirements and kept and (
+                            winner is None or len(result.requirements) > len(winner[1].requirements)):
+                        winner = (tag, result)
+        finally:
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+        if winner is not None:
+            self.trace.event("specification", "race_won", variant=winner[0], revision=winner[1].current_revision,
+                             seconds=round(time.monotonic() - self.started, 1))
+            for tag, result in finished:
+                if tag != winner[0]:
+                    for problem in result.problems:
+                        self.trace.event("specification", "variant_problem", variant=tag, problem=problem)
+            return winner[1]
+        merged = SpecResult()
+        merged.current_revision = lock["revision"] or ""
+        merged.requirements = sorted(self.requirements.values(), key=lambda r: calc.position_key(r.requirement_id))
+        merged.problems = ([f"{tag}: {p}" for tag, result in finished for p in result.problems]
+                           or ["no specification attempt finished before the cutoff"])
+        return merged
 
     async def _post_materials(self, site: str) -> None:
         assert self.erp is not None
@@ -660,8 +758,14 @@ class Orchestrator:
         bid, problems = self.build_bid()
         self.trace.event("calc", "input", positions=[p.position for p in bid.positions], problems=problems)
         if not bid.positions:
+            # v3: still hand the form what is known. The discount scores on its own (5 points), so an unconditional
+            # approval goes in; a conditional one needs an order value, which needs positions, so it stays 0.
             self.board.problem("calc", "no position could be built; the bid form gets no positions")
-            return None, None
+            discount = calc.effective_discount(bid.approval, None) if bid.approval is not None else Decimal(0)
+            answer = {"tender_reference": self.reference, "decision": "bid", "currency": "EUR",
+                      "discount_percent": float(discount), "positions": [], "total_net": 0.0}
+            self.trace.event("calc", "answer", answer=answer, problems=problems, partial=True)
+            return answer, None
         result, blank, calc_problems = safe_calculate(bid)
         for position, fields in self.blank_hints.items():
             blank.setdefault(position, set()).update(fields)

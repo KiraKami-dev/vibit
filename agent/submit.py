@@ -25,7 +25,8 @@ from pydantic_ai import Agent, RunContext
 from worker import run_worker
 
 ADDRESS_WAIT = 15  # seconds the bid worker waits for the contact address before it starts without it
-SIGNING_RESERVE = 240  # seconds kept for the review, the TAN round trip and submitting
+# seconds kept for the review, the TAN round trip and submitting (v3: 180, was 240; measured 26 to 115 s)
+SIGNING_RESERVE = float(os.environ.get("AGENT_SIGNING_RESERVE", "180"))
 LAST_CHANCE = 45  # seconds a final sign-only pass needs at least
 # AGENT_FILL_IN=0 leaves out fill_in(), the several-actions-per-step form tool
 
