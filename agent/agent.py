@@ -21,8 +21,15 @@ SAFETY_SECONDS = 90  # the answer must be in before the run expires
 LOCAL_SECONDS = 20 * 60  # the scouting run does not expire; behave like a scored run
 
 
-async def solve(task: dict, page) -> dict | None:
-    """Enter the bid on the run's website (a "site" submission) and return None."""
+async def solve(task: dict, page, answer: dict | None = None,
+                attributes: dict[str, dict[str, str]] | None = None) -> dict | None:
+    """
+    Enter the bid on the run's website (a "site" submission) and return None.
+
+    `answer` (calc's BidResult.answer()) and `attributes` (per position, the chosen material's attributes) are what
+    the bid worker enters; positions they do not give completely are omitted. Research workers that establish them
+    come next; until then every position is omitted.
+    """
     trace = Trace()
     left = min(contract.seconds_left(task), LOCAL_SECONDS)
     deadline = time.monotonic() + left - SAFETY_SECONDS
@@ -35,7 +42,7 @@ async def solve(task: dict, page) -> dict | None:
     failed = {name for name, outcome in zip(sessions, outcomes) if isinstance(outcome, BaseException)}
     bid, mail = sessions[briefing.bid_site], sessions[briefing.mail_site]
     await asyncio.gather(*(session.start() for session in (bid, mail) if session.name in failed))
-    result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline)
+    result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline, answer, attributes)
     trace.event("result", "done", result=result.model_dump() if result else None)
     return None
 

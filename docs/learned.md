@@ -71,3 +71,17 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   re-locking gates. Two fixes were needed: older tool results were cut to one line once a newer view came, so the
   model paged again by hand to see the list it had collected (results of search / collect / extract now stay), and
   after paging the next view must come whole, not as a diff against a page the model never saw.
+- v2 position filling (`configurator.py`, `PositionDesk` in `submit.py`): the model names the position on screen,
+  maps control labels to value names once and names the confirm button; the helper walks the cascading selects
+  one level per round trip, matches options by value (text-sorted lists, neighbouring numbers or a catalogue
+  number that is a prefix of another) and formats German numbers. Offline mock and live (scouting, up to the TAN
+  page): one position entered in full, a position with an impossible attribute failed and was omitted, net total
+  from the entered positions only, Hauptangebot, AGB unticked; 202 s, 28 requests, 183k input tokens.
+- The worker forgot the page after a note(): `_forget_old_views` kept only the last request, so a short tool
+  result wiped the newest view and Qwen clicked guessed refs (hit "add position" in the mock). Keep the newest view
+  in full whatever comes after it.
+- Attribute wording can differ from the option text (a "none" attribute vs a "without ..." option): the tool
+  reports the options and the model passes `choices`, used only when no option matches literally (an always-on
+  override broke a later position that was already right).
+- Without "every value is already calculated; do not research" the bid worker wandered into documents and the Q&A
+  and burned its 76 steps picking options itself. The goal now says so up front.

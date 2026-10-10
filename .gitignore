@@ -2,5 +2,9 @@ docs/experiments.md
 experiments/local-runs.jsonl
 # hand-derived public-1 answers: site values, local only
 checks/
+<<<<<<< HEAD
 # hand-labelled eval set: copied site text, local only
 dev/clef_eval/data/
+=======
+dev/local/
+>>>>>>> 73284bd (Fill bid positions from the calculated answer)
