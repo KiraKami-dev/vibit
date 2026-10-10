@@ -3,12 +3,14 @@ Enter, sign and submit the bid: a worker on the bid website follows the brief's 
 bidder's webmail (a second worker in its own tab) for the contact address and, once requested, the signing TAN.
 
 The bid worker runs in two phases: filling the form up to the signing step (plain navigation, thinking off by
-default), then requesting the TAN, entering it and submitting. Between them one model call checks the
-summary against the requirements; the signing phase thinks only when that check fails or finds problems.
+default), then requesting the TAN, entering it and submitting. A review page that was reached is signed as it
+stands; one model call checks its summary against the requirements alongside, for the run logs only.
+BidFlow starts the form's first steps while the research still runs.
 THINKING_FORM, THINKING_REVIEW (the check) and THINKING_SIGN override these defaults (see llm.thinking).
 """
 import asyncio
 import os
+import re
 import time
 from decimal import Decimal
 from typing import Literal
@@ -18,8 +20,8 @@ import llm
 from briefing import Briefing
 from browser_tools import Deps, SiteSession
 from calc import position_key
-from configurator import (FillPlan, complete_positions, fill_position, find_control, german, resolve_position,
-                          unmapped)
+from configurator import (VALUE_NAMES, FillPlan, clean, complete_positions, fill_position, find_control, german,
+                          mapping_problems, resolve_position, unmapped)
 from extract import locate
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
@@ -180,12 +182,54 @@ class PositionDesk:
         self.failures: dict[str, int] = {}
         self.entered: set[str] = set()
         self.choices: dict[str, dict[str, str]] = {}
+        self.synonyms: dict[tuple[str, str], str] = {}  # (control label, wanted value) -> the option the model named
         self.next_button = ""
         self.asked_unmapped = False
 
     @property
     def tools(self) -> tuple:
         return (self.configure_position, self.net_total) if self.entries else ()
+
+    @property
+    def known(self) -> set[str]:
+        """The value names a control can be mapped to."""
+        return set(VALUE_NAMES).union(*self.entries.values()) - {"position"}
+
+    def remember(self, fields: dict[str, str] | None, confirm_button: str = "", next_button: str = "") -> str:
+        """
+        Add to the control mapping and buttons. Unknown value names are dropped, the rest still counts; an error
+        message only when that leaves no mapping at all, else ''.
+        """
+        if confirm_button:
+            self.plan.confirm = confirm_button
+        if next_button:
+            self.next_button = next_button
+        if fields:  # later calls add to or correct the mapping, they never drop what was mapped before
+            known = self.known
+            given = {label: name.strip() for label, name in fields.items()}
+            unknown = sorted({name for name in given.values() if name not in known})
+            given = {label: name for label, name in given.items() if name in known}
+            self.plan.fields = {label: name for label, name in self.plan.fields.items() if name not in given.values()}
+            self.plan.fields.update(given)
+            if unknown and not self.plan.fields:
+                return f"Unknown value names {unknown}; use only: {', '.join(sorted(known))}. Call again."
+        return ""
+
+    async def map_position_form(self, ctx: RunContext[Deps], fields: dict[str, str], confirm_button: str = "",
+                                next_button: str = "") -> str:
+        """
+        Tell, on a position page and without entering anything, which control takes which value, so the positions
+        can be entered at once when the values are ready. `fields`: control label (exactly as in your view) ->
+        value name. `confirm_button`: label of the button that applies a choice so the next choice opens.
+        `next_button`: label of the button that saves the position and goes on (never one that omits or adds).
+        """
+        problems = mapping_problems(ctx.deps.session.view, fields or {}, self.known, (confirm_button, next_button))
+        if problems:
+            return "Not taken: " + "; ".join(problems) + ". Fix the mapping and call again."
+        self.remember(fields, confirm_button, next_button)
+        ctx.deps.session.trace.event(ctx.deps.session.name, "position_form_mapped", fields=self.plan.fields,
+                                     confirm=self.plan.confirm, next=self.next_button)
+        return "Mapping taken. Enter nothing on this page; return now."
 
     async def configure_position(self, ctx: RunContext[Deps], position: str, fields: dict[str, str] | None = None,
                                  confirm_button: str = "", next_button: str = "",
@@ -205,21 +249,9 @@ class PositionDesk:
                                 fields=fields or {}, text=text[:300])
             return text
 
-        known = set().union(*self.entries.values()) - {"position"}
-        if fields:  # later calls add to or correct the mapping, they never drop what was mapped before
-            given = {label: name.strip() for label, name in fields.items()}
-            unknown = sorted({name for name in given.values() if name not in known})
-            if unknown:  # drop only the unknown names; the rest of the mapping still counts
-                given = {label: name for label, name in given.items() if name in known}
-            plan.fields = {label: name for label, name in plan.fields.items() if name not in given.values()}
-            plan.fields.update(given)
-            if unknown and not plan.fields:
-                return refuse("unknown_names", f"Unknown value names {unknown}; use only: "
-                                               f"{', '.join(sorted(known))}. Call again.")
-        if confirm_button:
-            plan.confirm = confirm_button
-        if next_button:
-            self.next_button = next_button
+        unknown = self.remember(fields, confirm_button, next_button)
+        if unknown:
+            return refuse("unknown_names", unknown)
         async with session.lock:
             view = await session.look()
             position, shown = resolve_position(asked, self.entries, view)
@@ -259,9 +291,7 @@ class PositionDesk:
         async with session.lock:
             log: list[str] = []
             try:
-                remembered = self.choices.setdefault(position, {})
-                remembered.update(choices or {})  # a revisit of the position needs the same picks
-                error = await fill_position(session, entry, plan, log, remembered)
+                error = await fill_position(session, entry, plan, log, self.picks(position, entry, choices))
             except Exception as exc:  # a slow or changed page: the model decides to retry or omit
                 error = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
             moved = ""
@@ -294,6 +324,24 @@ class PositionDesk:
         """The bid's positions not entered yet: the form may show them in any order; none of them is omitted."""
         left = sorted(set(self.entries) - self.entered, key=position_key)
         return ", ".join(left) or "none"
+
+    def picks(self, position: str, entry: dict, choices: dict[str, str] | None) -> dict[str, str]:
+        """
+        The model's option picks for this position's worded choices: what it named for this position (a revisit
+        needs the same), and what it named for the same control and the same value on an earlier position (a
+        "none" attribute that the form words differently comes up again and needs no second failed attempt).
+        """
+        remembered = self.choices.setdefault(position, {})
+        remembered.update(choices or {})
+        for label, option in (choices or {}).items():
+            key = next((k for l, k in self.plan.fields.items() if clean(l) == clean(label)), None)
+            if key is not None and entry.get(key) is not None:
+                self.synonyms[(clean(label), clean(str(entry[key])))] = option
+        picks = {label: self.synonyms[(clean(label), clean(str(entry[key])))]
+                 for label, key in self.plan.fields.items()
+                 if entry.get(key) is not None and (clean(label), clean(str(entry[key]))) in self.synonyms}
+        picks.update(remembered)
+        return picks
 
     def so_far(self, session: SiteSession) -> str:
         """The running net total, told after every position so the totals step needs no arithmetic."""
@@ -332,15 +380,18 @@ class PositionDesk:
         return f"{german(self.total(dropped))} (positions {', '.join(sorted(self.entered - dropped)) or 'none'})"
 
 
-def _positions(answer: dict | None, desk: PositionDesk, filled: bool) -> str:
+def _positions(answer: dict | None, desk: PositionDesk, filled: bool, prepared: bool = False) -> str:
     """
     The decision and position part of the requirements: before the form phase, how to enter them; after it, what
     the review must show (the positions actually entered, all others omitted, the total of the entered ones).
     """
     discount = german((answer or {}).get("discount_percent") or 0)
     if answer and answer.get("decision") == "no_bid":
+        back = (" If the form shows a position step (an earlier pass chose the main offer before the decision was "
+                "known), go back with the form's back button to the offer-type step and choose the declaration "
+                "there: going back only clears steps that hold nothing yet;" if prepared and not filled else "")
         return ("- decision: no bid: choose the form's declaration that you do not submit an offer (not a main or "
-                f"alternative offer); no positions;\n- discount {discount} and net total 0,00;")
+                f"alternative offer); no positions;{back}\n- discount {discount} and net total 0,00;")
     head = "- decision: bid (main offer, not an alternative offer);\n"
     if filled and desk.entered:
         return head + (f"- exactly {len(desk.entered)} position(s) entered, each with these values:\n"
@@ -354,19 +405,18 @@ def _positions(answer: dict | None, desk: PositionDesk, filled: bool) -> str:
                        f"and never use options that add positions;\n- discount {discount} and net total 0,00 (German "
                        "number format);")
     names = sorted({key for entry in desk.entries.values() for key in entry} - {"position"})
+    if desk.plan.fields and desk.next_button:
+        mapping = ("- configure_position() already knows which control takes which value and the buttons to apply a "
+                   "choice and to save (an earlier pass mapped them on a position page): call it with the position "
+                   "number alone; add fields only if it reports a control it cannot find;\n")
+    else:
+        mapping = f"- configure_position() needs, once, {mapping_guide(names)}\n"
     return head + f"""- enter exactly these positions: {', '.join(sorted(desk.entries))}. The form shows one position
   at a time, in its own order (often not this list's order). On every position page, first call
   configure_position() with the number the page shows: it enters all values of a position of this bid and saves it
   with the next/continue button you name, or tells you to omit it. Never omit a position of this list unless
   configure_position() told you to omit that very position. Never pick options or type position values yourself;
-- configure_position() needs, once, which control takes which value: map each control's label (as your view shows
-  it) to one of these value names: {', '.join(names)}. Choices that open further choices (attributes of the
-  material) map to the attribute with the same meaning; the material/catalogue number control to material_number;
-  unit price, base price, surcharge, packaging and the bonus or rebate for the whole position to unit_price,
-  base_unit_price, surcharge_per_unit, packaging_per_unit and rebate_total; lead time to lead_time_weeks. Leave out
-  controls with no matching value. Also name the button that applies a choice so the next one opens, and the
-  button that saves the position and goes on to the next step (not the ones that omit or add a position);
-- leave out, with the form's option to omit a position, every other position and any position where
+{mapping}- leave out, with the form's option to omit a position, every other position and any position where
   configure_position() reports a problem it cannot resolve. Never use options that add positions; if the form
   shows an extra position you did not ask for, remove it or leave it out;
 - discount {discount}; net total: the latest figure configure_position() reports for the positions entered so
@@ -374,10 +424,21 @@ def _positions(answer: dict | None, desk: PositionDesk, filled: bool) -> str:
   (German number format), never a sum you work out yourself, a gross amount or a sum the page proposes;"""
 
 
+def mapping_guide(names) -> str:
+    """How to map a position page's controls to value names (configure_position and map_position_form)."""
+    return f"""which control takes which value: map each control's label (as your view shows
+  it) to one of these value names: {', '.join(names)}. Choices that open further choices (attributes of the
+  material) map to the attribute with the same meaning; the material/catalogue number control to material_number;
+  unit price, base price, surcharge, packaging and the bonus or rebate for the whole position to unit_price,
+  base_unit_price, surcharge_per_unit, packaging_per_unit and rebate_total; lead time to lead_time_weeks. Leave out
+  controls with no matching value. Also name the button that applies a choice so the next one opens, and the
+  button that saves the position and goes on to the next step (not the ones that omit or add a position);"""
+
+
 def _requirements(briefing: Briefing, email: str, answer: dict | None = None, desk: PositionDesk | None = None,
-                  filled: bool = False) -> str:
+                  filled: bool = False, prepared: bool = False) -> str:
     contact = repr(email) if email else "the contact email from bidder_contact_email()"
-    return f"""{_positions(answer, desk or PositionDesk({}, 0), filled)}
+    return f"""{_positions(answer, desk or PositionDesk({}, 0), filled, prepared)}
 - register with company name {briefing.company_name!r}, VAT id {briefing.vat_id!r} and contact email {contact};
 - tick the form's acknowledgement of the tender documents (no need to open them), but do not tick declarations
   that make your own terms and conditions apply."""
@@ -405,16 +466,19 @@ async def check_summary(view: str, requirements: str) -> SummaryCheck | None:
 
 
 async def submit_bid(bid_session: SiteSession, mailbox: Mailbox, briefing: Briefing, deadline: float,
-                     answer: dict | None = None, attributes: dict[str, dict[str, str]] | None = None
-                     ) -> SubmissionResult | None:
+                     answer: dict | None = None, attributes: dict[str, dict[str, str]] | None = None,
+                     flow: "BidFlow | None" = None) -> SubmissionResult | None:
     """
     Enter the calculated `answer` (calc's BidResult.answer()), sign and submit it. Positions the answer does not
     give completely, or that fail to enter, are omitted; without an answer every position is omitted (discount 0,
     total 0). `attributes` holds per position number the chosen material's attributes (e.g. its dimensions), which
-    the form's choices lead through to the catalogue number.
+    the form's choices lead through to the catalogue number. `flow` is the BidFlow that already did the steps
+    before the positions (and the address lookup) while the research ran.
     """
-    desk = PositionDesk(complete_positions(answer or {}, attributes), deadline)
-    address = asyncio.create_task(mailbox.address())
+    desk = flow.desk if flow else PositionDesk({}, deadline)
+    desk.entries = complete_positions(answer or {}, attributes)
+    prepared = bool(flow and flow.ready)
+    address = flow.contact_address() if flow else asyncio.create_task(mailbox.address())
     try:  # the lookup takes a step or two; knowing the address up front saves the bid worker a round trip
         email = await asyncio.wait_for(asyncio.shield(address), ADDRESS_WAIT)
     except asyncio.TimeoutError:
@@ -453,8 +517,8 @@ async def submit_bid(bid_session: SiteSession, mailbox: Mailbox, briefing: Brief
     form_goal = f"""Fill in the bid for tender {briefing.tender_reference} on this website, following the brief's
 submission steps below, up to the final review and signing step. Every value of this bid is already researched
 and calculated; you only enter it: do not open documents, questions or other pages to check or research anything.
-For this bid:
-{_requirements(briefing, email, answer, desk)}
+{EARLIER_PASS if prepared else ""}For this bid:
+{_requirements(briefing, email, answer, desk, prepared=prepared)}
 {several}Stop at the final review with the signing step: do not request a TAN and do not submit there.
 Return as soon as that page shows. Refs change with every view: read a button's label in the latest view before
 clicking it.
@@ -464,32 +528,40 @@ Brief's submission steps:
     left = deadline - time.monotonic()
     # the form never eats the signing reserve; with little time left, half of it still goes to the form
     form_deadline = deadline - SIGNING_RESERVE if left > SIGNING_RESERVE + 90 else time.monotonic() + left / 2
-    ready, _ = await run_worker(bid_session, form_goal, FormReady, deadline=form_deadline,
+    # not grounded: the result is a status, and its notes quote our own figures ("5,00" refused four times, 30 s,
+    # after which the model went back a step looking for it)
+    ready, _ = await run_worker(bid_session, form_goal, FormReady, deadline=form_deadline, grounded=False,
                                 max_steps=45 + 3 * len(desk.entries), notes=False,
                                 thinking=llm.thinking("form", False), tools=tools)
 
     requirements = _requirements(briefing, email, answer, desk, filled=True)
-    check = await check_summary(bid_session.view, requirements) if ready and ready.at_signing_step else None
-    bid_session.trace.event(bid_session.name, "summary_check", **(check.model_dump() if check else {}))
-    if check and check.matches:
-        task = ("The form was filled in up to the signing step by an earlier pass, and its summary was checked "
-                "against the requirements below; the current view shows it.")
-    elif check:
-        task = (f"The form was filled in up to the signing step by an earlier pass. A quick check of the summary "
-                f"(which can be wrong) reported: {check.problems} Fix it only if the fix is on the current page; "
-                f"never go back to earlier steps (that clears them). If it cannot be fixed here, sign anyway: a "
-                f"signed bid with a flaw is worth far more than none.")
+    at_review = bool(ready and ready.at_signing_step)
+
+    async def logged_check(view: str) -> None:  # a record for the run logs only: signing never waits for it
+        check = await check_summary(view, requirements)
+        bid_session.trace.event(bid_session.name, "summary_check", **(check.model_dump() if check else {}))
+
+    checking = asyncio.create_task(logged_check(bid_session.view)) if at_review else None
+    if checking is None:
+        bid_session.trace.event(bid_session.name, "summary_check")
+    if at_review:
+        # The review is signed as it stands, whatever the check says: a false alarm sent signing back and forth
+        # between steps until its step cap (run 0d2d, ~100 s), and going back clears the later steps anyway.
+        task = ("The form was filled in up to the signing step by an earlier pass; the current view shows its "
+                "summary. Sign it as it stands: do not change, re-enter or re-check anything and never go back to "
+                "earlier steps (that clears them); if the signing step is not on screen, go forward to it.")
     else:
         task = ("An earlier pass started filling in the form but may not have finished; continue from the current "
                 "view, and check the summary against the requirements below." +
                 (f" It reported: {ready.open_points}" if ready and ready.open_points else ""))
     if os.environ.get("AGENT_STOP_BEFORE_SIGN") == "1":  # local timing runs: never request a TAN (shared webmail)
         address.cancel()
+        if checking is not None:
+            await checking
         return None
+    must = "" if at_review else f"The bid must be:\n{requirements}\n"
     review_goal = f"""Sign and submit the bid for tender {briefing.tender_reference} on this website. {task}
-The bid must be:
-{requirements}
-Request the signing TAN only with request_signing_tan(ref of the website's TAN request button), never by clicking
+{must}Request the signing TAN only with request_signing_tan(ref of the website's TAN request button), never by clicking
 that button yourself; enter the TAN it returns at once and submit bindingly. Browser confirmation dialogs are
 accepted for you. Return once the website confirms the submission (or shows why it failed).
 
@@ -497,9 +569,10 @@ Brief's submission steps:
 {briefing.submission_steps}"""
     result = None
     try:
-        result, _ = await run_worker(bid_session, review_goal, SubmissionResult, deadline=deadline, max_steps=30,
-                                     notes=False, thinking=llm.thinking("sign", False),
-                                     tools=(*tools, request_signing_tan))
+        result, _ = await run_worker(bid_session, review_goal, SubmissionResult, deadline=deadline,
+                                     max_steps=15 if at_review else 30, notes=False,
+                                     thinking=llm.thinking("sign", False),
+                                     tools=(request_signing_tan,) if at_review else (*tools, request_signing_tan))
     except Exception as error:  # in a run, the platform closes the model token once the bid is in
         bid_session.trace.event(bid_session.name, "stopped", reason=f"{type(error).__name__}: {str(error)[:200]}")
     if not (result and result.submitted) and deadline - time.monotonic() > LAST_CHANCE:
@@ -515,6 +588,140 @@ and submit bindingly. Return once the website confirms the submission (or shows 
         except Exception as error:
             bid_session.trace.event(bid_session.name, "stopped",
                                     reason=f"{type(error).__name__}: {str(error)[:200]}")
-    if not address.done():
-        address.cancel()
+    for pending in (address, checking):
+        if pending is not None and not pending.done():
+            pending.cancel()
     return result
+
+
+EARLIER_PASS = """An earlier pass already did the steps before the positions (bidder data, the main offer as offer type)
+and stopped on the first position step, which the current view should show: continue from there. If the view
+shows an earlier step instead (the portal session was renewed), do those steps again.
+"""
+PREPARE_SECONDS = 180  # at most this long for the steps before the positions, while the research runs
+KEEPALIVE_SECONDS = float(os.environ.get("AGENT_KEEPALIVE_SECONDS", "40"))  # unsaved form steps die with the session
+PREPARES = 3  # passes at most: the first and two after a lost session
+FINISH_WAIT = 45  # seconds the bid waits for a pass still on the form when the research ends
+# the website's start page fetched from the tab (its cookies, no navigation): [final url, html]
+KEEPALIVE_JS = ("async () => { const r = await fetch(location.origin + '/', {credentials: 'same-origin'}); "
+                "return [r.url, await r.text()]; }")
+SIGNED_OUT = re.compile(r"<input[^>]*type=[\"']?password", re.IGNORECASE)
+
+
+class PrepareResult(BaseModel):
+    at_positions: bool = Field(description="True when the page now shows the first step that asks for position "
+                                           "values, the discount or the total")
+    step: str = Field(description="The step the page shows now, in a few words")
+
+
+class BidFlow:
+    """
+    The bid form overlapped with the research. Right after the briefing, a worker (the model) does the form's steps
+    that need no calculated value (bidder data with the contact address, expression of interest, the main offer as
+    offer type) and maps the controls of the first position page, then stops there. While the research runs, a
+    cheap background request keeps the portal session (and with it the unsaved wizard state) alive; when the
+    session is lost anyway, the page is reloaded and the steps are done again. finish() then enters the answer from
+    the position step on, checks and signs (submit_bid). If the research ends in no_bid, the form worker goes back
+    to the offer type, which clears only empty steps. AGENT_FORM_OVERLAP=0 turns this off.
+    """
+
+    def __init__(self, session: SiteSession, mailbox: Mailbox, briefing: Briefing, deadline: float):
+        self.session, self.mailbox, self.briefing, self.deadline = session, mailbox, briefing, deadline
+        self.desk = PositionDesk({}, deadline)
+        self.address: asyncio.Task | None = None
+        self.task: asyncio.Task | None = None
+        self.ready = False  # a pass stopped at the positions and the session has not been lost since
+        self.preparing = False
+        self.passes = 0
+
+    def start(self) -> None:
+        self.address = asyncio.create_task(self.mailbox.address())
+        if os.environ.get("AGENT_FORM_OVERLAP", "1") != "0":
+            self.task = asyncio.create_task(self._run())
+
+    def contact_address(self) -> asyncio.Task:
+        """The address lookup; started again when the first one found nothing (e.g. the webmail was still down)."""
+        if self.address is None or (self.address.done() and (self.address.cancelled() or not self.address.result())):
+            self.address = asyncio.create_task(self.mailbox.address())
+        return self.address
+
+    def _event(self, kind: str, **data) -> None:
+        self.session.trace.event("bid_flow", kind, **data)
+
+    async def _run(self) -> None:
+        while self.passes < PREPARES and self.deadline - time.monotonic() > SIGNING_RESERVE + 300:
+            try:
+                await self._prepare()
+                if not self.ready:
+                    return
+                await self._keep_alive()  # returns only when the session was lost
+                async with self.session.lock:  # sign in again and show where the wizard stands now
+                    await self.session._goto(self.session.page.url)
+            except Exception as error:  # e.g. a model error: another pass; at worst the form starts from scratch
+                self.preparing = self.ready = False
+                self._event("failed", error=f"{type(error).__name__}: {str(error)[:300]}")
+                await asyncio.sleep(5)
+        self.preparing = False
+
+    async def _prepare(self) -> None:
+        self.passes += 1
+        self.preparing, self.ready = True, False
+        started = time.monotonic()
+        address = self.contact_address()
+
+        async def bidder_contact_email(reason: str = "") -> str:
+            """The bidder's contact email address, read from the bidder's own webmail."""
+            found = await address
+            self.session.seen += "\n" + found
+            return found or "not found: the webmail did not show it"
+
+        b = self.briefing
+        goal = f"""Prepare the bid for tender {b.tender_reference} on this website while its values are still being
+calculated. Follow the brief's submission steps below, but only those that need no calculated value: express
+interest if the website asks for it, open the bid submission, register the bidder with company name
+{b.company_name!r}, VAT id {b.vat_id!r} and the contact email from bidder_contact_email(), and choose the main offer
+as the offer type (not an alternative offer, not a declaration that you do not bid). Save each of these steps
+with the form's next/continue button. Do not open documents, questions or other pages.
+Stop at the first step that asks for position values (materials, quantities, prices, lead times), the discount or
+the total: enter, choose, omit, add or save nothing there. If that step shows one position, call
+map_position_form() once with {mapping_guide(VALUE_NAMES)}
+Then return. Refs change with every view: read a button's label in the latest view before clicking it.
+
+Brief's submission steps:
+{b.submission_steps}"""
+        tools = (bidder_contact_email, self.desk.map_position_form, fill_in)
+        until = min(started + PREPARE_SECONDS, self.deadline - SIGNING_RESERVE - 240)
+        result, _ = await run_worker(self.session, goal, PrepareResult, deadline=until, max_steps=20, notes=False,
+                                     grounded=False,
+                                     thinking=llm.thinking("form", False), tools=tools)
+        self.ready = bool(result and result.at_positions)
+        self.preparing = False
+        self._event("prepared", seconds=round(time.monotonic() - started, 1), at_positions=self.ready,
+                    step=result.step if result else None, mapped=bool(self.desk.plan.fields), passes=self.passes)
+
+    async def _keep_alive(self) -> None:
+        """A light request to the website every KEEPALIVE_SECONDS; returns once the session is found signed out."""
+        while True:
+            await asyncio.sleep(KEEPALIVE_SECONDS)
+            try:  # from inside the page: the sandbox resolves the websites only in the browser, not in this process
+                url, body = await asyncio.wait_for(self.session.page.evaluate(KEEPALIVE_JS), 20)
+            except Exception as error:  # a slow website: try again next time
+                self._event("keepalive_failed", error=f"{type(error).__name__}: {str(error)[:160]}")
+                continue
+            if SIGNED_OUT.search(body):
+                self.ready = False
+                self._event("session_lost", url=url)
+                return
+
+    async def finish(self, answer: dict | None, attributes: dict[str, dict[str, str]] | None
+                     ) -> SubmissionResult | None:
+        """Enter the research's answer from where the form stands, check and sign."""
+        if self.task is not None:
+            waited = time.monotonic()
+            while self.preparing and time.monotonic() - waited < FINISH_WAIT:  # a pass is still on the form
+                await asyncio.sleep(0.5)
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
+            self._event("handover", ready=self.ready, waited=round(time.monotonic() - waited, 1))
+        return await submit_bid(self.session, self.mailbox, self.briefing, self.deadline, answer, attributes,
+                                flow=self)

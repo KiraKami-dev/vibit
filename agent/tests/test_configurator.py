@@ -7,7 +7,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from configurator import (  # noqa: E402
+    REQUIRED_KEYS,
+    VALUE_NAMES,
     complete_positions,
+    mapping_problems,
     controls,
     find_control,
     form_value,
@@ -179,6 +182,37 @@ class FillPosition(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(values, ["4", "2,50", "x", "3"])
         self.assertTrue(any("Pressure stage" in line and "skipped" in line for line in log))
+
+
+POSITION_PAGE = """## Item 2.1
+[e7 select "Bore" selected="Choose" options: Choose | 10 | 20]
+[e8 select "Stroke" selected="Choose" disabled options: Choose]
+[e9 button "Apply choice"]
+[e10 select "Catalogue no." selected="Choose" disabled options: Choose]
+[e11 textbox "Quantity" value=""]
+[e12 textbox "Unit price net" value=""]
+[e13 select "Delivery" selected="Choose" options: Choose | 1 week | 2 weeks]
+[e14 button "Skip item"] [e15 button "Next"]"""
+
+
+class Mapping(unittest.TestCase):
+    FIELDS = {"Bore": "bore", "Stroke": "stroke", "Catalogue no.": "material_number", "Quantity": "quantity",
+              "Unit price net": "unit_price", "Delivery": "lead_time_weeks"}
+
+    def test_usable_mapping(self):
+        self.assertEqual(mapping_problems(POSITION_PAGE, self.FIELDS, set(VALUE_NAMES), ("Apply choice", "Next")), [])
+
+    def test_problems_named(self):
+        fields = {**self.FIELDS, "Colour": "bore", "Bore": "diameter"}
+        del fields["Quantity"]
+        problems = " | ".join(mapping_problems(POSITION_PAGE, fields, set(VALUE_NAMES), ("Save",)))
+        self.assertIn("diameter", problems)
+        self.assertIn("'Colour'", problems)
+        self.assertIn("quantity", problems)
+        self.assertIn("'Save'", problems)
+
+    def test_value_names_cover_the_required(self):
+        self.assertTrue(set(REQUIRED_KEYS) - {"position"} <= set(VALUE_NAMES))
 
 
 if __name__ == "__main__":
