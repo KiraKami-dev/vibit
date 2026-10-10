@@ -1,7 +1,7 @@
 """Bid-rule calculator on invented facts; expected values are worked out by hand in the comments."""
 import sys
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -28,6 +28,7 @@ from calc import (  # noqa: E402
     SetupPool,
     TieOrder,
     Unit,
+    Withdrawal,
     allocate_cents,
     apply_amendments,
     bonus_credit,
@@ -45,6 +46,14 @@ from calc import (  # noqa: E402
 )
 
 DAY = date(2026, 5, 15)
+UTC = timezone.utc
+NOW = datetime(2026, 5, 15, 9, 0, tzinfo=UTC)  # the scenario timestamp, as the brief states it ('Z')
+PLUS2 = timezone(timedelta(hours=2))  # a site that shows local time with an offset
+
+
+def at(hour: int, minute: int = 0, tz=UTC) -> datetime:
+    """A timestamp on the scenario day."""
+    return datetime(2026, 5, 15, hour, minute, tzinfo=tz)
 
 
 def cond(*scales: tuple[int, str], currency="EUR", fx_key=None, price_unit=1, start=date(2026, 1, 1), end=None):
@@ -89,6 +98,47 @@ class Quantity(unittest.TestCase):
         changes = [QuantityChange(number="4", date=datetime(2026, 6, 1), position="1", quantity=40)]
         self.assertEqual(resolve_quantity(10, "1", changes, set(), DAY), 10)
 
+    def test_same_day_change_after_scenario_time_ignored(self):
+        # scenario 09:00Z: Q5 at 08:30Z applies, Q6 at 10:00Z the same day is future-dated
+        changes = [QuantityChange(number="5", date=at(8, 30), position="1", quantity=50),
+                   QuantityChange(number="6", date=at(10), position="1", quantity=60)]
+        self.assertEqual(resolve_quantity(10, "1", changes, set(), NOW), 50)
+        # a date-only scenario keeps the old day semantics: both are on the day -> latest, 60
+        self.assertEqual(resolve_quantity(10, "1", changes, set(), DAY), 60)
+
+    def test_same_day_change_with_offset(self):
+        # 10:00+02:00 is 08:00Z -> applies; 12:00+02:00 is 10:00Z -> future; a naive stamp counts as UTC
+        changes = [QuantityChange(number="5", date=at(10, tz=PLUS2), position="1", quantity=50),
+                   QuantityChange(number="6", date=at(12, tz=PLUS2), position="1", quantity=60),
+                   QuantityChange(number="7", date=datetime(2026, 5, 15, 9, 30), position="1", quantity=70)]
+        self.assertEqual(resolve_quantity(10, "1", changes, set(), NOW), 50)
+
+    def test_date_only_change_on_scenario_day_applies(self):
+        # a record that only carries the day is not later than a scenario time on that day
+        changes = [QuantityChange(number="5", date="2026-05-15", position="1", quantity=50),
+                   QuantityChange(number="6", date="2026-05-16", position="1", quantity=60)]
+        self.assertIsInstance(changes[0].date, date)
+        self.assertNotIsInstance(changes[0].date, datetime)
+        self.assertEqual(resolve_quantity(10, "1", changes, set(), NOW), 50)
+        # ordering mixes dates and timestamps: Q7 at 08:00Z on the day is later than the date-only Q5
+        changes.append(QuantityChange(number="7", date="2026-05-15T08:00:00Z", position="1", quantity=70))
+        self.assertEqual(resolve_quantity(10, "1", changes, set(), NOW), 70)
+
+    def test_future_withdrawal_does_not_apply(self):
+        changes = [QuantityChange(number="3", date=datetime(2026, 2, 1, tzinfo=UTC), position="1", quantity=12),
+                   QuantityChange(number="7", date=datetime(2026, 3, 1, tzinfo=UTC), position="1", quantity=15)]
+        # Q8 withdraws Q7 at 10:00Z the scenario day, after the 09:00Z scenario time -> Q7 still applies
+        late = Withdrawal(number="8", date=at(10), withdraws="7")
+        self.assertEqual(resolve_quantity(10, "1", changes, [late], NOW), 15)
+        # the same withdrawal at 08:00Z applies -> Q3
+        early = Withdrawal(number="8", date=at(8), withdraws="7")
+        self.assertEqual(resolve_quantity(10, "1", changes, [early], NOW), 12)
+        # bare numbers are taken as already dated by the caller; mixing both forms works
+        self.assertEqual(resolve_quantity(10, "1", changes, {"7"}, NOW), 12)
+        self.assertEqual(resolve_quantity(10, "1", changes, ["3", early], NOW), 10)
+        # without a scenario date nothing is future-dated
+        self.assertEqual(resolve_quantity(10, "1", changes, [late]), 12)
+
     def test_sets_to_pieces(self):
         # 4 Satz x 6 pieces per set = 24 pieces
         self.assertEqual(to_pieces(4, parse_unit("Satz"), 6), 24)
@@ -119,6 +169,18 @@ class Requirement(unittest.TestCase):
         got = apply_amendments(base, amendments, "B", "R1", DAY)
         # only revision B / R1, not future: stroke 220, rest inherited
         self.assertEqual(got, {"bore": D(50), "stroke": D(220), "mounting": "Flansch"})
+
+    def test_amendment_after_scenario_time_ignored(self):
+        base = {"bore": D(50), "stroke": D(200)}
+        amendments = [
+            Amendment(date=at(8), revision="B", requirement="R1", attributes={"stroke": D(210)}),
+            Amendment(date=at(10), revision="B", requirement="R1", attributes={"stroke": D(220), "bore": D(63)}),
+            Amendment(date="2026-05-15", revision="B", requirement="R1", attributes={"bore": D(55)}),
+        ]
+        # 10:00Z is after the 09:00Z scenario: stroke stays 210; the date-only amendment on the day applies
+        self.assertEqual(apply_amendments(base, amendments, "B", "R1", NOW), {"bore": D(55), "stroke": D(210)})
+        # with a date-only scenario the whole day counts and the 10:00 amendment wins
+        self.assertEqual(apply_amendments(base, amendments, "B", "R1", DAY), {"bore": D(63), "stroke": D(220)})
 
     def test_nominal_stroke(self):
         # usable 220 + 2 x 15 reserve = 250
@@ -159,6 +221,32 @@ class Pricing(unittest.TestCase):
         self.assertEqual(valid_condition([old, new, later], DAY).scales[0].price, D("9.00"))
         with self.assertRaises(CalcError):
             valid_condition([old], DAY)
+
+    def test_condition_valid_on_timestamp(self):
+        # date windows are inclusive whole days: a scenario at 23:30Z on the end day is still inside,
+        # one at 00:30Z on the start day already is
+        ending = cond((1, "9.00"), start=date(2026, 1, 1), end=date(2026, 5, 15))
+        starting = cond((1, "11.00"), start=date(2026, 5, 16))
+        self.assertEqual(valid_condition([ending, starting], at(23, 30)).scales[0].price, D("9.00"))
+        self.assertEqual(valid_condition([ending, starting], datetime(2026, 5, 16, 0, 30, tzinfo=UTC))
+                         .scales[0].price, D("11.00"))
+        # a timed window end is compared as an instant
+        timed = cond((1, "7.00"), start=date(2026, 1, 1), end=at(8))
+        with self.assertRaises(CalcError):
+            valid_condition([timed], NOW)
+        self.assertEqual(valid_condition([timed], at(8)).scales[0].price, D("7.00"))
+
+    def test_scenario_timestamp_in_bid(self):
+        # the brief's 'Z' string becomes a UTC timestamp; condition and metal window ending on the day still apply
+        m = mat(mass="0.5", index="IDX")
+        c = cond((1, "10.00"), start=date(2026, 1, 1), end=date(2026, 5, 15))
+        rates = [MetalIndexRate(rate=D("4.00"), valid_from=date(2026, 4, 1), valid_to=date(2026, 5, 15)),
+                 MetalIndexRate(rate=D("5.00"), valid_from=date(2026, 5, 16))]
+        b = BidInput(tender_reference="T-0001", scenario_date="2026-05-15T09:00:00Z",
+                     positions=[pos("1", 10, material=m, conditions=[c])], metal_indices={"IDX": rates})
+        self.assertEqual(b.scenario_date, NOW)
+        out = by_pos(calculate(b))["1"]
+        self.assertEqual((out.surcharge_per_unit, out.unit_price), (D("2.00"), D("12.00")))
 
     def test_highest_scale_reached(self):
         scales = cond((100, "8.50"), (1, "10.00"), (50, "9.00")).scales
@@ -256,6 +344,27 @@ class Discount(unittest.TestCase):
         self.assertEqual(latest_authoritative(recs, "T-0001", DAY, "finanzen", "example.com").key, "new")
         self.assertIsNone(latest_authoritative(recs, "T-0002", DAY, "finanzen", "example.com"))
 
+    def test_record_after_scenario_time_is_future(self):
+        # approvals, FX fixing and the other rule 21 keys: the scenario is 09:00Z
+        r = "finanzen@example.com"
+        recs = [
+            DatedRecord(reference="T-0001", sender=r, date=datetime(2026, 4, 1, tzinfo=UTC), key="april"),
+            DatedRecord(reference="T-0001", sender=r, date=at(8, 45), key="morning"),
+            DatedRecord(reference="T-0001", sender=r, date=at(10, 15), key="later"),
+            DatedRecord(reference="T-0001", sender=r, date=at(13, tz=PLUS2), key="later-local"),  # 11:00Z
+        ]
+        self.assertEqual(latest_authoritative(recs, "T-0001", NOW, "finanzen", "example.com").key, "morning")
+        # 10:45+02:00 is 08:45Z, the same instant as "morning"; 10:55+02:00 = 08:55Z is the latest applicable
+        recs.append(DatedRecord(reference="T-0001", sender=r, date=at(10, 55, tz=PLUS2), key="local"))
+        self.assertEqual(latest_authoritative(recs, "T-0001", NOW, "finanzen", "example.com").key, "local")
+        # a date-only record on the scenario day applies but sorts before any timestamp on that day
+        recs.append(DatedRecord(reference="T-0001", sender=r, date="2026-05-15", key="day"))
+        self.assertEqual(latest_authoritative(recs, "T-0001", NOW, "finanzen", "example.com").key, "local")
+        self.assertEqual(latest_authoritative(recs[:1] + recs[-1:], "T-0001", NOW, "finanzen", "example.com").key,
+                         "day")
+        # with a date-only scenario the whole day counts (old behaviour)
+        self.assertEqual(latest_authoritative(recs, "T-0001", DAY, "finanzen", "example.com").key, "later-local")
+
 
 class Delivery(unittest.TestCase):
     """Rules 6, 15, 24."""
@@ -297,6 +406,37 @@ class MetalIndex(unittest.TestCase):
         self.assertEqual(metal_rate(self.RATES, date(2026, 6, 30)), D("4.00"))  # inclusive end
         with self.assertRaises(CalcError):
             metal_rate(self.RATES, date(2027, 1, 1))
+        # a scenario timestamp on the inclusive end day is still inside the window
+        self.assertEqual(metal_rate(self.RATES, datetime(2026, 6, 30, 22, 0, tzinfo=UTC)), D("4.00"))
+
+    def test_overlapping_windows_latest_start_wins(self):
+        year = MetalIndexRate(rate=D("3.00"), valid_from=date(2026, 1, 1), valid_to=date(2026, 12, 31))
+        quarter = MetalIndexRate(rate=D("4.00"), valid_from=date(2026, 4, 1), valid_to=date(2026, 6, 30))
+        # the window that became valid latest wins, whichever is listed last
+        self.assertEqual(metal_rate([year, quarter], DAY), D("4.00"))
+        self.assertEqual(metal_rate([quarter, year], DAY), D("4.00"))
+        # an open-ended window with a later start beats an older bounded one
+        reset = MetalIndexRate(rate=D("6.00"), valid_from=date(2026, 5, 1))
+        self.assertEqual(metal_rate([quarter, year, reset], DAY), D("6.00"))
+        # a window without a start is the oldest of all
+        open_start = MetalIndexRate(rate=D("2.00"), valid_to=date(2026, 12, 31))
+        self.assertEqual(metal_rate([quarter, open_start], DAY), D("4.00"))
+        self.assertEqual(metal_rate([open_start], DAY), D("2.00"))
+
+    def test_ambiguous_windows_raise(self):
+        a = MetalIndexRate(rate=D("4.00"), valid_from=date(2026, 4, 1), valid_to=date(2026, 6, 30))
+        b = MetalIndexRate(rate=D("4.50"), valid_from=date(2026, 4, 1), valid_to=date(2026, 9, 30))
+        with self.assertRaises(CalcError):
+            metal_rate([a, b], DAY)
+        # equal starts with the same rate are not a contradiction
+        same = MetalIndexRate(rate=D("4.00"), valid_from=date(2026, 4, 1))
+        self.assertEqual(metal_rate([a, same], DAY), D("4.00"))
+        # several unwindowed rates that differ are a contradiction too; one applies as is
+        with self.assertRaises(CalcError):
+            metal_rate([MetalIndexRate(rate=D("1.00")), MetalIndexRate(rate=D("2.00"))], DAY)
+        self.assertEqual(metal_rate([MetalIndexRate(rate=D("1.00"))], DAY), D("1.00"))
+        # a windowed hit beats an unwindowed one
+        self.assertEqual(metal_rate([MetalIndexRate(rate=D("1.00")), a], DAY), D("4.00"))
 
     def test_surcharge_in_bid(self):
         # 0.5 kg x 4.00 = 2.00 per piece; unit 10.00 + 2.00 = 12.00
