@@ -33,13 +33,14 @@ class SafeCalculate(unittest.TestCase):
         self.assertEqual(blank, {})
         self.assertEqual(problems, [])
 
-    def test_missing_carton_size_blanks_packaging_and_unit_price(self):
+    def test_missing_carton_size_blanks_packaging_keeps_unit_price(self):
         tariff = calc.PackagingTariff(price_per_carton=D("3"))
         result, blank, _ = safe_calculate(self.bid(position("1", packaging=tariff)))
         self.assertEqual(blank, {"1": {"packaging_per_unit", "unit_price"}})
         answer = answer_from(result, blank)
         self.assertNotIn("packaging_per_unit", answer["positions"][0])
-        self.assertNotIn("unit_price", answer["positions"][0])
+        # the best estimate stays, so the bid form still enters the position
+        self.assertEqual(answer["positions"][0]["unit_price"], 10.0)
         self.assertEqual(answer["positions"][0]["base_unit_price"], 10.0)
 
     def test_missing_metal_index_blanks_surcharge(self):

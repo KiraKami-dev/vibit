@@ -220,10 +220,16 @@ def material_attributes(material) -> dict[str, str]:
 
 
 def answer_from(result: calc.BidResult, blank: dict[str, set[str]], notes: str = "") -> dict:
+    """
+    The answer with the report fields whose inputs are missing left blank. The unit price stays: it is calc's best
+    estimate without the missing part, and the bid form enters a position only with a unit price, so blanking it
+    would lose the position's material, quantity, base price, packaging and delivery points too.
+    """
     answer = result.answer(notes or None)
     for position in answer["positions"]:
         for field in blank.get(position["position"], ()):
-            position.pop(field, None)
+            if field != "unit_price":
+                position.pop(field, None)
     return answer
 
 
