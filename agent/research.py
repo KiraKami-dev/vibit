@@ -81,6 +81,7 @@ def _read_settings(thinking: bool):
 # Readers copy values from pages a worker chose, under a grounding check; thinking makes each call ~30 s instead of
 # ~5 s for little gain there. Judgement calls (which revision governs) always think.
 READ_THINKING = os.environ.get("RESEARCH_READ_THINKING", "0") == "1"
+PAGE_WAIT = 2.0  # seconds read_document waits once more when a next-page click left the page unchanged
 
 
 async def _grounded_read(output_type: type[T], instructions: str, prompt: str, source: str, *,
@@ -242,6 +243,11 @@ async def read_document(ctx: RunContext[Deps], next_ref: str = "") -> str:
                 break
             await session.act("click", refs[min(nth, len(refs) - 1)], _click)
             text = _strip_refs(session.view)
+            if text in seen:  # a slow site may still be loading the next page (a local run lost pages 3 to 5)
+                await asyncio.sleep(PAGE_WAIT)
+                await session.settle()
+                await session.look()
+                text = _strip_refs(session.view)
             if text in seen:  # past the end some sites repeat the last page
                 break
             seen.add(text)
