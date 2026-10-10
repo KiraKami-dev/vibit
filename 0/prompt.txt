@@ -1024,3 +1024,69 @@ My measurement scripts are outside the repo, in `/tmp/rfqbench/`. `bench.py` is 
 <usage><subagent_tokens>207148</subagent_tokens><tool_uses>15</tool_uses><duration_ms>162070</duration_ms></usage>
 <worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aca9e958470992e7f</worktreePath><worktreeBranch>worktree-agent-aca9e958470992e7f</worktreeBranch></worktree>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>ae228d7357caa804d</task-id>
+<tool-use-id>toolu_011dPRW2A6KwPTtgoSheNcQc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/ae228d7357caa804d.output</output-file>
+<status>completed</status>
+<summary>Agent "v2 tender Q&amp;A and mail authority workers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The tender worker is correct on public-1, but the mail worker is not done: in the last full run it got 4 of its 9 record kinds, and the run took 471 s against the ~3 min target. Nothing is committed, and I didn't open the bid form or request TANs. One incident first: my early `pkill -f "atira scout"` very likely killed your other local `agent.py` run, because its shell command line contained that text. Since then I only stopped my own processes by PID.
+
+**Files (new, none existing edited):**
+- `agent/research_tender.py`: tender worker (positions + bidder Q&amp;A) and its records. It also holds the helpers the mail side reuses: `collect_pages`, `keep_pages`, `keep_results`, the grounding check and `reader_model()`.
+- `agent/research_mail.py`: model-planned mail research, the rule-21 selection and `bid_clauses()`, which maps everything onto calc's inputs. I kept my models here because `agent/evidence.py` belongs to the spec/ERP agent; I only use its `parse_number`/`parse_int`/`parse_date`.
+- `dev/research_check_records.py`: run with `eval "$(atira scout --env)"; HEADLESS=1 uv run --project agent python dev/research_check_records.py [tender|mail]`. `MAIL_TABS` defaults to 5; the runs below used 9.
+
+**Fixes you asked for, all applied:**
+- **Prompt wording:** prompts no longer contain text copied from public-1 pages.
+- **No fixed search list or senders:** `plan_searches()` has a model read the brief and return each record kind with its subject, its sender in the form the brief states it (local part at the bidder's domain, full address, or name) and the siteId that holds it. Code only lists the calc content types it can fill.
+- **Sender check:** a sender counts if it matches that brief-stated form.
+- **Search instructions:** now generic ("search every folder; change the words if nothing shows").
+- **Numbers:** readers copy numbers and dates as written, and parsing is locale-aware through `evidence` (the page's number format is reported too).
+- **Time checks:** use full timestamps, and `resolve_quantity` now gets the scenario datetime.
+- **Not fully done (your point 3):** the tender worker still runs on `briefing.bid_site`, which a model chose, but no model maps Q&amp;A facts to sites one by one.
+
+**Tender results (public-1, checked against the pages by hand):** all correct, about 50 to 120 s per run.
+- **Quantities:** 01.01 24→25 (answer 3916 is dated later than 8148, so it wins). 01.05 22→26 Satz, because answer 8153 withdraws 8152.
+- **Condition groups:** 01.02 K-3650, 01.03 K-2264, 01.05 K-9018.
+- **Keys:** packaging VP-1134 on all positions; delivery keys per position; pool RP-5730 and bonus PB-1474 on 01.03 to 01.05.
+- **Setup fees:** 85,00 (01.03) and 57,50 (01.05).
+- **Amendments:** R-6156 A-2 stroke 485, then 482 (the later one wins).
+
+**Mail results:** every record it did return was right, and the decoys were rejected:
+
+| Record | Value | Decoy avoided |
+|---|---|---|
+| Approval | 5 %, minimum order value 1.00 | the 4 % mail is older, the `-A` one is a look-alike |
+| Metal index MET-4607 | three windows: 2.75 / 3.15 / 3.95 | |
+| Packaging VP-1134 | 13.25 per carton | |
+| Setup pool RP-5730 | 517.25, largest remainder, ascending ties | |
+| Delivery commitments TZ-* | correct (earlier run) | |
+| FX FX-6282 | 1.0873 (earlier run) | future-dated 1.25 dropped |
+| End reserves ER-4001 / ER-9526 | 9 and 12 mm (earlier run) | |
+| Condition rules | correct (earlier run) | |
+
+In the last run, condition rules, end reserves, commitments, FX and project bonus timed out. The bonus has never been found in any run.
+
+**Why mail is slow and unreliable:**
+- **Proxy latency:** model calls were taking 30 to 36 s, so they hit the 30 s client timeout and retried. Several kinds made only 1 or 2 model calls in their 150 s budget, and the planner alone took about 230 s in that run.
+- **Navigation model:** with thinking off, Qwen invented message ids and subjects and lost track of which folder it was in. `keep_results` now only opens links the worker has actually seen. With thinking on it is more reliable but too slow for 20 steps.
+- **Site:** actions on the mail site sometimes stall for 30 s.
+- **Fragile reading:** the director's approval needs a subject the brief never names, so it depends on the planner's guess (it usually picks Rabattfreigabe, but has used other words that find nothing).
+
+**Harness changes I recommend:**
+1. Give `back()` a `reason: str = ""` parameter, as `submit.py`'s tools have. Qwen calls it with arguments, its retries run out and the worker stops.
+2. Add a timeout parameter to `llm.model()`. Thinking readers need about 180 s, so I built `reader_model()` with `with_options`.
+3. Let `run_worker` drop `note()` and the "record every fact with note()" instruction. Refused notes waste a lot of steps.
+4. Cap `SiteSession.settle()`/`act()` time: a cookie click that never returned once hung a tab for minutes, and form presses take 30 s.
+5. Read nested optional objects tolerantly: Qwen sends them as JSON strings. `MailRecord` decodes them; other typed outputs may need the same.
+6. Mail search: the planned `site_tools.py` search tool should take my `collect_pages` and `keep_results` helpers. My view is that mail search won't hit the time target until searches cost one step each.
+7. calc takes only one setup pool and one bonus plan; `bid_clauses` reports a problem if there are several.
+
+The tender records feed calc directly (quantity changes, withdrawals, amendments). End reserves are returned per key with their revision for the spec matcher.</result>
+<usage><subagent_tokens>435772</subagent_tokens><tool_uses>12</tool_uses><duration_ms>759095</duration_ms></usage>
+</task-notification>
