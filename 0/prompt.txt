@@ -1938,3 +1938,80 @@ What would work better:
 <summary>Monitor event: "soak test-run summaries (quality, failures)"</summary>
 <event>[Monitor expired after 30m with 3 events delivered. Re-arm it if you still need the watch.]</event>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a61a1dc566d4dd696</task-id>
+<tool-use-id>toolu_01R46ixkLkR7bzzd6BtCUdoW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a61a1dc566d4dd696.output</output-file>
+<status>completed</status>
+<summary>Agent "Analyse all v2 sandbox runs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The runs hit 100 only when nothing went wrong. Everything worked in all 4 of the 100 runs; each of the 12 failures had a site that would not open, a spec search that got lost, a false review-page alarm, or a deadline cut. Model speed is not the cause. You already have the site-start part.
+
+**Data limits:**
+- The platform keeps only the last ~260 stdout lines per run, so the first 160 to 500 s of trace is lost in most runs. I rebuilt phase starts from the `seconds=` fields and used the complete per-call and per-browser data from the platform's MCP tools.
+- No run has a screen recording.
+- run_d4deebd2d3a2d429 ran the v1 package and is excluded.
+- Runs started after about 21:40 UTC are not covered, apart from the c5b0 result you sent.
+
+**1. Per run** (seconds on the run clock; scoring: a 100 run gets full points on every field; a 10 run gets decision 5 + reference 5 and nothing else; 0 means no signed bid)
+
+| run | q | research | form | sign | first failure that cost points |
+|---|---|---|---|---|---|
+| 06a3 | 100 | 8–371 | 373–559 | 560–591 | none |
+| 715a (scored) | 100 | 9–527 | 529–665 | 667–840 | none (first TAN lookup returned the reference; retry took 125 s) |
+| 8e5c | 100 | 9–586 | 588–720 | 723–748 | none |
+| 4b941 | 100 | 5–621 | 624–781 | 784–813 | none (research ended 9 s before the 630 s deadline) |
+| df14 | 10 | 54–620 | 622–675 | 677–793 | spec found no revision history in 2 attempts |
+| f910 | 0 | 9–594 | 595–765 | 767–1110 | spec read only A-5, then a false summary alarm sent signing back and it timed out |
+| 817c | 10 | 55–727 | 730–827 | 828–856 | tender worker cut at the 630 s research deadline, so no positions |
+| 3004 | 0 | 7–599 (full answer) | 602–684 | 689–1110 | false summary alarm, signing timed out |
+| 3d85 | 10 | 7–767 | 783–946 | 946–1058 | spec attempt 1 looped 25 steps; attempt 2 opened the requirements at 629 s |
+| 9371, a27e, 487200, f93e, 49b0, 164e, 6a01 | 0/10 | 180–414 s lost to failed starts | – | – | a site never opened, or a page hung (covered in my earlier message) |
+
+**2. Model calls and site slowness**
+- **Latency:** p50 2.4–4.0 s, p90 8–15 s, max 19–59 s, 0 to 3 calls over 45 s per run.
+- **Errors:** none, apart from the expected 401 after the bid is in.
+- **No queue pressure:** team-wide calls in flight peaked at 20, under the 32-per-team cap. The scored run shows 7 % of call time as queue wait and test runs 63–92 %, but total latency is the same, so that is how the platform counts time, not extra delay.
+- **Site slowness:**
+  - Settle timeouts and failed starts appear only in failing runs (2 to 8 each, none in the 100 runs).
+  - Mail kinds hit their 150 s cap 2 to 10 times per run, including the 100 runs. Mean time per kind is 103–158 s and the max is 344 s.
+  - The ERP 12-step limit was hit in 5 runs.
+
+**3. Failure taxonomy** (16 runs, ranked by points lost)
+1. **A site won't open or a page stalls:** 7 runs, about 690 points.
+2. **Spec navigation fails or is too slow:** df14, 3d85, f910; about 270 points.
+3. **False summary-check alarm, then signing goes back and times out:** f910, 3004; 200 points. Your c5b0 finding ("5 %" vs "5,00") makes it 3 runs.
+4. **Research deadline cuts a slow worker:** 817c, 90 points.
+
+**Critical path in the 100 runs:**
+- The last research inputs are the mail kinds. end_reserves and condition_rules finished at 539–570 s; verify then took 17–45 s.
+- Two requirements, covering 3 of the 5 positions, wait on the end_reserves mail.
+- Form took 132–185 s; signing took 25–30 s, or 173 s with a bad TAN.
+- The 100 runs were not faster than the failures. They had every site open on the first try, the spec found on the first attempt (or by the parallel spec attempts in 8e5c and 4b941), tender facts in before ~450 s, and a summary check that matched.
+
+**4. Recommendations**
+- **Summary check:** never let a mismatch switch signing to thinking or go back in the wizard. Sign as entered. Worth +200 points in 2 of 16 runs.
+- **Spec:** run two parallel attempts from the start, each capped at about 150 s / 25 steps with a loop guard. The spec must be done by about 350 s so the ERP (100–130 s) and verify (cap 45 s; 3d85 took 137 s) fit.
+- **Research deadline:** move it from 630 s to about 720 s. With the end at 1110 s, a 200 s form budget (seen max 185 s) and a 180 s signing reserve, research can run to 730 s. That would have saved 817c and probably 3d85. Put last_chance at the end minus 120 s.
+- **Step limits:**
+  - ERP material views: raise from 12 to 16–18, or scale with the time left.
+  - Spec: keep 25 plus the loop guard.
+  - Mail: give end_reserves and condition_rules 200 s and start them first; 150 s for the rest.
+- **Where parallelism pays:** on the spec and on starting the critical mail kinds first, not on model calls.
+- **Logging:** write the full trace to a file and print a short phase summary at the end, so the platform's line limit stops hiding the early phases.
+
+Everything is in `/Users/jonasstenglein/.claude/jobs/064ce75e/tmp/`: the analysis in `v2_analysis.md`, raw logs, model-call lists and profiles in `logs/`, scores in `status/`, and the fetch scripts in `scripts/`.</result>
+<usage><subagent_tokens>253090</subagent_tokens><tool_uses>76</tool_uses><duration_ms>3246406</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bw4h5snsi</task-id>
+<summary>Monitor event: "soak test-run summaries, both runners"</summary>
+<event>00:04 run_3e4ff5d97d2166c3 de33a85 quality=None 0.0min $0.000 signed</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
