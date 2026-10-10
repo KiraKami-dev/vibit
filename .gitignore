@@ -6,3 +6,4 @@ checks/
 dev/clef_eval/data/
 # hand-made answers for dev/configurator_check.py: site values, local only
 dev/local/
+experiments/soak.log
