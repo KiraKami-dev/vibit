@@ -4,6 +4,7 @@ the browser tools and ends by returning the goal's typed result.
 """
 import asyncio
 import dataclasses
+import re
 import time
 from typing import TypeVar
 
@@ -12,8 +13,8 @@ from browser_tools import TOOLS, Deps, SiteSession, unseen_values
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.capabilities.process_history import ProcessHistory
 from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
-from pydantic_ai.usage import UsageLimits
+from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart, UserPromptPart
+from pydantic_ai.usage import RunUsage, UsageLimits
 
 T = TypeVar("T")
 
@@ -22,8 +23,11 @@ You operate a web browser for a German industrial company, on one website, to re
 
 Each view shows the page as text. Elements you can act on look like [e12 link "Text" -> /path], [e7 textbox
 "Label" value=""], [e9 select "Label" selected="..." options: a | b]; act on them by ref with the tools. Refs
-change with every view: always use refs from the latest one. (tooltip: ...) and [img: ...] carry values the page
-shows only on hover or as an image. [frame ...] blocks are embedded documents.
+change with every view: always use refs from the latest one. Long option lists are shortened: options(ref,
+contains) lists or searches them. After an action on the same page you may get only the parts that changed
+against your latest full view of it; everything else there, refs included, still holds.
+(tooltip: ...) and [img: ...] carry values the page shows only on hover or as an image. [frame ...] blocks are
+embedded documents.
 
 Sign-in, cookie notices, "not a robot" checks, transient error pages and pop-up notices are handled for you and
 reported under "Since your last action". Some pages draw an imitation browser toolbar at the top (back arrow,
@@ -43,18 +47,48 @@ Record every fact you establish with note() as soon as you have it, then return 
 """
 
 
+VIEW = re.compile(r"(?:^|\n)(URL: \S*)\nTitle: ")  # the header of every page view (SiteSession.look)
+CURRENT_VIEW = "\nCurrent view:\n"  # where the first prompt's page view starts
+
+
+def _shrink(part):
+    """An older page view (or long tool result) cut to a one-line stub, so context stays small."""
+    content = part.content
+    if isinstance(part, UserPromptPart):
+        cut = content.find(CURRENT_VIEW) if isinstance(content, str) else -1
+        found = VIEW.search(content, cut) if cut >= 0 else None
+        if found is None:
+            return part
+        return dataclasses.replace(part, content=f"{content[:cut]}\nFirst view: {found.group(1)} [removed]")
+    if not isinstance(part, ToolReturnPart) or not isinstance(content, str) or len(content) <= 400:
+        return part
+    found = VIEW.search(content)
+    if found:
+        lead = content[:found.start()].strip().split("\n", 1)[0]  # e.g. why an action failed
+        stub = f"{lead}\n{found.group(1)}" if lead else found.group(1)
+        return dataclasses.replace(part, content=f"{stub}\n[older page view removed]")
+    return dataclasses.replace(part, content=content.split("\n", 1)[0] + "\n[older result removed]")
+
+
 def _forget_old_views(messages: list[ModelMessage]) -> list[ModelMessage]:
-    """Keep only the latest page views in full; older ones shrink to their URL line, which keeps context small."""
-    last = max((i for i, m in enumerate(messages) if isinstance(m, ModelRequest)), default=-1)
+    """Keep the latest page view and everything after it in full; what came before shrinks to stubs.
+
+    The latest view is kept even when later tool calls (note, a lookup, an unchanged page) returned no view, so the
+    model always has the page it is on in front of it.
+    """
+    latest = None
+    for i, message in enumerate(messages):
+        if isinstance(message, ModelRequest):
+            for j, part in enumerate(message.parts):
+                if isinstance(part, (ToolReturnPart, UserPromptPart)) and isinstance(part.content, str) \
+                        and VIEW.search(part.content):
+                    latest = (i, j)
+    if latest is None:
+        return messages
     result: list[ModelMessage] = []
     for i, message in enumerate(messages):
-        if isinstance(message, ModelRequest) and i != last:
-            parts = []
-            for part in message.parts:
-                if isinstance(part, ToolReturnPart) and isinstance(part.content, str) and len(part.content) > 400:
-                    first = part.content.split("\n", 1)[0]
-                    part = dataclasses.replace(part, content=f"{first}\n[older page view removed]")
-                parts.append(part)
+        if isinstance(message, ModelRequest) and i <= latest[0]:
+            parts = [_shrink(part) if (i, j) < latest else part for j, part in enumerate(message.parts)]
             message = dataclasses.replace(message, parts=parts)
         result.append(message)
     return result
@@ -89,24 +123,27 @@ async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, c
                                  f"copied from pages; open them again to check.")
             return output
 
-    view = await session.look()
+    view = await session.look(fresh=True)
     prompt = f"Website: {session.name} ({session.site['url']})\n\nGoal: {goal}\n"
     if context:
         prompt += f"\nContext:\n{context}\n"
-    prompt += f"\nCurrent view:\n{view}"
+    prompt += f"\n{CURRENT_VIEW}{view}"
     started = time.monotonic()
     timeout = None if deadline is None else max(1.0, deadline - started)
     session.trace.event(session.name, "start", goal=goal)
     output = None
+    usage = RunUsage()  # filled as the run goes, so a stopped run still reports what it used
     try:
         result = await asyncio.wait_for(
-            agent.run(prompt, deps=deps, usage_limits=UsageLimits(request_limit=max_steps)), timeout)
+            agent.run(prompt, deps=deps, usage=usage, usage_limits=UsageLimits(request_limit=max_steps)), timeout)
         output = result.output
-        usage = result.usage
         session.trace.event(session.name, "done", seconds=round(time.monotonic() - started, 1),
                             requests=usage.requests, input_tokens=usage.input_tokens,
-                            output_tokens=usage.output_tokens, output=repr(output)[:500])
+                            cached_tokens=usage.cache_read_tokens, output_tokens=usage.output_tokens,
+                            output=repr(output)[:500])
     except (asyncio.TimeoutError, UsageLimitExceeded, UnexpectedModelBehavior) as error:
         session.trace.event(session.name, "stopped", reason=f"{type(error).__name__}: {str(error)[:200]}",
-                            seconds=round(time.monotonic() - started, 1))
+                            seconds=round(time.monotonic() - started, 1), requests=usage.requests,
+                            input_tokens=usage.input_tokens, cached_tokens=usage.cache_read_tokens,
+                            output_tokens=usage.output_tokens)
     return output, deps.notes

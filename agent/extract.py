@@ -6,6 +6,9 @@ usually `hidden` or `aria-hidden`), collapsed `<details>` are opened, tooltips a
 same-origin iframes are walked in place and zero-width characters are stripped. Interactive elements get a
 `data-ar` ref such as `e12` that `locate` resolves again for clicking and filling.
 """
+import difflib
+import re
+
 from playwright.async_api import Frame, Locator, Page
 
 WALK_JS = r"""
@@ -16,6 +19,7 @@ WALK_JS = r"""
   const BLOCK = /^(block|flex|grid|table|table-row|list-item|flow-root|table-caption)$/;
   const ROLES = new Set(['button', 'link', 'tab', 'menuitem', 'option', 'checkbox', 'radio', 'switch', 'combobox',
                          'slider', 'textbox', 'searchbox']);
+  const SELECT_CHARS = 600, SELECT_HEAD = 8, SELECT_TAIL = 2;  // longer option lists are shortened
   let n = start;
   const out = [];
   const crossOrigin = [];
@@ -68,8 +72,15 @@ WALK_JS = r"""
     if (tag === 'SELECT') {
       const opts = Array.from(el.options);
       const sel = opts.filter(o => o.selected).map(o => clean(o.textContent)).join(', ');
-      let list = opts.slice(0, 60).map(o => clean(o.textContent) + (o.disabled ? ' (disabled)' : '')).join(' | ');
-      if (opts.length > 60) list += ` | ... ${opts.length - 60} more`;
+      const names = opts.map(o => clean(o.textContent) + (o.disabled ? ' (disabled)' : ''));
+      let list = names.join(' | ');
+      if (list.length > SELECT_CHARS && names.length > SELECT_HEAD + SELECT_TAIL + 1) {
+        // a long list costs tokens on every view; show its shape, options(ref, contains) lists the rest
+        const hidden = names.length - SELECT_HEAD - SELECT_TAIL;
+        list = [...names.slice(0, SELECT_HEAD), `... ${hidden} more: options(${r}) ...`,
+                ...names.slice(-SELECT_TAIL)].join(' | ');
+        list = `(${names.length}) ${list}`;
+      }
       return `[${r} select "${labelOf(el)}" selected="${sel}"${dis} options: ${list}]`;
     }
     if (tag === 'TEXTAREA') return `[${r} textarea "${labelOf(el)}" value="${clean(el.value)}"${dis}]`;
@@ -202,3 +213,51 @@ async def locate(page: Page, ref: str) -> Locator | None:
         except Exception:
             continue
     return None
+
+
+OPTIONS_JS = r"""
+(e, contains) => {
+  const ZW = /[​‌‍⁠﻿­]/g;
+  const clean = s => (s || '').replace(ZW, '').replace(/\s+/g, ' ').trim();
+  const want = clean(contains).toLowerCase();
+  const all = Array.from(e.options || []).map(o => clean(o.textContent) + (o.disabled ? ' (disabled)' : '')
+                                                  + (o.selected ? ' (selected)' : ''));
+  return {total: all.length, hits: all.filter(t => t.toLowerCase().includes(want))};
+}
+"""
+
+
+async def select_options(page: Page, ref: str, contains: str = "") -> tuple[int, list[str]] | None:
+    """All options of the select `ref` (or those whose text contains `contains`, ignoring case); None without one."""
+    element = await locate(page, ref)
+    if element is None or await element.evaluate("e => e.tagName") != "SELECT":
+        return None
+    found = await element.evaluate(OPTIONS_JS, contains)
+    return found["total"], found["hits"]
+
+
+
+CONTROL = re.compile(r"(\[e\d+ (?:[^\[\]]|\[[^\[\]]*\])*\])")  # one [eN ...] element, allowing [..] inside
+
+
+def _pieces(view: str) -> list[str]:
+    """A view cut into lines, and lines into their text and each control, so a changed field is one piece."""
+    return [piece.strip() for line in view.split("\n") for piece in CONTROL.split(line) if piece.strip()]
+
+
+def changes(old: str, new: str, share: float = 0.4) -> str | None:
+    """The pieces (text runs and controls) of `new` that differ from `old`, each after the last unchanged one.
+
+    Unchanged pieces are identical text, refs included, so together with the old view they give the new page.
+    None when the change is a large part of the page (then the whole view is clearer and not much longer).
+    """
+    before, after = _pieces(old), _pieces(new)
+    out = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes():
+        if op == "equal":
+            continue
+        out.append(f"@@ after {before[i1 - 1][:80]!r}:" if i1 else "@@ at the top:")
+        out += [f"- {piece[:80]}" + ("..." if len(piece) > 80 else "") for piece in before[i1:i2]]
+        out += [f"+ {piece}" for piece in after[j1:j2]]
+    text = "\n".join(out)
+    return text if len(text) <= share * len(new) else None
