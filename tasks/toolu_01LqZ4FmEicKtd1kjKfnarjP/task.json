@@ -1,0 +1,20 @@
+{
+  "tool_use_id": "toolu_01LqZ4FmEicKtd1kjKfnarjP",
+  "agent_id": "a1a8b2c8cd6aff30f",
+  "subagent_type": "general-purpose",
+  "task_description": "v2 spec and ERP research workers",
+  "files": [
+    "agent/evidence.py",
+    "agent/research.py",
+    "dev/research_check.py"
+  ],
+  "token_usage": {
+    "input_tokens": 204,
+    "cache_creation_tokens": 945658,
+    "cache_read_tokens": 17274831,
+    "output_tokens": 107879,
+    "api_call_count": 102
+  },
+  "started_at": "2026-10-10T17:36:33.219443+02:00",
+  "completed_at": "2026-10-10T18:39:46.110576+02:00"
+}
