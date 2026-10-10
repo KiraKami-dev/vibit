@@ -183,3 +183,27 @@ I also wrote four starter bullets under "What we tried and learned", based on th
 - **Not recorded:** two teammate submissions (`sub_394612e901042cdf`, `sub_4a78e252f841b4c4`) and a queued test run `run_8cdaf09699ca1a66` exist. Record them with `platform &lt;id&gt;` once they're relevant or finished.</result>
 <usage><subagent_tokens>90024</subagent_tokens><tool_uses>21</tool_uses><duration_ms>347179</duration_ms></usage>
 </task-notification>
+
+---
+
+"What it built:" can you or a subagent set this up as claude md or sth or hook or so (that are committed as pushed). then comit?
+
+---
+
+<task-notification>
+<task-id>bl6lsaxoa</task-id>
+<tool-use-id>toolu_019RwMb8qbagD26ymi13NkiG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bl6lsaxoa.output</output-file>
+<status>completed</status>
+<summary>Background command "Follow the test run logs until it ends" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bo417qj0b</task-id>
+<tool-use-id>toolu_01YEtYPMC7LTpzoh2Gmc1TyR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bo417qj0b.output</output-file>
+<status>completed</status>
+<summary>Background command "Check test run log and status" completed (exit code 0)</summary>
+</task-notification>
