@@ -373,6 +373,8 @@ class Orchestrator:
                 task.cancel()
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
+            await self._close_context(spare)  # its tabs would compete with the ERP workers for the browser
+            spare = None
             if self.spec is None:  # neither finished with requirements: keep the most that was read
                 self.spec = max(results, key=lambda r: len(r.requirements), default=SpecResult())
             self._adopt_revision(self.spec, site, erp)
@@ -389,11 +391,15 @@ class Orchestrator:
         finally:
             board.finish("requirement")
             board.finish("material")
-            if spare is not None:
-                try:
-                    await spare.close()
-                except Exception:  # already gone
-                    pass
+            await self._close_context(spare)
+
+    @staticmethod
+    async def _close_context(context: BrowserContext | None) -> None:
+        if context is not None:
+            try:
+                await context.close()
+            except Exception:  # already gone
+                pass
 
     async def _spare_context(self, site: str) -> BrowserContext | None:
         """A second context of the website's browser, so two attempts do not share a sign-in or an access choice."""
