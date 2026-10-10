@@ -88,13 +88,16 @@ class Mailbox:
 class FormAction(BaseModel):
     ref: str = Field(description="The element's ref in the latest view")
     action: Literal["fill", "select", "check", "uncheck", "click"]
-    value: str = Field("", description="The text to type (fill) or the option's visible text (select)")
+    value: str = Field("", description="fill: the text to type; select: the option's visible text, exactly as the "
+                                       "view lists it; empty for check, uncheck and click")
 
 
 async def _perform(element, step: FormAction) -> None:
     if step.action == "fill":
         await element.fill(step.value, timeout=2000)
     elif step.action == "select":
+        if not step.value:
+            raise ValueError("select needs the option's visible text as value")
         try:
             await element.select_option(label=step.value, timeout=2000)
         except Exception:
@@ -128,7 +131,7 @@ async def fill_in(ctx: RunContext[Deps], actions: list[FormAction]) -> str:
             try:
                 await _perform(element, step)
             except Exception as error:
-                stop = f"{step.action} {step.ref} failed: {str(error).splitlines()[0][:200]}"
+                stop = f"{step.action} {step.ref} {step.value!r} failed: {str(error).splitlines()[0][:200]}"
                 break
             done.append(f"{step.action} {step.ref}")
             await asyncio.sleep(0.15)
@@ -138,7 +141,8 @@ async def fill_in(ctx: RunContext[Deps], actions: list[FormAction]) -> str:
                 break
         await asyncio.sleep(0.25)
         await session.settle()
-        session.trace.event(session.name, "action", action="fill_in", done=done, stop=stop)
+        session.trace.event(session.name, "action", action="fill_in", done=done, stop=stop,
+                            asked=[step.model_dump() for step in actions])
         view = await session.look()
     report = f"Done: {', '.join(done) or 'nothing'}." + (f" Stopped: {stop}." if stop else "")
     return f"{report}\n\n{view}"
