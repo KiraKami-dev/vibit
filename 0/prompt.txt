@@ -2601,3 +2601,7 @@ Prices: Haiku 5.5 is $0.10 / $0.50 per million tokens (input / output) for promp
 <usage><subagent_tokens>221453</subagent_tokens><tool_uses>69</tool_uses><duration_ms>701246</duration_ms></usage>
 <worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a5fed577ffefa0386</worktreePath><worktreeBranch>worktree-agent-a5fed577ffefa0386</worktreeBranch></worktree>
 </task-notification>
+
+---
+
+So note of parallelization? And how have you tested Anthrophic without me providing a token?
