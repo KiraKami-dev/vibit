@@ -20,6 +20,7 @@ from browser_tools import SiteSession
 from orchestrator import Orchestrator
 from playwright.async_api import async_playwright
 from submit import Mailbox, submit_bid
+import tracing
 from tracing import Trace
 
 SAFETY_SECONDS = 90  # the answer must be in before the run expires
@@ -96,7 +97,10 @@ async def main() -> int:
           f"answer via {task['submission']['kind']}", flush=True)
     async with async_playwright() as playwright:
         browser, page = await browsers.connect(playwright)  # more browsers: browsers.connect(playwright, 1), ...
-        answer = await solve(task, page)
+        try:
+            answer = await solve(task, page)
+        finally:  # the platform keeps only the last lines of a run's output: repeat the phases there
+            tracing.print_summary()
     if answer is None:
         print("No answer to submit through the API: the bid is entered on the website", flush=True)
         return 0
