@@ -2471,3 +2471,12 @@ that also resolves the rare annoying site timeouts under full load, occasional q
 </pasted_content id="c6ab">
 
 "
+
+---
+
+<task-notification>
+<task-id>bbja2jd03</task-id>
+<summary>Monitor event: "soak results (sandbox and local)"</summary>
+<event>01:00 run_0139c00e4530c09d ffef7a8 quality=19.1 11.4min $0.089 no bid</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
