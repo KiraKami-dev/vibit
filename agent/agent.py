@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import browsers
+import loopwatch
 import run as contract
 from briefing import read_brief
 from browser_tools import SiteSession
@@ -35,6 +36,7 @@ async def solve(task: dict, page, answer: dict | None = None,
     researches them; a research failure never costs the signed bid.
     """
     trace = Trace()
+    loopwatch.Watchdog(activity=lambda: trace.last).start()  # a blocked loop or a silent run dumps its stacks
     left = min(contract.seconds_left(task), LOCAL_SECONDS)
     deadline = time.monotonic() + left - SAFETY_SECONDS
     # Sign in to every website while the model reads the brief: which one plays which part is only known after it.
