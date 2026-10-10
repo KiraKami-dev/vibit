@@ -353,5 +353,34 @@ class TenderWatch(unittest.TestCase):
         self.assertEqual(o.trace.kinds("gap"), [])
 
 
+class MailReread(unittest.TestCase):
+    def test_kept_but_unread_messages_are_read_again_without_browsing(self):
+        import research_mail
+        o = runnable(GAP_TAIL + 5)
+        o.reference = "T-1"
+        o.mail_results = {"packaging": SimpleNamespace(kind="K", kept=["view a", "view b"], records=[], stopped=False),
+                          "fx": SimpleNamespace(kind="K", kept=[], records=[], stopped=True)}
+        filler = GapFiller(o)
+        searched = []
+
+        async def mails(kinds):
+            searched.extend(kinds)
+
+        async def read_message(view, kind, reference):
+            return None if view == "view b" else f"record of {view}"
+
+        filler.mails = mails
+        saved = research_mail.read_message
+        research_mail.read_message = read_message
+        try:
+            self.assertEqual(filler.limit(Gap("mail", "packaging", "")), gaps.GAP_TRIES + 1)
+            asyncio.run(filler.fill([Gap("mail", "packaging", ""), Gap("mail", "fx", "")]))
+        finally:
+            research_mail.read_message = saved
+        self.assertEqual(o.mail_results["packaging"].records, ["record of view a"])
+        self.assertEqual(searched, ["fx"])
+        self.assertFalse(filler.unread("packaging"))  # once per kind; next time it is searched
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -701,7 +701,11 @@ class Orchestrator:
             self.board.problem("mails", f"mail deadline: {open_kinds} not read; their fields stay blank")
         if not self.mail_sessions:
             raise ConnectionError("no mail tab could be opened")
-        mailbox = await address[0] if address else await self._mailbox()
+        await self._resolve_mail(await address[0] if address else None)
+
+    async def _resolve_mail(self, mailbox: str | None = None) -> None:
+        """The records read so far, all kinds, resolved into mail facts and posted on the board."""
+        mailbox = mailbox if mailbox is not None else await self._mailbox()
         facts = research_mail.resolve_mail(list(self.mail_results.values()), self.reference,
                                            mailbox.split("@", 1)[1] if "@" in mailbox else "", self.scenario, mailbox)
         if not mailbox:

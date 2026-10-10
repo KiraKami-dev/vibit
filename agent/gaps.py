@@ -167,6 +167,7 @@ class GapFiller:
     def __init__(self, orchestrator):
         self.o = orchestrator
         self.tries: dict[str, int] = {}
+        self.reread_done: set[str] = set()
         self.round = 0
 
     def until(self) -> float:
@@ -202,6 +203,8 @@ class GapFiller:
             found = (getattr(self.o, "mail_results", None) or {}).get(gap.key)
             if found is not None and found.records and not getattr(found, "stopped", False):
                 return 1
+            if found is not None and getattr(found, "kept", None) and not found.records:
+                return GAP_TRIES + 1  # one reread of the kept messages, then the searches
         return GAP_TRIES
 
     def trace(self, kind: str, **data) -> None:
@@ -231,6 +234,8 @@ class GapFiller:
             self.round += 1
             started = time.monotonic()
             touched = await self.fill(todo)
+            if any(g.area == "mail" for g in todo):  # reads that finished before a cut still count
+                await self.resolve_mail()
             await self.reselect(touched)
             new = calculate()
             after = detect_gaps(self.o, new.problems)
@@ -291,7 +296,13 @@ class GapFiller:
             kinds = [g.key for g in areas["mail"]]
             if "end_reserves" in kinds:  # a reserve moves the stroke the material must match
                 touched |= {rid for rid, req in o.requirements.items() if o.effective(req).pending}
-            job(self.mails(kinds), "mails")
+            unread = [k for k in kinds if self.unread(k)]  # kept messages whose reading was cut: read them
+            self.reread_done |= set(unread)
+            if unread:
+                job(self.reread(unread), "mail reread")
+            search = [k for k in kinds if k not in unread]
+            if search:
+                job(self.mails(search), "mails")
         if not jobs:
             return touched
         done, late = await asyncio.wait(jobs, timeout=max(1.0, self.left()))
@@ -388,6 +399,36 @@ class GapFiller:
                      if c.material_number == number and c.link), "")
         record = await erp.material(number, link)
         self._keep_material(number, record)
+
+    def unread(self, kind: str) -> bool:
+        """A kind whose search kept messages but whose reading did not finish (cut by the mail deadline): the
+        kept page views only need the reader again, no browsing. Once per kind; after that it is searched."""
+        found = (getattr(self.o, "mail_results", None) or {}).get(kind)
+        return (found is not None and bool(found.kept) and not found.records and kind not in self.reread_done)
+
+    async def reread(self, kinds: list[str]) -> None:
+        """Read the kept message views of each kind again; every record read is kept at once (a cut keeps it)."""
+        read_message = _module("research_mail").read_message
+        o = self.o
+
+        async def one(name: str, view: str) -> None:
+            found = o.mail_results[name]
+            record = await read_message(view, found.kind, o.reference)
+            if record is not None:
+                found.records = [*found.records, record]
+
+        await asyncio.gather(*(one(name, view) for name in kinds for view in o.mail_results[name].kept),
+                             return_exceptions=True)
+        self.trace("mail_reread", kinds={name: len(o.mail_results[name].records) for name in kinds})
+
+    async def resolve_mail(self) -> None:
+        resolve = getattr(self.o, "_resolve_mail", None)
+        if resolve is None or not getattr(self.o, "mail_sessions", None):
+            return
+        try:
+            await asyncio.wait_for(resolve(), max(5.0, min(20.0, self.o.research_deadline - time.monotonic())))
+        except Exception as error:
+            self.o.board.problem("gaps", f"mail facts not resolved again: {type(error).__name__}: {str(error)[:120]}")
 
     async def mails(self, kinds: list[str]) -> None:
         """The missing record kinds on fresh tabs, through the first pass's own mail loop (results add up, all
