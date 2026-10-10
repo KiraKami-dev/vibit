@@ -46,7 +46,8 @@ try:
 except ImportError:  # pragma: no cover
     research_mail = None
 
-SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "480"))  # research ends this long before the end
+# research ends this long before the end: the form needs up to ~185 s and signing ~30 s (173 s with a bad TAN)
+SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "390"))
 FORM_SECONDS = float(os.environ.get("AGENT_FORM_SECONDS", "300"))  # the bid form and signing need this much
 MAIL_TABS = int(os.environ.get("MAIL_TABS", "4"))
 SPEC_STEPS_FAST = int(os.environ.get("SPEC_STEPS_FAST", "25"))  # navigation steps of the fast spec attempt
@@ -549,8 +550,11 @@ class Orchestrator:
         joins as soon as it is ready (a tab that never opens just leaves the work to the others).
         """
         queue: asyncio.Queue = asyncio.Queue()
-        # The approval goes first: the discount counts for points of its own and feeds every unit price.
-        for kind in sorted(kinds, key=lambda k: k.name != "approval"):
+        # The approval goes first: the discount counts for points of its own and feeds every unit price. The
+        # stroke reserves and the condition rules follow: materials (and so most positions) and the discount
+        # scopes wait on them.
+        first = ("approval", "end_reserves", "condition_rules")
+        for kind in sorted(kinds, key=lambda k: first.index(k.name) if k.name in first else len(first)):
             queue.put_nowait((kind, 0))
         deadline = deadline or self.mail_deadline
 
