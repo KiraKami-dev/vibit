@@ -602,6 +602,9 @@ PREPARE_SECONDS = 180  # at most this long for the steps before the positions, w
 KEEPALIVE_SECONDS = float(os.environ.get("AGENT_KEEPALIVE_SECONDS", "40"))  # unsaved form steps die with the session
 PREPARES = 3  # passes at most: the first and two after a lost session
 FINISH_WAIT = 45  # seconds the bid waits for a pass still on the form when the research ends
+# the website's start page fetched from the tab (its cookies, no navigation): [final url, html]
+KEEPALIVE_JS = ("async () => { const r = await fetch(location.origin + '/', {credentials: 'same-origin'}); "
+                "return [r.url, await r.text()]; }")
 SIGNED_OUT = re.compile(r"<input[^>]*type=[\"']?password", re.IGNORECASE)
 
 
@@ -700,15 +703,14 @@ Brief's submission steps:
         """A light request to the website every KEEPALIVE_SECONDS; returns once the session is found signed out."""
         while True:
             await asyncio.sleep(KEEPALIVE_SECONDS)
-            try:
-                response = await self.session.context.request.get(self.session.site["url"], timeout=15000)
-                body = await response.text()
+            try:  # from inside the page: the sandbox resolves the websites only in the browser, not in this process
+                url, body = await asyncio.wait_for(self.session.page.evaluate(KEEPALIVE_JS), 20)
             except Exception as error:  # a slow website: try again next time
                 self._event("keepalive_failed", error=f"{type(error).__name__}: {str(error)[:160]}")
                 continue
             if SIGNED_OUT.search(body):
                 self.ready = False
-                self._event("session_lost", url=response.url)
+                self._event("session_lost", url=url)
                 return
 
     async def finish(self, answer: dict | None, attributes: dict[str, dict[str, str]] | None

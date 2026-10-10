@@ -25,27 +25,21 @@ class FakeTrace:
         self.events.append((worker, kind, data))
 
 
-class FakeResponse:
-    def __init__(self, body):
-        self.body, self.url = body, "https://bids.example.com/"
+class FakePage:
+    """The tab: evaluate() answers the keepalive fetch with [url, html]."""
 
-    async def text(self):
-        return self.body
-
-
-class FakeRequest:
     def __init__(self, bodies):
         self.bodies, self.calls = list(bodies), 0
 
-    async def get(self, url, timeout=0):
+    async def evaluate(self, script):
         self.calls += 1
-        return FakeResponse(self.bodies.pop(0) if len(self.bodies) > 1 else self.bodies[0])
+        return ["https://bids.example.com/", self.bodies.pop(0) if len(self.bodies) > 1 else self.bodies[0]]
 
 
 class FakeSession:
     def __init__(self, bodies=(SIGNED_IN,)):
         self.trace = FakeTrace()
-        self.context = mock.Mock(request=FakeRequest(bodies))
+        self.page = FakePage(bodies)
         self.site = {"siteId": "bids", "url": "https://bids.example.com/"}
         self.name = "bids"
         self.lock = asyncio.Lock()
@@ -68,7 +62,7 @@ class KeepAlive(unittest.IsolatedAsyncioTestCase):
         flow.ready = True
         with mock.patch.object(submit, "KEEPALIVE_SECONDS", 0.01):
             await asyncio.wait_for(flow._keep_alive(), 2)
-        self.assertEqual(session.context.request.calls, 3)
+        self.assertEqual(session.page.calls, 3)
         self.assertFalse(flow.ready)
         self.assertIn("session_lost", [kind for _, kind, _ in session.trace.events])
 
@@ -78,7 +72,7 @@ class KeepAlive(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(submit, "KEEPALIVE_SECONDS", 0.01):
             with self.assertRaises(asyncio.TimeoutError):
                 await asyncio.wait_for(flow._keep_alive(), 0.2)
-        self.assertGreater(session.context.request.calls, 3)
+        self.assertGreater(session.page.calls, 3)
 
 
 class Handover(unittest.IsolatedAsyncioTestCase):
