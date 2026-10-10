@@ -31,7 +31,7 @@ from calc import (
     resolve_quantity,
 )
 from evidence import ParseError, parse_int, parse_number
-from worker import run_worker
+from worker import run_worker, steps_for
 
 MAX_PAGES = 40
 MAX_RETURN = 30000  # characters of a collected list shown back to the model
@@ -329,6 +329,23 @@ def _goal(reference: str) -> str:
    pages are read for you."""
 
 
+def _positions_goal(reference: str) -> str:
+    return f"""For tender {reference} (exactly this reference; similar references are other tenders): open this
+tender and its list of documents. Call keep_pages once with the link targets of the documents that can hold the
+positions (bill of quantities / position list with the original quantities, and the description). Ignore buttons
+and links that lead elsewhere (surveys, tools). Do not open the documents yourself, and do not open the bidder
+questions and answers or the bid submission: another worker reads those. Then return a short summary. To move
+between pages follow links or goto a link target; do not use back()."""
+
+
+def _qa_goal(reference: str) -> str:
+    return f"""For tender {reference} (exactly this reference; similar references are other tenders): open this
+tender's bidder questions and answers (Q&A). When the list of answers shows, call collect_pages with the ref of
+the list's control for the next page (or for loading more); do not page through it yourself. Do not open the
+tender's documents or the bid submission: another worker reads those. Then return a short summary. To move between
+pages follow links or goto a link target; do not use back()."""
+
+
 POSITIONS_INSTRUCTIONS = """\
 You read the documents of a public tender and list its positions exactly as written: position number,
 short text, quantity, unit and the requirement id of the buyer's specification the position refers to. Use the
@@ -434,13 +451,80 @@ async def read_qa(pages: list[str], reference: str) -> QaRecords:
 
 
 async def research_tender(session: SiteSession, reference: str, scenario: datetime, *,
-                          deadline: float | None = None) -> TenderFacts | None:
-    """Positions and Q&A of the tender, resolved per position. None when no positions were found."""
+                          deadline: float | None = None, qa_session: SiteSession | None = None,
+                          on_facts=None) -> TenderFacts | None:
+    """
+    Positions and Q&A of the tender, resolved per position. None when no positions were found.
+
+    With `qa_session` (a second tab of the website) the documents and the Q&A are worked side by side, each by its
+    own worker. `on_facts(facts)` gets the positions with their original quantities as soon as they are read, so a
+    deadline that comes before the Q&A still leaves them; the returned facts include the Q&A.
+    """
+    started = time.monotonic()
+    if qa_session is None:
+        return await _research_tender_one(session, reference, scenario, deadline=deadline, on_facts=on_facts)
+    collected = Collected()
+    documents: list[str] = []
+
+    async def positions_part() -> TenderPositions:
+        await run_worker(session, _positions_goal(reference), Summary, deadline=deadline,
+                         max_steps=steps_for(14, deadline), thinking=False, grounded=False,
+                         tools=(keep_tool(documents),))
+        return await read_positions("\n\n".join(documents or [session.seen]), reference)
+
+    async def qa_part() -> QaRecords:
+        await run_worker(qa_session, _qa_goal(reference), Summary, deadline=deadline,
+                         max_steps=steps_for(14, deadline), thinking=False, grounded=False,
+                         tools=(paging_tool(collected),))
+        return await read_qa(collected.pages or [qa_session.seen], reference)
+
+    qa_task = asyncio.create_task(qa_part())
+    try:
+        try:
+            positions = await positions_part()
+        except Exception as error:
+            session.trace.event(session.name, "tender_positions_failed", error=f"{type(error).__name__}: {error}"[:200])
+            positions = TenderPositions(positions=[])
+        if not positions.positions:  # the Q&A worker passed the tender's pages too
+            await asyncio.wait([qa_task])
+            try:
+                positions = await read_positions(qa_session.seen, reference)
+            except Exception:
+                positions = TenderPositions(positions=[])
+        if not positions.positions:
+            session.trace.event(session.name, "tender_failed")
+            return None
+        fmt = positions.number_format or None
+        if on_facts is not None and not qa_task.done():
+            early = resolve_tender(positions.positions, QaRecords(), scenario, fmt)
+            session.trace.event(session.name, "tender_positions", seconds=round(time.monotonic() - started, 1),
+                                positions=[p.position for p in early.positions])
+            on_facts(early)
+        try:
+            qa = await qa_task
+        except Exception as error:
+            session.trace.event(session.name, "tender_qa_failed", error=f"{type(error).__name__}: {error}"[:200])
+            qa = QaRecords()
+    finally:
+        if not qa_task.done():
+            qa_task.cancel()
+    facts = resolve_tender(positions.positions, qa, scenario, fmt)
+    facts.seconds = round(time.monotonic() - started, 1)
+    session.trace.event(session.name, "tender_facts", seconds=facts.seconds,
+                        positions=[p.model_dump(mode="json") for p in facts.positions])
+    if on_facts is not None:
+        on_facts(facts)
+    return facts
+
+
+async def _research_tender_one(session: SiteSession, reference: str, scenario: datetime, *,
+                               deadline: float | None = None, on_facts=None) -> TenderFacts | None:
+    """Positions and Q&A by one worker in one tab."""
     started = time.monotonic()
     collected = Collected()
     documents: list[str] = []
-    _, notes = await run_worker(session, _goal(reference), Summary, deadline=deadline, max_steps=20,
-                                thinking=False, grounded=False,
+    _, notes = await run_worker(session, _goal(reference), Summary, deadline=deadline,
+                                max_steps=steps_for(20, deadline), thinking=False, grounded=False,
                                 tools=(paging_tool(collected), keep_tool(documents)))
     if not documents:  # the worker read the documents in its own tab instead
         documents = [session.seen]
@@ -454,6 +538,8 @@ async def research_tender(session: SiteSession, reference: str, scenario: dateti
     facts.seconds = round(time.monotonic() - started, 1)
     session.trace.event(session.name, "tender_facts", seconds=facts.seconds,
                         positions=[p.model_dump(mode="json") for p in facts.positions])
+    if on_facts is not None:
+        on_facts(facts)
     return facts
 
 

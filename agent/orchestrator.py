@@ -15,6 +15,7 @@ The tender Q&A and mail research modules are optional imports: without one the p
 (spec + ERP + calc), and fields that need its facts stay blank. The mail side has its own deadline. Nothing here names a site, a label or a value of any dataset.
 """
 import asyncio
+import inspect
 import os
 import re
 import time
@@ -32,7 +33,7 @@ from board import Board, Source
 from briefing import Briefing
 from browser_tools import SiteSession
 from evidence import EffectiveRequirement, Requirement, effective_requirement, parse_date, to_position_input
-from research import Erp, ErpResearch, SpecResult, research_spec, reselect
+from research import Erp, ErpResearch, SpecResult, research_spec, reselect, same_revision
 from tracing import Trace
 from verify import confirm_decision, verify_board
 
@@ -48,8 +49,13 @@ except ImportError:  # pragma: no cover
 SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "480"))  # research ends this long before the end
 FORM_SECONDS = float(os.environ.get("AGENT_FORM_SECONDS", "300"))  # the bid form and signing need this much
 MAIL_TABS = int(os.environ.get("MAIL_TABS", "4"))
-SPEC_RETRY_SECONDS = 240.0  # research time a second specification attempt needs to still feed the ERP
+SPEC_STEPS_FAST = int(os.environ.get("SPEC_STEPS_FAST", "25"))  # navigation steps of the fast spec attempt
+SPEC_STEPS_THINKING = int(os.environ.get("SPEC_STEPS_THINKING", "35"))  # and of the careful one, run alongside
 SELECT_SECONDS = 75.0  # the final material choice (a model call per requirement, in parallel)
+KIND_OPTIONS = set(inspect.signature(research_mail.research_kind).parameters) if research_mail else set()
+KIND_MIN_SECONDS = 120.0  # a mail record kind's search budget: at least this
+KIND_MAX_SECONDS = 240.0  # and at most this, from the mail time left per kind
+MAIL_RETRY_SECONDS = 90.0  # mail time a kind's second try needs
 MAIL_TAB_STAGGER = 4.0  # seconds between the mail tabs' sign-ins
 MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "540"))  # from the orchestrator's start
 FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys before planning from the brief alone
@@ -246,6 +252,7 @@ class Orchestrator:
         self.erp: ErpResearch | None = None
         self._erp: Erp | None = None
         self.requirements: dict[str, Requirement] = {}
+        self.spec_revision: str | None = None  # the revision the requirements so far come from
         self.chosen: dict[str, str | None] = {}
         self.mail_kinds: list = []
         self.mail_sessions: list[SiteSession] = []
@@ -282,32 +289,54 @@ class Orchestrator:
     async def tender(self, site: str) -> None:
         board = self.board
         try:
-            session = await self.session(site, "tender")
+            session, qa_session = await asyncio.gather(self.session(site, "tender"), self.session(site, "qa"),
+                                                       return_exceptions=True)
+            if isinstance(session, BaseException):
+                if isinstance(qa_session, BaseException):
+                    raise session
+                session, qa_session = qa_session, None
+            elif isinstance(qa_session, BaseException):
+                board.problem("tender", f"no second tab ({type(qa_session).__name__}); one worker reads all")
+                qa_session = None
+
+            def on_facts(facts) -> None:
+                self.tender_facts = facts
+                self._post_tender(facts, site, session)
+
             facts = await research_tender.research_tender(session, self.reference, self.scenario,
-                                                          deadline=self.research_deadline)
+                                                          deadline=self.research_deadline, qa_session=qa_session,
+                                                          on_facts=on_facts)
             if facts is None:
                 board.problem("tender", "no positions found")
                 return
-            self.tender_facts = facts
-            for p in facts.positions:
-                value = {k: (str(v) if isinstance(v, Decimal) else v) for k, v in p.model_dump(mode="json").items()}
-                board.post("position", p.position, value,
-                           Source(site=site, url=session.page.url,
-                                  quote=quote_for(session.seen, p.position, str(p.tender_quantity))
-                                  or quote_for(session.seen, p.position)), "tender")
-            for a in getattr(facts, "amendments", []):
-                key = f"{a.revision}/{a.requirement}/{'+'.join(a.attributes)}"
-                board.post("amendment", key, {"date": a.date.isoformat(), **{k: str(v) for k, v in a.attributes.items()}},
-                           Source(site=site, quote=quote_for(session.seen, a.requirement, *map(str, a.attributes.values()))),
-                           "tender")
-            for number in getattr(facts, "withdrawn", []):
-                board.post("withdrawn", number, number, Source(site=site, quote=quote_for(session.seen, number)),
-                           "tender")
+            if self.tender_facts is not facts:  # in case the module did not report it
+                on_facts(facts)
+        except asyncio.CancelledError:
+            if self.tender_facts is not None:
+                board.problem("tender", "stopped at the deadline: positions without the full Q&A are used")
+            raise
         except Exception as error:
             board.problem("tender", f"{type(error).__name__}: {str(error)[:200]}")
         finally:
             for kind in ("position", "amendment", "withdrawn"):
                 board.finish(kind)
+
+    def _post_tender(self, facts, site: str, session: SiteSession) -> None:
+        board = self.board
+        for p in facts.positions:
+            value = {k: (str(v) if isinstance(v, Decimal) else v) for k, v in p.model_dump(mode="json").items()}
+            board.post("position", p.position, value,
+                       Source(site=site, url=session.page.url,
+                              quote=quote_for(session.seen, p.position, str(p.tender_quantity))
+                              or quote_for(session.seen, p.position)), "tender")
+        for a in getattr(facts, "amendments", []):
+            key = f"{a.revision}/{a.requirement}/{'+'.join(a.attributes)}"
+            board.post("amendment", key, {"date": a.date.isoformat(), **{k: str(v) for k, v in a.attributes.items()}},
+                       Source(site=site, quote=quote_for(session.seen, a.requirement,
+                                                         *map(str, a.attributes.values()))), "tender")
+        for number in getattr(facts, "withdrawn", []):
+            board.post("withdrawn", number, number, Source(site=site, quote=quote_for(session.seen, number)),
+                       "tender")
 
     def _amendments(self) -> list[calc.Amendment]:
         return list(getattr(self.tender_facts, "amendments", []) or [])
@@ -324,6 +353,12 @@ class Orchestrator:
                                      scenario_date=self.scenario_stamp)
 
     async def specification(self, site: str, erp_site: str | None) -> None:
+        """
+        The specification, twice at once: a fast navigator (thinking off) and a careful one (thinking on, more
+        steps) work in separate contexts of the website; the first that yields a revision with requirements wins
+        and the other is cancelled. Requirements stream to the ERP as soon as either attempt reads them, all from
+        one revision (the first one read); requirements read before an attempt stopped are kept.
+        """
         board = self.board
         erp = None
         if erp_site:
@@ -331,35 +366,48 @@ class Orchestrator:
                 self._erp = Erp(self.access[erp_site], self.contexts[erp_site], self.trace, self.research_deadline)
                 self._erp.warm_up()
             erp = self._erp
+        spare = None
         try:
-            session = await self.session(site, "spec")
             context = self.task["brief"].split("## Rules")[0].strip()
-
-            def on_requirement(req: Requirement) -> None:
-                if req.requirement_id in self.requirements:
-                    return
-                self.requirements[req.requirement_id] = req
-                board.post("requirement", req.requirement_id, req.raw or req.model_dump(mode="json"),
-                           Source(site=site, url=session.page.url,
-                                  quote=quote_for(session.seen, req.requirement_id, str(req.bore))), "specification")
-                if erp:
-                    erp.start(self.effective(req))
-
-            self.spec = await research_spec(session, self.briefing, context=context, deadline=self.research_deadline,
-                                            on_requirement=on_requirement)
-            if not self.spec.requirements and self.left() > SPEC_RETRY_SECONDS:
-                # The fast (thinking off) navigator sometimes loses its way in the document list: once more, from a
-                # fresh tab, thinking.
-                for problem in self.spec.problems:
-                    board.problem("specification", f"first attempt: {problem}")
-                session = await self.session(site, "spec2")
-                self.spec = await research_spec(session, self.briefing, context=context,
-                                                deadline=self.research_deadline, on_requirement=on_requirement,
-                                                thinking=True)
-            for req in self.spec.requirements:
-                on_requirement(req)
+            spare = await self._spare_context(site)
+            attempts = {
+                asyncio.create_task(self._spec_attempt(site, "spec", self.contexts[site], context, erp,
+                                                       thinking=False, steps=SPEC_STEPS_FAST)): "fast",
+                asyncio.create_task(self._spec_attempt(site, "spec2", spare or self.contexts[site], context, erp,
+                                                       thinking=True, steps=SPEC_STEPS_THINKING)): "thinking",
+            }
+            results: list[SpecResult] = []
+            pending = set(attempts)
+            while pending and self.spec is None:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    if task.cancelled() or task.exception() is not None:
+                        error = None if task.cancelled() else task.exception()
+                        board.problem("specification", f"{attempts[task]} attempt failed: {type(error).__name__}: "
+                                                       f"{str(error)[:160]}")
+                        continue
+                    result = task.result()
+                    results.append(result)
+                    if result.current_revision and result.requirements and self.spec is None:
+                        self.spec = result
+                        self.trace.event("specification", "winner", attempt=attempts[task],
+                                         revision=result.current_revision, seconds=result.seconds)
+                    else:
+                        for problem in result.problems:
+                            board.problem("specification", f"{attempts[task]} attempt: {problem}")
+            for task in pending:  # the other attempt is no longer needed
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            await self._close_context(spare)  # its tabs would compete with the ERP workers for the browser
+            spare = None
+            if self.spec is None:  # neither finished with requirements: keep the most that was read
+                self.spec = max(results, key=lambda r: len(r.requirements), default=SpecResult())
+            self._adopt_revision(self.spec, site, erp)
             for problem in self.spec.problems:
                 board.problem("specification", problem)
+            if not self.requirements:
+                board.problem("specification", "no requirement read")
             if erp is None:
                 return
             self.erp = await erp.collect()
@@ -369,6 +417,61 @@ class Orchestrator:
         finally:
             board.finish("requirement")
             board.finish("material")
+            await self._close_context(spare)
+
+    @staticmethod
+    async def _close_context(context: BrowserContext | None) -> None:
+        if context is not None:
+            try:
+                await context.close()
+            except Exception:  # already gone
+                pass
+
+    async def _spare_context(self, site: str) -> BrowserContext | None:
+        """A second context of the website's browser, so two attempts do not share a sign-in or an access choice."""
+        try:
+            browser = self.contexts[site].browser
+            return await browser.new_context(viewport={"width": 1280, "height": 800}) if browser else None
+        except Exception as error:
+            self.board.problem("specification", f"no second context ({type(error).__name__}); tabs share one")
+            return None
+
+    def _requirement_found(self, req: Requirement, site: str, url: str, seen: str, erp: Erp | None) -> None:
+        """A requirement read by a specification attempt: on the board and to the ERP, once per id and only for
+        the revision the requirements so far come from."""
+        if self.spec_revision is None:
+            self.spec_revision = req.revision
+        if not same_revision(req.revision, self.spec_revision) or req.requirement_id in self.requirements:
+            return
+        self.requirements[req.requirement_id] = req
+        self.board.post("requirement", req.requirement_id, req.raw or req.model_dump(mode="json"),
+                        Source(site=site, url=url, quote=quote_for(seen, req.requirement_id, str(req.bore))),
+                        "specification")
+        if erp:
+            erp.start(self.effective(req))
+
+    async def _spec_attempt(self, site: str, tag: str, context: BrowserContext, brief: str, erp: Erp | None, *,
+                            thinking: bool, steps: int) -> SpecResult:
+        access = {**self.access[site], "siteId": f"{site}:{tag}"}
+        session = await start_session(SiteSession(access, context, self.trace))
+        return await research_spec(
+            session, self.briefing, context=brief, deadline=self.research_deadline, thinking=thinking,
+            max_steps=steps,
+            on_requirement=lambda req: self._requirement_found(req, site, session.page.url, session.seen, erp))
+
+    def _adopt_revision(self, spec: SpecResult, site: str, erp: Erp | None) -> None:
+        """The winning attempt's revision governs: requirements streamed from another revision are replaced."""
+        if spec.current_revision and self.spec_revision and not same_revision(spec.current_revision, self.spec_revision):
+            self.board.problem("specification", f"attempts disagree on the revision ({self.spec_revision} vs "
+                                                f"{spec.current_revision}); the finished attempt's is used")
+            for rid in list(self.requirements):
+                task = erp.tasks.pop(rid, None) if erp else None  # researched for the other revision
+                if task is not None and not task.done():
+                    task.cancel()
+            self.requirements = {}
+            self.spec_revision = None
+        for req in spec.requirements:
+            self._requirement_found(req, site, "", "", erp)
 
     async def _post_materials(self, site: str) -> None:
         assert self.erp is not None
@@ -415,6 +518,14 @@ class Orchestrator:
         await asyncio.sleep(MAIL_TAB_STAGGER * i)
         return await self.session(site, f"mail{i + 1}")
 
+    def _kind_seconds(self, deadline: float, waiting: int) -> float:
+        """One kind's search budget from the mail time left, shared with the kinds still waiting over the open
+        tabs: more than the default while time is ample, never less than KIND_MIN_SECONDS."""
+        tabs = max(1, len(self.mail_sessions))
+        rounds = 1 + -(-waiting // tabs)  # this kind plus the waiting ones, a round per tab
+        share = (deadline - 20 - time.monotonic()) / rounds
+        return max(KIND_MIN_SECONDS, min(KIND_MAX_SECONDS, share))
+
     async def _mailbox(self) -> str:
         """The bidder's own address (its domain authorises the record senders): the first tab that shows it."""
         if not self.mailbox:
@@ -432,8 +543,9 @@ class Orchestrator:
         joins as soon as it is ready (a tab that never opens just leaves the work to the others).
         """
         queue: asyncio.Queue = asyncio.Queue()
-        for kind in kinds:
-            queue.put_nowait(kind)
+        # The approval goes first: the discount counts for points of its own and feeds every unit price.
+        for kind in sorted(kinds, key=lambda k: k.name != "approval"):
+            queue.put_nowait((kind, 0))
         deadline = deadline or self.mail_deadline
 
         address: list[asyncio.Task] = []
@@ -450,12 +562,28 @@ class Orchestrator:
             if not address:  # the first open tab also looks up the mailbox address, alongside its searches
                 address.append(asyncio.create_task(self._mailbox()))
             while not queue.empty() and time.monotonic() < deadline - 20:
-                kind = queue.get_nowait()
+                kind, tries = queue.get_nowait()
                 try:
-                    self.mail_results[kind.name] = await research_mail.research_kind(
-                        session, kind, self.reference, deadline=deadline)
+                    budget = self._kind_seconds(deadline, queue.qsize())
+                    options = {"seconds": budget} if "seconds" in KIND_OPTIONS else {}
+                    found = await research_mail.research_kind(session, kind, self.reference, deadline=deadline,
+                                                               **options)
                 except Exception as error:  # one failed kind must not cost the others
                     self.board.problem("mails", f"{kind.name}: {type(error).__name__}: {str(error)[:160]}")
+                    continue
+                earlier = self.mail_results.get(kind.name)
+                if earlier is not None:  # a second try adds to what the first one read
+                    found.records = [*earlier.records, *found.records]
+                    found.kept = [*earlier.kept, *found.kept]
+                self.mail_results[kind.name] = found
+                stopped = getattr(found, "stopped", None)
+                if stopped is None:  # out of its budget without reading a message
+                    stopped = not found.records and found.seconds >= min(budget, getattr(research_mail, "KIND_SECONDS", budget)) - 5
+                if (stopped and not tries
+                        and deadline - time.monotonic() > MAIL_RETRY_SECONDS):
+                    # Out of its budget: once more at the end of the queue, from a fresh start on this tab.
+                    self.board.problem("mails", f"{kind.name}: search stopped at its budget; tried once more")
+                    queue.put_nowait((kind, 1))
 
         tabs = [asyncio.create_task(tab(s)) for s in (starts or list(self.mail_sessions))]
         _, late = await asyncio.wait(tabs, timeout=max(1.0, deadline - time.monotonic()))
@@ -534,12 +662,16 @@ class Orchestrator:
                 if not task.done():
                     task.cancel()
             if self.erp is None:  # stopped at the deadline: what finished still counts
-                def finished(tasks):
-                    return {k: t.result() for k, t in tasks.items()
-                            if t.done() and not t.cancelled() and t.exception() is None and t.result() is not None}
-                self.erp = ErpResearch(requirements=list(finished(self._erp.tasks).values()),
-                                       materials=finished(self._erp.materials))
+                so_far = getattr(self._erp, "so_far", None)
+                self.erp = so_far() if so_far is not None else self._finished_erp()
         self.rework = {"mails": self._rework_mail}
+
+    def _finished_erp(self) -> ErpResearch:
+        def finished(tasks):
+            return {k: t.result() for k, t in tasks.items()
+                    if t.done() and not t.cancelled() and t.exception() is None and t.result() is not None}
+        return ErpResearch(requirements=list(finished(self._erp.tasks).values()),
+                           materials=finished(self._erp.materials))
 
     async def _rework_mail(self, doubtful: list) -> None:
         names = {f.key.split("/")[0] for f in doubtful}
@@ -569,11 +701,23 @@ class Orchestrator:
         if self.erp is None or not self.requirements:
             return
         effective = [self.effective(req) for req in self.requirements.values()]
-        try:  # one hung model call must not hold the bid; the ERP worker's own choices stand in
-            self.chosen = await asyncio.wait_for(reselect(effective, self.erp, self.trace), SELECT_SECONDS)
-        except Exception as error:
-            self.board.problem("select", f"reselect: {type(error).__name__}; the ERP workers' choices are used")
-            self.chosen = {r.requirement_id: r.selected for r in self.erp.requirements}
+        own = {r.requirement_id: r.selected for r in self.erp.requirements}
+        # One choice per requirement, side by side: one hung model call must not cost the others; choices not made
+        # in time are the ERP workers' own.
+        tasks = {req.requirement_id: asyncio.create_task(reselect([req], self.erp, self.trace)) for req in effective}
+        _, late_tasks = await asyncio.wait(tasks.values(), timeout=SELECT_SECONDS)
+        for task in late_tasks:
+            task.cancel()
+        if late_tasks:
+            await asyncio.gather(*late_tasks, return_exceptions=True)
+        chosen = {}
+        for rid, task in tasks.items():
+            if task.done() and not task.cancelled() and task.exception() is None:
+                chosen.update(task.result())
+        late = sorted(set(own) - set(chosen))
+        if late:
+            self.board.problem("select", f"no new choice in time for {late}; the ERP workers' choices are used")
+        self.chosen = {**own, **chosen}
         self.trace.event("select", "done", chosen=self.chosen)
 
     def _unknown_clauses(self, p, clause, pool, bonus) -> None:
@@ -650,8 +794,23 @@ class Orchestrator:
                             project_bonus=getattr(clauses, "project_bonus", None))
         return bid, problems
 
+    def fallback_answer(self) -> dict:
+        """
+        A bid with every position omitted: the reference, the decision, the discount of an approval that was read
+        (a conditional one only when no positions exist to meet its threshold means 0, rule 16) and total 0.
+        """
+        try:
+            approval = getattr(self.mail_facts, "approval", None)
+            bid = calc.BidInput(tender_reference=self.reference, scenario_date=self.scenario_stamp, positions=[],
+                                approval=approval if isinstance(approval, calc.Approval) else None)
+            return calc.calculate(bid).answer()
+        except Exception:
+            return {"tender_reference": self.reference, "decision": "bid", "currency": "EUR",
+                    "discount_percent": 0.0, "positions": [], "total_net": 0.0}
+
     async def run(self) -> tuple[dict | None, calc.BidResult | None]:
-        """Research, verify, calculate: the answer dict for the bid form (None when nothing could be built)."""
+        """Research, verify, calculate: the answer dict for the bid form. Positions that are not complete are
+        omitted; with none complete it is still a bid with reference, decision and discount."""
         await self.research()
         # The deadline guard after research: each step runs only in the time the bid form leaves it.
         if self.form_left() > 60:
@@ -660,14 +819,15 @@ class Orchestrator:
         bid, problems = self.build_bid()
         self.trace.event("calc", "input", positions=[p.position for p in bid.positions], problems=problems)
         if not bid.positions:
-            self.board.problem("calc", "no position could be built; the bid form gets no positions")
-            return None, None
+            self.board.problem("calc", "no position could be built; the bid goes in with every position omitted")
         result, blank, calc_problems = safe_calculate(bid)
         for position, fields in self.blank_hints.items():
             blank.setdefault(position, set()).update(fields)
         problems += calc_problems
-        if result is None:
-            return None, None
+        if result is None:  # still a bid: reference, decision and discount score without positions
+            answer = self.fallback_answer()
+            self.trace.event("calc", "answer", answer=answer, problems=problems, fallback=True)
+            return answer, None
         check = None if self.form_left() < 30 else await confirm_decision(result.decision, self.board.summary() + "\n\nProblems:\n"
                                        + "\n".join(self.board.problems + problems), self.rules)
         if check is not None and not check.agrees:

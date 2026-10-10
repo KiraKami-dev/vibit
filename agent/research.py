@@ -54,7 +54,7 @@ from evidence import (
     parse_weeks,
 )
 from tracing import Trace
-from worker import run_worker
+from worker import run_worker, steps_for
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -299,11 +299,14 @@ class SpecPage(BaseModel):
 
 
 FIND_SPEC_GOAL = """\
-Find the buyer's technical specification for the tender in the context (match it by the tender's reference or
-subject; documents may be listed over several pages) and open it. If the site asks for a confirmation before
-releasing documents, choose the option that gives access to the binding documents (archive copies or previews
-are not the governing ones) and copy any number it asks you to transfer exactly. Stop at the document's revision
-history and return every revision it lists with its status as shown (statuses may only be visible in tooltips)."""
+Find the buyer's technical specification document for the tender in the context, open its revision history and
+return the revisions it lists. Steps: open the website's document register or list; read it with collect (all its
+pages in one step) and pick the specification by the tender's reference or subject; open that document. If the
+site asks for a confirmation before releasing documents, choose the option that gives access to the binding
+documents (archive copies or previews are not the governing ones) and copy any number it asks you to transfer
+exactly. On the document, open its revision history (it may be collapsed behind a control) and read it with collect;
+return every revision it lists with its status as shown (statuses may only be visible in tooltips), so the revision
+marked as currently valid can be identified. Once the revision history shows, return at once."""
 
 CHOOSE_REVISION = """\
 You decide which revision of a buyer's specification governs a bid: the one the document marks as currently valid
@@ -355,6 +358,46 @@ async def _choose_revision(history: RevisionHistory, view: str, context: str) ->
         return None
 
 
+SALVAGE_VIEWS = 12  # requirement pages read from what the open-revision worker showed, beyond read_document
+
+SALVAGE_HISTORY = """\
+You read the page a browsing worker ended on. If it shows the revision history of a specification document (a list
+of its revisions with their statuses, which may only be visible in tooltips), report the document and every revision
+with its status exactly as shown. If it shows no revision list, return an empty list of revisions."""
+
+
+async def _salvage_history(session: SiteSession, context: str) -> RevisionHistory | None:
+    """The revisions on the page a stopped navigator ended on (one grounded reader call), or None."""
+    text = _strip_refs(session.view or "")
+    if not text.strip():
+        return None
+    try:
+        history = await _grounded_read(RevisionHistory, SALVAGE_HISTORY, f"{context}\n\nPage:\n{text[:16000]}", text,
+                                       trace=session.trace, name=session.name, what="revision history salvage")
+    except Exception as error:
+        session.trace.event(session.name, "spec_salvage_failed", error=f"{type(error).__name__}: {str(error)[:160]}")
+        return None
+    return history if history.revisions else None
+
+
+def _record_views(session: SiteSession) -> dict[str, str]:
+    """Every distinct page text the session shows, latest last (a document viewer may page inside one URL)."""
+    views: dict[str, str] = {}
+    look = session.look
+
+    async def recording_look(offset: int = 0, **options) -> str:
+        out = await look(offset, **options)
+        if offset == 0:
+            text = _strip_refs(session.view)
+            key = f"{session.page.url}#{hash(text)}"
+            views.pop(key, None)
+            views[key] = text
+        return out
+
+    session.look = recording_look  # type: ignore[method-assign]
+    return views
+
+
 def _parse_requirement(seen: RequirementSeen, revision: str) -> Requirement:
     return Requirement(
         requirement_id=seen.requirement_id.strip(), revision=revision, bore=parse_number(seen.bore),
@@ -367,7 +410,7 @@ def _parse_requirement(seen: RequirementSeen, revision: str) -> Requirement:
 
 async def research_spec(session: SiteSession, briefing: Briefing, *, context: str = "",
                         deadline: float | None = None, on_requirement=None, on_revision=None,
-                        thinking: bool = False) -> SpecResult:
+                        thinking: bool = False, max_steps: int = 25) -> SpecResult:
     """
     The current specification revision's requirements: a worker finds the document and its revision history
     (navigation, thinking off), a model decides the current revision (thinking on), the worker opens it and pages
@@ -375,7 +418,9 @@ async def research_spec(session: SiteSession, briefing: Briefing, *, context: st
 
     `on_revision()` runs once the governing revision is chosen (e.g. to warm up the ERP), `on_requirement(req)` as
     soon as each requirement is parsed, so ERP research can start before the last page is read. `thinking`
-    turns thinking on for finding the document (a second attempt after a fast one got lost).
+    turns thinking on for finding the document, `max_steps` bounds that navigation (more while time is ample). A
+    navigator that stops early still gets its revisions read from the page it ended on, and requirement pages it
+    showed are read even when read_document was not used on them (partial requirements beat none).
     """
     started = time.monotonic()
     result = SpecResult()
@@ -389,10 +434,18 @@ async def research_spec(session: SiteSession, briefing: Briefing, *, context: st
                             requirements=[r.requirement_id for r in result.requirements], problems=result.problems)
         return result
 
+    from site_tools import collect  # one step for a document register or a revision list
+    views = _record_views(session)
     history, _ = await run_worker(session, FIND_SPEC_GOAL, RevisionHistory, context=goal_context, deadline=deadline,
-                                  max_steps=25, **_worker_kwargs(notes=False, thinking=thinking))
+                                  max_steps=steps_for(max_steps, deadline, most=1.4), tools=(collect,),
+                                  **_worker_kwargs(notes=False, thinking=thinking))
     if history is None or not history.revisions:
-        return finish("no revision history found")
+        # The navigator ran out of steps or time, often while already on the history: read the revisions from the
+        # page it ended on before giving up.
+        history = await _salvage_history(session, goal_context)
+        if history is None:
+            return finish("no revision history found")
+        session.trace.event(session.name, "spec_salvaged", revisions=[r.revision for r in history.revisions])
     result.document = history.document
     result.revisions = [SpecRevision(revision=r.revision, status_shown=r.status) for r in history.revisions]
     choice = await _choose_revision(history, session.view, goal_context)
@@ -403,6 +456,8 @@ async def research_spec(session: SiteSession, briefing: Briefing, *, context: st
     if on_revision:
         on_revision()
 
+    views.clear()  # from here on: the pages shown while the revision is opened
+    pages: list[str] = []
     for _ in range(2):
         await run_worker(session, OPEN_REVISION_GOAL.format(revision=result.current_revision), Opened,
                          context=goal_context, deadline=deadline, max_steps=12, tools=(read_document,),
@@ -410,34 +465,52 @@ async def research_spec(session: SiteSession, briefing: Briefing, *, context: st
         pages = _DOCUMENTS.pop(id(session), [])
         if pages:
             break
-    else:
+    # Requirement pages the worker showed but read_document did not read (it stopped midway, or paged only part of
+    # the document) are read too; they count only when the page itself shows the chosen revision, and only for
+    # requirements the read pages do not have.
+    extra = [v for v in list(views.values())[-SALVAGE_VIEWS:] if not any(v in p or p in v for p in pages)]
+    if not pages and not extra:
         return finish(f"revision {result.current_revision} could not be read")
-    session.trace.event(session.name, "spec_extract", pages=len(pages))
+    session.trace.event(session.name, "spec_extract", pages=len(pages), salvage=len(extra))
     by_id: dict[str, Requirement] = {}
+    streamed: set[str] = set()
 
-    async def extract(text: str) -> SpecPage | None:
+    def stream(page: SpecPage | None, salvage: bool) -> None:
+        if page is None or on_requirement is None:
+            return
+        shown = page.revision_shown.strip()
+        if (shown and not same_revision(shown, result.current_revision)) or (salvage and not shown):
+            return
+        for seen in page.requirements:
+            try:
+                req = _parse_requirement(seen, result.current_revision)
+            except ParseError:
+                continue
+            if req.requirement_id not in streamed:
+                streamed.add(req.requirement_id)
+                on_requirement(req)
+
+    async def extract(text: str, salvage: bool = False) -> SpecPage | None:
         page = await _extract_page(text, history.document, result.current_revision, goal_context, session.trace,
                                    session.name)
-        if page and on_requirement and not (page.revision_shown and not same_revision(page.revision_shown,
-                                                                                      result.current_revision)):
-            for seen in page.requirements:
-                try:
-                    req = _parse_requirement(seen, result.current_revision)
-                except ParseError:
-                    continue
-                if req.requirement_id not in streamed:
-                    streamed.add(req.requirement_id)
-                    on_requirement(req)
+        if not salvage:
+            stream(page, False)
         return page
 
-    streamed: set[str] = set()
-    extracted = await asyncio.gather(*(extract(p) for p in pages))
-    for page in extracted:
+    extracted = await asyncio.gather(*(extract(p) for p in pages), *(extract(v, True) for v in extra))
+    for i, page in enumerate(extracted):
+        salvage = i >= len(pages)
+        if salvage:  # after every read page, so a read page's requirement always wins
+            stream(page, True)
         if page is None:
-            result.problems.append("a document page could not be extracted")
+            if not salvage:
+                result.problems.append("a document page could not be extracted")
             continue
         if page.revision_shown and not same_revision(page.revision_shown, result.current_revision):
-            result.problems.append(f"a page shows revision {page.revision_shown}, not {result.current_revision}")
+            if not salvage:
+                result.problems.append(f"a page shows revision {page.revision_shown}, not {result.current_revision}")
+            continue
+        if salvage and not page.revision_shown.strip():
             continue
         for seen in page.requirements:
             try:
@@ -447,7 +520,7 @@ async def research_spec(session: SiteSession, briefing: Briefing, *, context: st
                 continue
             if seen.conflict:
                 result.problems.append(f"{req.requirement_id}: {seen.conflict}")
-            if req.requirement_id in by_id and by_id[req.requirement_id].raw != req.raw:
+            if req.requirement_id in by_id and by_id[req.requirement_id].raw != req.raw and not salvage:
                 result.problems.append(f"{req.requirement_id} read differently on two pages")
             by_id.setdefault(req.requirement_id, req)
     result.requirements = sorted(by_id.values(), key=lambda r: calc.position_key(r.requirement_id))

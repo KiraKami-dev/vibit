@@ -69,6 +69,7 @@ async def research(task: dict, briefing, contexts: list, trace: Trace, deadline:
                    ) -> tuple[dict | None, dict[str, dict[str, str]] | None]:
     """The orchestrator's answer and material attributes; (None, None) when it fails or builds nothing."""
     answer, attributes, problems = None, None, []
+    orchestrator = None
     started = time.monotonic()
     try:
         orchestrator = Orchestrator(task, briefing, {s["siteId"]: c for s, c in zip(task["access"], contexts)},
@@ -78,6 +79,8 @@ async def research(task: dict, briefing, contexts: list, trace: Trace, deadline:
         attributes = orchestrator.attributes
     except Exception as error:  # the signed bid must never be lost to a research failure
         trace.event("orchestrator", "failed", error=f"{type(error).__name__}: {str(error)[:300]}")
+    if answer is None and orchestrator is not None:  # still the reference, decision and any discount read
+        answer = orchestrator.fallback_answer()
     trace.event("orchestrator", "done", seconds=round(time.monotonic() - started, 1), answer=answer,
                 attributes=attributes, problems=problems[:30])
     path = Path(trace.path).with_name("answer.json")
