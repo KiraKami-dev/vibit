@@ -52,9 +52,19 @@ VIEW = re.compile(r"(?:^|\n)(URL: \S*)\nTitle: ")  # the header of every page vi
 CURRENT_VIEW = "\nCurrent view:\n"  # where the first prompt's page view starts
 
 
+# Tool results the model still needs after it moves on (a list it collected, facts it extracted): they hold no page
+# view, so they stay, up to KEEP_CHARS.
+KEEP_RESULTS = {"search", "collect", "extract"}
+KEEP_CHARS = 12000
+
+
 def _shrink(part):
     """An older page view (or long tool result) cut to a one-line stub, so context stays small."""
     content = part.content
+    if isinstance(part, ToolReturnPart) and part.tool_name in KEEP_RESULTS and isinstance(content, str):
+        if len(content) <= KEEP_CHARS:
+            return part
+        return dataclasses.replace(part, content=content[:KEEP_CHARS] + "\n[rest removed; call it again for all]")
     if isinstance(part, UserPromptPart):
         cut = content.find(CURRENT_VIEW) if isinstance(content, str) else -1
         found = VIEW.search(content, cut) if cut >= 0 else None

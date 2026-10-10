@@ -232,6 +232,18 @@ class ForgetOldViewsTest(unittest.TestCase):
         self.assertEqual(texts[3:], ["noted items", messages[-1].parts[0].content])
         self.assertEqual(_forget_old_views(kept), kept)  # stable, so the prompt prefix stays cacheable
 
+    def test_a_collected_list_stays_after_later_views(self):
+        rows = "7 rows over 3 pages (main list of the page).\n" + "\n".join(f"{i}. row {i}" for i in range(1, 80))
+        messages = [
+            ModelRequest(parts=[UserPromptPart("Goal: list" + CURRENT_VIEW + view("https://example.com/", "Start"))]),
+            ModelResponse(parts=[ToolCallPart("collect", {}, tool_call_id="1")]),
+            ModelRequest(parts=[ToolReturnPart("collect", rows, tool_call_id="1")]),
+            ModelResponse(parts=[ToolCallPart("click", {}, tool_call_id="2")]),
+            ModelRequest(parts=[ToolReturnPart("click", view("https://example.com/m", "Message"), tool_call_id="2")]),
+        ]
+        texts = [p.content for m in _forget_old_views(messages) if isinstance(m, ModelRequest) for p in m.parts]
+        self.assertEqual(texts[1], rows)
+
 
 if __name__ == "__main__":
     unittest.main()
