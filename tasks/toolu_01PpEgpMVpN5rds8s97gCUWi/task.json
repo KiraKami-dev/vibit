@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01PpEgpMVpN5rds8s97gCUWi",
+  "agent_id": "a8272e1e3d757fdae",
+  "subagent_type": "general-purpose",
+  "task_description": "Fair-play pre-review of package",
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 93566,
+    "cache_read_tokens": 1375044,
+    "output_tokens": 9335,
+    "api_call_count": 18
+  },
+  "started_at": "2026-10-10T18:17:54.285523+02:00",
+  "completed_at": "2026-10-10T18:19:48.176734+02:00"
+}
