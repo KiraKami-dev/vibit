@@ -3,8 +3,9 @@ Enter, sign and submit the bid: a worker on the bid website follows the brief's 
 bidder's webmail (a second worker in its own tab) for the contact address and, once requested, the signing TAN.
 
 The bid worker runs in two phases: filling the form up to the signing step (plain navigation, thinking off by
-default), then requesting the TAN, entering it and submitting. Between them one model call checks the
-summary against the requirements; the signing phase thinks only when that check fails or finds problems.
+default), then requesting the TAN, entering it and submitting. A review page that was reached is signed as it
+stands; one model call checks its summary against the requirements alongside, for the run logs only.
+BidFlow starts the form's first steps while the research still runs.
 THINKING_FORM, THINKING_REVIEW (the check) and THINKING_SIGN override these defaults (see llm.thinking).
 """
 import asyncio
@@ -532,27 +533,33 @@ Brief's submission steps:
                                 thinking=llm.thinking("form", False), tools=tools)
 
     requirements = _requirements(briefing, email, answer, desk, filled=True)
-    check = await check_summary(bid_session.view, requirements) if ready and ready.at_signing_step else None
-    bid_session.trace.event(bid_session.name, "summary_check", **(check.model_dump() if check else {}))
-    if check and check.matches:
-        task = ("The form was filled in up to the signing step by an earlier pass, and its summary was checked "
-                "against the requirements below; the current view shows it.")
-    elif check:
-        task = (f"The form was filled in up to the signing step by an earlier pass. A quick check of the summary "
-                f"(which can be wrong) reported: {check.problems} Fix it only if the fix is on the current page; "
-                f"never go back to earlier steps (that clears them). If it cannot be fixed here, sign anyway: a "
-                f"signed bid with a flaw is worth far more than none.")
+    at_review = bool(ready and ready.at_signing_step)
+
+    async def logged_check(view: str) -> None:  # a record for the run logs only: signing never waits for it
+        check = await check_summary(view, requirements)
+        bid_session.trace.event(bid_session.name, "summary_check", **(check.model_dump() if check else {}))
+
+    checking = asyncio.create_task(logged_check(bid_session.view)) if at_review else None
+    if checking is None:
+        bid_session.trace.event(bid_session.name, "summary_check")
+    if at_review:
+        # The review is signed as it stands, whatever the check says: a false alarm sent signing back and forth
+        # between steps until its step cap (run 0d2d, ~100 s), and going back clears the later steps anyway.
+        task = ("The form was filled in up to the signing step by an earlier pass; the current view shows its "
+                "summary. Sign it as it stands: do not change, re-enter or re-check anything, and do not move to "
+                "other steps (going back clears them).")
     else:
         task = ("An earlier pass started filling in the form but may not have finished; continue from the current "
                 "view, and check the summary against the requirements below." +
                 (f" It reported: {ready.open_points}" if ready and ready.open_points else ""))
     if os.environ.get("AGENT_STOP_BEFORE_SIGN") == "1":  # local timing runs: never request a TAN (shared webmail)
         address.cancel()
+        if checking is not None:
+            await checking
         return None
+    must = "" if at_review else f"The bid must be:\n{requirements}\n"
     review_goal = f"""Sign and submit the bid for tender {briefing.tender_reference} on this website. {task}
-The bid must be:
-{requirements}
-Request the signing TAN only with request_signing_tan(ref of the website's TAN request button), never by clicking
+{must}Request the signing TAN only with request_signing_tan(ref of the website's TAN request button), never by clicking
 that button yourself; enter the TAN it returns at once and submit bindingly. Browser confirmation dialogs are
 accepted for you. Return once the website confirms the submission (or shows why it failed).
 
@@ -560,9 +567,10 @@ Brief's submission steps:
 {briefing.submission_steps}"""
     result = None
     try:
-        result, _ = await run_worker(bid_session, review_goal, SubmissionResult, deadline=deadline, max_steps=30,
-                                     notes=False, thinking=llm.thinking("sign", False),
-                                     tools=(*tools, request_signing_tan))
+        result, _ = await run_worker(bid_session, review_goal, SubmissionResult, deadline=deadline,
+                                     max_steps=15 if at_review else 30, notes=False,
+                                     thinking=llm.thinking("sign", False),
+                                     tools=(request_signing_tan,) if at_review else (*tools, request_signing_tan))
     except Exception as error:  # in a run, the platform closes the model token once the bid is in
         bid_session.trace.event(bid_session.name, "stopped", reason=f"{type(error).__name__}: {str(error)[:200]}")
     if not (result and result.submitted) and deadline - time.monotonic() > LAST_CHANCE:
@@ -578,8 +586,9 @@ and submit bindingly. Return once the website confirms the submission (or shows 
         except Exception as error:
             bid_session.trace.event(bid_session.name, "stopped",
                                     reason=f"{type(error).__name__}: {str(error)[:200]}")
-    if not address.done():
-        address.cancel()
+    for pending in (address, checking):
+        if pending is not None and not pending.done():
+            pending.cancel()
     return result
 
 
