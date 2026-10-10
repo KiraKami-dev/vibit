@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4K8FH9BJJMFPVMXQQB0TYM6",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 11,
+  "files_touched": [
+    "agent/agent.json",
+    "agent/agent.py",
+    "agent/browser_tools.py",
+    "agent/browsers.py",
+    "agent/calc.py",
+    "agent/llm.py",
+    "agent/tests/test_calc.py",
+    "agent/worker.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 152,
+    "cache_creation_tokens": 94593,
+    "cache_read_tokens": 21422072,
+    "output_tokens": 49877,
+    "api_call_count": 72,
+    "subagent_tokens": {
+      "input_tokens": 262,
+      "cache_creation_tokens": 496011,
+      "cache_read_tokens": 13270735,
+      "output_tokens": 145625,
+      "api_call_count": 131
+    }
+  }
+}
