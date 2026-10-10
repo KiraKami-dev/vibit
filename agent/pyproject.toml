@@ -8,6 +8,7 @@ dependencies = [
     "openai==3.28.0",
     "playwright==1.63.0",
     "pydantic-ai-slim[openai]==2.55.0",
+    "tzdata==2025.2",
 ]
 
 [tool.uv]

@@ -17,8 +17,14 @@ class Briefing(BaseModel):
     scenario_date: str = Field(description="The scenario date and time as the brief states it")
     bid_site: str = Field(description="siteId of the website where the bid is entered and signed")
     mail_site: str = Field(description="siteId of the bidder's own webmail, where approvals and the signing TAN arrive")
+    tender_site: str = Field(description="siteId of the website that holds the tender and its clarifications (Q&A)")
+    spec_site: str = Field(description="siteId of the website that holds the buyer's technical specification")
+    erp_site: str = Field(description="siteId of the bidder's ERP, with materials, stock and prices")
     submission_steps: str = Field(description="The brief's instructions for entering, signing and submitting the "
                                               "bid, copied word for word")
+
+
+SITE_ROLES = ("bid_site", "mail_site", "tender_site", "spec_site", "erp_site")  # one site may play several roles
 
 
 async def read_brief(task: dict) -> Briefing:
@@ -30,9 +36,10 @@ async def read_brief(task: dict) -> Briefing:
     @agent.output_validator
     def _from_brief(briefing: Briefing) -> Briefing:
         ids = {s["siteId"] for s in task["access"]}
-        if briefing.bid_site not in ids or briefing.mail_site not in ids:
-            raise ModelRetry(f"bid_site and mail_site must be among these siteIds: {sorted(ids)}")
-        missing = unseen_values(briefing.model_dump_json(exclude={"bid_site", "mail_site"}), task["brief"])
+        wrong = [role for role in SITE_ROLES if getattr(briefing, role) not in ids]
+        if wrong:
+            raise ModelRetry(f"{', '.join(wrong)} must be among these siteIds: {sorted(ids)}")
+        missing = unseen_values(briefing.model_dump_json(exclude=set(SITE_ROLES)), task["brief"])
         if missing:
             raise ModelRetry(f"{', '.join(missing)} are not in the brief; copy values exactly from it.")
         return briefing

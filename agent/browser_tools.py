@@ -19,6 +19,11 @@ from pydantic_ai import RunContext
 from tracing import Trace
 
 MAX_VIEW = 14000  # characters of a page shown at once; read_more pages through the rest
+ACTION_MS = 8000  # default limit of one browser operation (reading a label, typing, a scripted click)
+HELPER_SECONDS = 20  # a helper or a page reading that takes longer hangs on a stuck page and is given up
+MAX_PAGES = 15  # pages read_all_pages follows in one call
+MAX_READ = 8  # pages read_pages opens in one call
+MAX_PAGED = 45000  # characters read_all_pages or read_pages return in one call
 
 # Closes modal <dialog>s and aria-modal popups through their own close button as soon as they open, and records
 # what it closed. Links inside popups ("accept and continue") are never followed.
@@ -106,10 +111,21 @@ class SiteSession:
     stamp: int = 0
     logins: int = 0
     seen: str = ""  # every view's text this session, to check notes against
+    label: str = ""  # names this tab in the trace when a website is worked in several tabs
+    runs: list[dict] = field(default_factory=list)  # per worker goal: requests, seconds, outcome
 
     @property
     def name(self) -> str:
-        return self.site["siteId"]
+        return self.label or self.site["siteId"]
+
+    async def close(self) -> None:
+        """Close this session's tab and the windows it opened; the website's sign-in stays with the context."""
+        for page in self.pages:
+            try:
+                await page.close()
+            except Exception:
+                pass
+        self.pages = []
 
     @property
     def page(self) -> Page:
@@ -127,6 +143,7 @@ class SiteSession:
 
     def _watch(self, page: Page) -> None:
         self.pages.append(page)
+        page.set_default_timeout(ACTION_MS)  # an operation on a stuck page fails soon instead of hanging
         page.on("dialog", self._on_dialog)
         page.on("popup", self._on_popup)
 
@@ -149,25 +166,54 @@ class SiteSession:
         """Let the page finish, then run the generic helpers until nothing changes."""
         page = self.page
         self.logins = 0  # a timeout later in the run may need a fresh sign-in
+        unlocked = False
         for _ in range(6):
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=15000)
                 await page.wait_for_load_state("networkidle", timeout=2500)
+                for frame in page.frames[1:]:  # an embedded document may still be loading its next page
+                    await frame.wait_for_load_state("domcontentloaded", timeout=3000)
             except Exception:
                 pass
             if (await self._safely(self._login, page) or await self._safely(self._cookies, page)
-                    or await self._safely(self._error_page, page) or await self._safely(self._human_check, page)):
+                    or await self._safely(self._error_page, page)):
                 page = self.page
                 continue
+            if await self._safely(self._human_check, page):
+                unlocked = True
+                continue
             break
+        if unlocked:
+            await self.finish_loading()
         await self._collect_closed(page)
+
+    async def finish_loading(self, rounds: int = 4, pause: float = 0.5) -> None:
+        """Let a page that fills in step by step finish (a pane that loads once a check is passed, a text that loads
+        once the pane is there, a further check inside it): pause until two readings in a row are the same."""
+        before = None
+        for _ in range(rounds):
+            await asyncio.sleep(pause)
+            page = self.page
+            try:
+                await page.wait_for_load_state("networkidle", timeout=2500)
+            except Exception:
+                pass
+            await self._safely(self._human_check, page)
+            try:
+                now = _plain(await asyncio.wait_for(observe(page, "settle"), HELPER_SECONDS))
+            except Exception:
+                return
+            if now == before:
+                return
+            before = now
 
     async def _safely(self, helper, page: Page) -> bool:
         """A helper that fails (a slow page, a detached element) just did nothing; the model sees the page as is."""
         try:
-            return await helper(page)
+            return await asyncio.wait_for(helper(page), HELPER_SECONDS)
         except Exception as error:
-            self.trace.event(self.name, "helper_error", helper=helper.__name__, error=str(error).splitlines()[0][:160])
+            reason = (str(error).splitlines() or [type(error).__name__])[0][:160]
+            self.trace.event(self.name, "helper_error", helper=helper.__name__, error=reason)
             return False
 
     async def _login(self, page: Page) -> bool:
@@ -245,7 +291,7 @@ class SiteSession:
     async def _collect_closed(self, page: Page) -> None:
         for frame in page.frames:
             try:
-                closed = await frame.evaluate("(window.__arClosed || []).splice(0)")
+                closed = await asyncio.wait_for(frame.evaluate("(window.__arClosed || []).splice(0)"), 5)
             except Exception:
                 continue
             for title in closed:
@@ -259,11 +305,18 @@ class SiteSession:
         self.stamp += 1
         if offset == 0:
             try:
-                self.view = await observe(page, str(self.stamp))
+                self.view = await asyncio.wait_for(observe(page, str(self.stamp)), HELPER_SECONDS)
             except Exception as error:
                 await asyncio.sleep(1.0)
-                self.view = await observe(page, str(self.stamp)) if not page.is_closed() else f"(page error {error})"
-        header = [f"URL: {page.url}", f"Title: {await page.title()}"]
+                try:
+                    self.view = await asyncio.wait_for(observe(page, str(self.stamp)), HELPER_SECONDS)
+                except Exception:
+                    self.view = f"(the page could not be read: {type(error).__name__}; reload it or go back)"
+        try:
+            title = await asyncio.wait_for(page.title(), 5)
+        except Exception:
+            title = ""
+        header = [f"URL: {page.url}", f"Title: {title}"]
         if len(self.pages) > 1:
             header.append(f"Windows open: {len(self.pages)} (you are in the newest)")
         if self.events:
@@ -278,8 +331,8 @@ class SiteSession:
             text += f"\n[... {rest} more characters: read_more(offset={offset + len(text)})]"
         return "\n".join(header) + "\n\n" + text
 
-    async def act(self, kind: str, ref: str, fn) -> str:
-        """Run one action on the element `ref`, settle, and return the new view."""
+    async def act(self, kind: str, ref: str, fn, typed: str = "") -> str:
+        """Run one action on the element `ref`, settle, and return the new view. `typed` goes into the trace."""
         async with self.lock:
             element = await locate(self.page, ref)
             if element is None:
@@ -294,7 +347,12 @@ class SiteSession:
                 return f"{kind} {ref} failed: {first}\n\n" + await self.look()
             await asyncio.sleep(0.25)
             await self.settle()
-            self.trace.event(self.name, "action", action=kind, ref=ref, seconds=round(time.monotonic() - started, 2))
+            if kind == "click" and time.monotonic() - started < 0.5:
+                # nothing was loading yet: a click that loads (an embedded document's next page) may start late
+                await asyncio.sleep(0.4)
+                await self.settle()
+            self.trace.event(self.name, "action", action=kind, ref=ref, seconds=round(time.monotonic() - started, 2),
+                             **({"typed": typed[:80]} if typed else {}))
             view = await self.look()
             if (self.page.url, self.view) == before:
                 view = (f"Nothing on the page changed after {kind} {ref}. Do not repeat it; check the page for what "
@@ -305,8 +363,8 @@ class SiteSession:
 async def _click(element) -> None:
     try:
         await element.click(timeout=5000)
-    except Exception:
-        await element.evaluate("e => e.click()")  # covered by a banner or outside the scroll box
+    except Exception:  # covered by a banner or outside the scroll box
+        await asyncio.wait_for(element.evaluate("e => e.click()"), 5)
 
 
 @dataclass
@@ -316,6 +374,7 @@ class Deps:
     session: SiteSession
     notes: dict[str, str] = field(default_factory=dict)
     refused: dict[str, int] = field(default_factory=dict)
+    deadline: float | None = None  # time.monotonic() value the worker has to be done by
 
 
 async def goto(ctx: RunContext[Deps], url: str) -> str:
@@ -348,7 +407,7 @@ async def fill(ctx: RunContext[Deps], ref: str, text: str, submit: bool = False)
             await element.fill(text, timeout=5000)
         if submit:
             await element.press("Enter")
-    return await ctx.deps.session.act("fill", ref, run)
+    return await ctx.deps.session.act("fill", ref, run, typed=text)
 
 
 async def select(ctx: RunContext[Deps], ref: str, option: str) -> str:
@@ -371,8 +430,10 @@ async def check(ctx: RunContext[Deps], ref: str, checked: bool = True) -> str:
     return await ctx.deps.session.act("check", ref, run)
 
 
-async def back(ctx: RunContext[Deps]) -> str:
-    """Go back to the previous page."""
+async def back(ctx: RunContext[Deps], url: str = "", ref: str = "") -> str:
+    """Go back to the previous page. It takes no arguments; with a url it opens that page instead."""
+    if url:
+        return await goto(ctx, url)
     session = ctx.deps.session
     async with session.lock:
         try:
@@ -386,6 +447,182 @@ async def back(ctx: RunContext[Deps]) -> str:
 async def read_more(ctx: RunContext[Deps], offset: int) -> str:
     """Show the rest of a long page from the offset the view gave."""
     return await ctx.deps.session.look(offset)
+
+
+CONTROL = re.compile(r'\[(e\d+) ([\w-]+) "([^"\n]*)"((?: -> [^\]\n]*)?(?: expanded=\w+)?)( disabled)?\]')
+REF = re.compile(r"\[e\d+ ")
+FRAME_OPEN, FRAME_CLOSE = "[frame ", "[/frame]"
+
+
+def _plain(text: str) -> str:
+    """A view without its refs, which change with every view: for comparing pages and for pages no longer open."""
+    return REF.sub("[", text)
+
+
+def _content(text: str) -> str:
+    """What a page says, without refs, link targets and frame addresses (those count pages up while the content
+    repeats): two pages with the same content are the same page."""
+    lines = [line for line in _plain(text).splitlines() if not line.startswith(FRAME_OPEN)]
+    return re.sub(r'" -> [^\]\n]*\]', '"]', "\n".join(lines))
+
+
+def _controls(view: str, kind: str, name: str) -> list[re.Match]:
+    return [m for m in CONTROL.finditer(view) if m.group(2) == kind and m.group(3) == name]
+
+
+def _paged_part(view: str, at: int) -> tuple[str, bool]:
+    """The part of `view` a paging control at offset `at` belongs to: the innermost embedded document around it
+    (and True), or the whole view when the control is on the page itself."""
+    open_at: list[int] = []
+    position = 0
+    for line in view.splitlines(keepends=True):
+        stripped = line.strip()
+        if position > at and not open_at:
+            break
+        if stripped.startswith(FRAME_OPEN) and not stripped.endswith("(separate)]"):
+            open_at.append(position)
+        elif stripped == FRAME_CLOSE and open_at:
+            start = open_at.pop()
+            if start <= at < position:
+                return view[start:position + len(line)].strip(), True
+        position += len(line)
+    return view, False
+
+
+def _new_lines(part: str, previous: str, framed: bool) -> tuple[str, int]:
+    """`part` without the leading lines it shares with the previous page, and how many were dropped. An embedded
+    document is cut only when it grew (a "load more" list); a whole page always loses its repeated top."""
+    lines, old = part.splitlines(), _plain(previous).splitlines()
+    same = 0
+    while same < len(lines) and same < len(old) and _plain(lines[same]) == old[same]:
+        same += 1
+    if framed and same < max(3, len(old) - 3):  # a new page of the document, not the old one with more rows
+        return part, 0
+    return "\n".join(lines[same:]), same
+
+
+async def read_all_pages(ctx: RunContext[Deps], ref: str) -> str:
+    """Read every further page of the list, table or document you are looking at, in one step.
+
+    Pass the ref of the control that leads to its next page ("next", "more", ">", a page number). It is followed
+    again and again and all pages come back as one text. Use it instead of clicking through pages one by one.
+    """
+    session, deadline = ctx.deps.session, ctx.deps.deadline
+    view = session.view
+    first = next((m for m in CONTROL.finditer(view) if m.group(1) == ref.strip()), None)
+    if first is None:
+        return f"No link or button {ref} on this page (refs change with every view).\n\n" + await session.look()
+    kind, name = first.group(2), first.group(3)
+    same = _controls(view, kind, name)
+    ordinal = next(i for i, m in enumerate(same) if m.group(1) == first.group(1))
+    part, framed = _paged_part(view, first.start())
+    pages, plain, control, reason = [part], [_content(part)], first, ""
+    open_page = 0  # index of the page the browser shows when the loop ends
+    used = min(len(part), MAX_VIEW)
+    while True:
+        if control is None:
+            reason = f"the page shows no {kind} {name!r} any more: this was the last page"
+        elif control.group(5):
+            reason = f"the {kind} {name!r} is disabled: this was the last page"
+        elif len(pages) >= MAX_PAGES:
+            reason = f"{MAX_PAGES} pages are read per call; call read_all_pages again to continue from here"
+        elif used >= MAX_PAGED:
+            reason = "the output limit is reached; call read_all_pages again to continue from here"
+        elif deadline is not None and time.monotonic() > deadline - 5:
+            reason = "time is running out"
+        if reason:
+            break
+        before = (session.page.url, _plain(session.view))
+        await session.act("click", control.group(1), _click)
+        if (session.page.url, _plain(session.view)) == before:  # a slow page: give it a moment before concluding
+            await asyncio.sleep(1.5)
+            async with session.lock:
+                await session.settle()
+                await session.look()
+        view = session.view
+        if name.isdigit():  # numbered page links: the next number leads on
+            name = str(int(name) + 1)
+        same = _controls(view, kind, name)
+        control = same[min(ordinal, len(same) - 1)] if same else None
+        if not framed:
+            part = view
+        elif control:
+            part = _paged_part(view, control.start())[0]
+        else:  # the control went with the last page: take the embedded document that changed
+            blocks = [_paged_part(view, m.start() + 1)[0] for m in re.finditer(re.escape(FRAME_OPEN), view)]
+            fresh = [block for block in blocks if _content(block) not in plain]
+            part = min(fresh, key=len) if fresh else pages[open_page]
+        if (session.page.url, _plain(view)) == before:
+            reason = f"following {first.group(3)!r} changed nothing: this was the last page"
+        elif _content(part) in plain:
+            open_page = plain.index(_content(part))
+            reason = f"the content of page {open_page + 1} came again: there are no further pages"
+        if reason:
+            if _content(part) == plain[open_page]:
+                pages[open_page] = part  # the same content with the refs that work now
+            break
+        pages.append(part)
+        plain.append(_content(part))
+        open_page = len(pages) - 1
+        used += min(len(part), MAX_VIEW)
+    out = [f"URL: {session.page.url}", f"Read {len(pages)} page(s) by following {kind} {first.group(3)!r}; stopped "
+           f"because {reason}.", "Only the paged part is shown, and only the refs of the page marked open work; "
+           "read_more(offset=0) shows the whole current page."]
+    if session.events:
+        out.append("Since your last action: " + "; ".join(session.events))
+        session.events.clear()
+    for number, page_text in enumerate(pages, 1):
+        cut_note = ""
+        if number > 1:
+            page_text, dropped = _new_lines(page_text, pages[number - 2], framed)
+            if dropped:
+                cut_note = f" ({dropped} leading lines are the same as on the page before and not repeated)"
+        if number - 1 != open_page:
+            page_text = _plain(page_text)
+        if len(page_text) > MAX_VIEW:
+            cut = len(page_text) - MAX_VIEW
+            page_text = page_text[:MAX_VIEW] + f"\n[... page {number} is cut here, {cut} more characters]"
+        out.append(f"\n===== page {number}{' (open now)' if number - 1 == open_page else ''}{cut_note} =====\n"
+                   f"{page_text}")
+    session.trace.event(session.name, "paged", pages=len(pages), reason=reason, control=first.group(3))
+    session.trace.event(session.name, "paged_text", quiet=True, text="\n".join(out))
+    return "\n".join(out)
+
+
+async def read_pages(ctx: RunContext[Deps], urls: list[str]) -> str:
+    """Open several pages of this website one after the other and read them all in one step.
+
+    Pass link targets the current page shows (the part after "->"), e.g. the detail pages or tabs of several
+    records you want to compare. Use it instead of opening them one by one.
+    """
+    session, deadline = ctx.deps.session, ctx.deps.deadline
+    out, used, opened = [], 0, 0
+    base = session.page.url
+    for number, url in enumerate(urls[:MAX_READ], 1):
+        target = urljoin(base, url)
+        if urlparse(target).netloc != urlparse(session.site["url"]).netloc:
+            out.append(f"\n===== {url}: not on this website, not opened")
+            continue
+        if used >= MAX_PAGED or (deadline is not None and time.monotonic() > deadline - 5):
+            out.append(f"\n===== {url}: not opened (output limit or time); open it in a further call")
+            continue
+        async with session.lock:
+            await session._goto(target)
+            session.trace.event(session.name, "action", action="goto", url=target)
+            await session.look()
+        opened += 1
+        text = session.view if number == min(len(urls), MAX_READ) else _plain(session.view)
+        if len(text) > MAX_VIEW:
+            text = text[:MAX_VIEW] + f"\n[... cut here, {len(text) - MAX_VIEW} more characters; open this page alone]"
+        used += len(text)
+        events = ""
+        if session.events:
+            events = "\nSince your last action: " + "; ".join(session.events)
+            session.events.clear()
+        out.append(f"\n===== {session.page.url}{events}\n{text}")
+    head = (f"Opened {opened} of {len(urls)} pages. The last one is open now and only its refs work."
+            + (f" At most {MAX_READ} pages are opened per call." if len(urls) > MAX_READ else ""))
+    return head + "\n".join(out)
 
 
 VALUE = re.compile(r"[\w/.:,+-]*\d[\w/.:,+-]*")
@@ -418,4 +655,4 @@ async def note(ctx: RunContext[Deps], key: str, value: str) -> str:
     return f"noted {key}"
 
 
-TOOLS = [goto, click, fill, select, check, back, read_more, note]
+TOOLS = [goto, click, fill, select, check, back, read_more, read_all_pages, read_pages, note]

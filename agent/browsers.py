@@ -48,14 +48,17 @@ async def contexts(playwright, count: int) -> list:
 
 async def more_contexts(page, count: int) -> list:
     """Browser contexts for `count` websites, the first being `page`'s. In a run, website n gets browser n where the
-    run has one (agent.json "browsers"), else a further context of browser 1; locally, contexts of the kit's own
-    Chromium at the sandbox's 1280×800."""
+    run has one (agent.json "browsers"); with fewer browsers than websites the remaining websites share the
+    browsers' contexts in turn (different websites do not get in each other's way in one context). Locally,
+    contexts of the kit's own Chromium at the sandbox's 1280×800."""
     urls = cdp_urls()
     found = [page.context]
     for number in range(1, count):
         if number < len(urls):
             browser = await page.context.browser.browser_type.connect_over_cdp(urls[number])
             found.append(browser.contexts[0] if browser.contexts else await browser.new_context())
+        elif urls:
+            found.append(found[number % len(urls)])
         else:
             found.append(await page.context.browser.new_context(viewport={"width": 1280, "height": 800}))
     return found
