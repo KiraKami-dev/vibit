@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M4KNHS6K5DSZK05MV5VS5C8Q",
+  "strategy": "manual-commit",
+  "branch": "speed-cost",
+  "checkpoints_count": 12,
+  "files_touched": [
+    ".gitignore",
+    "dev/dashboard.py",
+    "dev/run-local.sh",
+    "dev/test-run.sh",
+    "docs/learned.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 186,
+    "cache_creation_tokens": 295806,
+    "cache_read_tokens": 17304787,
+    "output_tokens": 89422,
+    "api_call_count": 80,
+    "subagent_tokens": {
+      "input_tokens": 16,
+      "cache_creation_tokens": 186354,
+      "cache_read_tokens": 331864,
+      "output_tokens": 9139,
+      "api_call_count": 8
+    }
+  }
+}
