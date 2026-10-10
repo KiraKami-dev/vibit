@@ -2,9 +2,7 @@ docs/experiments.md
 experiments/local-runs.jsonl
 # hand-derived public-1 answers: site values, local only
 checks/
-<<<<<<< HEAD
 # hand-labelled eval set: copied site text, local only
 dev/clef_eval/data/
-=======
+# hand-made answers for dev/configurator_check.py: site values, local only
 dev/local/
->>>>>>> 73284bd (Fill bid positions from the calculated answer)
