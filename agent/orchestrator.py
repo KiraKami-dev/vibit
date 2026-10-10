@@ -63,9 +63,9 @@ FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys be
 REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at least this much research time left
 
 
-async def start_session(session: SiteSession) -> SiteSession:
-    """Open and sign in (SiteSession.start: time-limited, tried twice)."""
-    await session.start()
+async def start_session(session: SiteSession, until: float | None = None) -> SiteSession:
+    """Open and sign in (SiteSession.start: waits on a slow tab, retries with backoff until `until`)."""
+    await session.start(until=until)
     return session
 
 # ---------------------------------------------------------------- the planner
@@ -239,8 +239,9 @@ def answer_from(result: calc.BidResult, blank: dict[str, set[str]], notes: str =
 
 class Orchestrator:
     def __init__(self, task: dict, briefing: Briefing, contexts: dict[str, BrowserContext], trace: Trace,
-                 deadline: float):
+                 deadline: float, warm: dict[str, SiteSession] | None = None):
         self.task, self.briefing, self.contexts, self.trace = task, briefing, contexts, trace
+        self.warm = warm or {}  # per website the session agent.py is signing in with, maybe still starting
         self.access = {s["siteId"]: s for s in task["access"]}
         self.deadline = deadline
         self.research_deadline = deadline - SUBMIT_SECONDS
@@ -285,11 +286,31 @@ class Orchestrator:
         except Exception as error:
             self.board.problem(name, f"stopped: {type(error).__name__} (the bid form needs the time)")
 
+    async def site_up(self, site: str) -> None:
+        """
+        Wait until the website's first session (agent.py's, signing in in the background) is up, so workers join
+        a website when it comes up instead of hammering a slow one with more tabs; the others go on meanwhile.
+        Raises when that start gave up or the research deadline passes first.
+        """
+        warm = self.warm.get(site)
+        if warm is None or warm.ok:
+            return
+        if not warm.settled.is_set() or warm.starting:
+            self.trace.event(site, "waiting_for_site", seconds_left=round(self.left()))
+            try:
+                await asyncio.wait_for(warm.settled.wait(), max(1.0, self.left()))
+            except asyncio.TimeoutError:
+                raise TimeoutError(f"{site}: not up by the research deadline") from None
+            self.trace.event(site, "site_up" if warm.ok else "site_down")
+        if not warm.ok:
+            raise TimeoutError(f"{site}: the site could not be opened")
+
     async def session(self, site: str, tag: str = "") -> SiteSession:
         access = self.access[site]
         if tag:
             access = {**access, "siteId": f"{site}:{tag}"}
-        return await start_session(SiteSession(access, self.contexts[site], self.trace))
+        await self.site_up(site)
+        return await start_session(SiteSession(access, self.contexts[site], self.trace), until=self.research_deadline)
 
     # ------------------------------------------------------------ workers
 
@@ -460,7 +481,8 @@ class Orchestrator:
     async def _spec_attempt(self, site: str, tag: str, context: BrowserContext, brief: str, erp: Erp | None, *,
                             thinking: bool, steps: int) -> SpecResult:
         access = {**self.access[site], "siteId": f"{site}:{tag}"}
-        session = await start_session(SiteSession(access, context, self.trace))
+        await self.site_up(site)
+        session = await start_session(SiteSession(access, context, self.trace), until=self.research_deadline)
         return await research_spec(
             session, self.briefing, context=brief, deadline=self.research_deadline, thinking=thinking,
             max_steps=steps,
