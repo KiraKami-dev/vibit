@@ -436,3 +436,7 @@ start new test run
 <status>completed</status>
 <summary>Background command "Keep trying to start the run once a minute until the team's queue has room, then wait for its score" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+Hi Claude brother, we meet again. Can you please decrease the time? Why is it taking 40 effing minutes? Can you please make more parallel agents and decrease the time if it is waiting for random tool calls or whenever it falls into loops, reduce the number of iterations. Just find me a creative way to decrease the time through more parallelization. Stop, make it think and reason more. Use a good model for more reasoning. Find me ways where I can decrease the time using parallelization if it's possible. Thank you.
