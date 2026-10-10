@@ -333,6 +333,8 @@ async def paginate(session: SiteSession, list_ref: str | None = None, next_ref: 
     else:
         capped = True
         notes.append(f"stopped after {pages} pages / {len(seen)} rows; the list may go on")
+    if pages > 1:  # the model never saw the pages clicked through: its next view comes whole, not as a diff
+        session.shown = session.base = ()
     session.trace.event(session.name, "paginate", how=how, pages=pages, rows=len(seen), capped=capped)
     return Listing(list(seen.values()), pages, how, notes, capped)
 
@@ -355,6 +357,8 @@ def _format(listing: Listing, header: str) -> str:
         lines.append(f"Note: {note}")
     if any(not r.current for r in listing.rows):
         lines.append("Rows without refs are on earlier pages: open them with goto(their link target), or page back.")
+    if any(r.current and r.links for r in listing.rows):
+        lines.append("Refs in this list hold until your next action; this list stays with you, refs do not.")
     return "\n".join(lines)
 
 

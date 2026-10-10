@@ -64,3 +64,10 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   reference and misses ordering such as "highest request number"). It is exact at "is this an error, empty, locked
   or decoy page after my action" (100 % vs 93 % for Qwen off, same speed). Kept only that check, behind
   `AGENT_CLEF=1` (`page_check` tool); Clef's `score` criteria must be a list, and many `noul` questions fit one call.
+- Site tools (`site_tools.py` search / collect / extract), local read-only check against the scouting sites: an ERP
+  search that the site refuses as too broad took 10 steps, 46 s and 34k input tokens with the tools (remark reported
+  right) against 30 steps, 153 s, 112k and no answer without; a mailbox search over inbox and archive took 18 steps
+  and 105 s with the tools (10 messages over 3 pages each, newest right), plain stopped at 30 steps or hung on
+  re-locking gates. Two fixes were needed: older tool results were cut to one line once a newer view came, so the
+  model paged again by hand to see the list it had collected (results of search / collect / extract now stay), and
+  after paging the next view must come whole, not as a diff against a page the model never saw.

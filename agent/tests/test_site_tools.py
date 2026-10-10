@@ -168,6 +168,7 @@ class PaginateTest(unittest.TestCase):
         self.assertTrue(all(r.links and r.links[0]["ref"].startswith("e") for r in listing.rows))
         self.assertEqual(listing.rows[8].links[0]["href"], "/rec/9")
         self.assertIn("M-1009", session.seen)  # every page went through look(), so grounding has seen it
+        self.assertEqual((session.shown, session.base), ((), ()))  # the next view the model gets is whole
 
     def test_next_page_list_dedupes_and_keeps_targets(self):
         async def go():
@@ -235,7 +236,7 @@ class SearchTest(unittest.TestCase):
     def test_help_text_is_no_refusal_when_rows_show(self):
         out = self._search("two")
         self.assertIn("2 rows", out)
-        self.assertTrue(out.endswith("Note: the page says: 2 Treffer"), out)
+        self.assertIn("\nNote: the page says: 2 Treffer\n", out)
         self.assertNotIn("too many", out)
 
     def test_too_many_hits_is_reported(self):
