@@ -1,0 +1,1112 @@
+Again, do you want to use some more browsers or subagents or does this currently not help?
+
+---
+
+What do you run for v1? Local, a test on their platform or a submission?
+
+---
+
+Could I see the browser it drives?
+
+---
+
+<task-notification>
+<task-id>a609bf392cbd7c913</task-id>
+<tool-use-id>toolu_01HjbabLNax2J9jEVW6dm9hV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a609bf392cbd7c913.output</output-file>
+<status>completed</status>
+<summary>Agent "Build calc.py pricing rules" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I built `calc.py` and its tests. All 34 tests pass (0.001 s) and ruff is clean at line length 120. I only created those two files: nothing else was touched, nothing was committed, and no browser or agent was run.
+
+**Input models**
+- `BidInput` holds the whole bid: `tender_reference`, `scenario_date`, the positions, an optional `approval`, `fx_rates` (FX key to EUR per unit), `metal_indices` (code to dated rates), an optional `setup_pool` and an optional `project_bonus`.
+- `PositionInput` carries one position:
+  - its id and final quantity in the stated unit, with `unit` and `pieces_per_set` for Satz;
+  - `material`, where `None` means no matching material and leads to `no_bid`;
+  - the candidate price `conditions`, the Konditionsgruppe rule (`discount_scope`: base only, base plus surcharge, or none), the ordinary `setup_fee`, the `packaging` tariff and the delivery `commitment`.
+- `Material` has stock, both lead times, carton size, allocation mass, surcharge mass and the metal index code.
+- The smaller records are `PriceCondition` / `PriceScale`, `MetalIndexRate`, `PackagingTariff`, `DeliveryCommitment`, `SetupPool`, `BonusBand` / `ProjectBonus` and `Approval` (percent plus optional threshold).
+
+**Public functions**
+- `calculate(bid) -&gt; BidResult` does the whole calculation. `BidResult.answer(notes=None)` turns it into the answer-schema dict. The result also keeps `order_value`, `bonus_total`, `missing_materials` and a per-position `debug` list of unrounded intermediates.
+- Selection helpers for the rules the spec defines exactly:
+  - `resolve_quantity` and `to_pieces` / `parse_unit` (rules 1, 13, 17);
+  - `apply_amendments`, `nominal_stroke` and `matching_materials` (rules 14, 20, 3);
+  - `latest_authoritative` (rule 21);
+  - `valid_condition` and `reached_scale` (rule 4), `metal_rate` (rule 28).
+- Calculation helpers: `effective_discount`, `bonus_credit`, `allocate_cents`, `lead_time`, `money`, `position_key`.
+
+**Assumptions to check**
+- **Setup pool cent rule (25):** the mail states the rule, so it is a parameter. The default is largest remainder. The other options are rounding each share, or giving the leftover cent to the largest, first or last member. The base can be half-up or floor, and ties go by ascending or descending position.
+- **Position order** for ties is "natural", so "2" comes before "10".
+- **Project bonus (26):** a position's goods value is final pieces × the EUR base price, undiscounted. A flag `include_surcharge` adds the mass surcharge if the mail says so. The bonus is split by largest remainder with ties by ascending position.
+- **Base price:** it is rounded to cents even for EUR prices. This matters when the price unit is 100.
+- **Discount threshold (16):** the order value is final pieces × rounded EUR base, summed over all positions. On `no_bid`, a conditional approval gives 0 % but an unconditional one keeps its percent.
+- **Metal index:** rates are taken as EUR per kg. If a material has no index code and exactly one index exists, that one is used. A single rate without a window applies as is.
+- **Packaging:** a tariff is a flat EUR price per carton. A position with no tariff reports packaging as 0.00.
+- **Other matching details:**
+  - Q&amp;A changes and amendments dated after the scenario date are ignored.
+  - Numeric attributes match as numbers ("50.0" equals 50); text matches ignore case and extra whitespace.
+  - If several price conditions are valid on the date, the one with the latest start wins.
+- **Missing facts:** a missing FX rate, metal rate, scale, valid condition or carton size raises `CalcError` rather than guessing. The orchestrator needs to catch it, for example to leave that field blank or skip the position.
+
+The tests use only invented values (T-0001, M-100, example.com) with the hand calculations in comments. They cover rules 1, 3–8, 12–17, 20–28 and the answer format, including the case where rounding each component first would give a different price.
+
+Files are in /Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/agent:
+- calc.py
+- tests/test_calc.py</result>
+<usage><subagent_tokens>93468</subagent_tokens><tool_uses>15</tool_uses><duration_ms>286233</duration_ms></usage>
+</task-notification>
+
+---
+
+What is the issue with the TAN?
+
+---
+
+Still if you have open work etc. you can spin up subagent(s), local sessions etc.
+
+---
+
+<task-notification>
+<task-id>bb9100fgt</task-id>
+<tool-use-id>toolu_01TUet5EtkAG6CTsuwsRLcS9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bb9100fgt.output</output-file>
+<status>failed</status>
+<summary>Background command "Guard helpers against errors, rerun v1" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>baiuut351</task-id>
+<tool-use-id>toolu_016vMB8GQU8yeicB334M5BTc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/baiuut351.output</output-file>
+<status>failed</status>
+<summary>Background command "Rerun v1 locally with a visible browser" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+Put them in the background for the next time. And how long is v1 taking approximately?
+
+---
+
+<task-notification>
+<task-id>bj3ccjd1q</task-id>
+<tool-use-id>toolu_011t7MA1GbYibXHoPkhVi6xm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bj3ccjd1q.output</output-file>
+<status>failed</status>
+<summary>Background command "Rerun v1 locally with a visible browser" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+Should we decrease / turn of thinking for it? Or make it dynamic? Or rather later?
+
+---
+
+<task-notification>
+<task-id>bdnws6wmx</task-id>
+<summary>Monitor event: "v1 local run: notes, TAN, results, errors"</summary>
+<event>[Monitor expired after 20m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+Can you task a subagent or so to think of how to track changes between versions? Or what we tried etc. Either as json, markdown, website submodule (not submitted but for us to track), db etc.? Or you think of it?
+
+---
+
+<task-notification>
+<task-id>ba0naet1o</task-id>
+<tool-use-id>toolu_01U52oXjPPusP7mFsNMRsFDW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/ba0naet1o.output</output-file>
+<status>completed</status>
+<summary>Background command "Rerun v1 locally, headless" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Do we get scores if we don't submit (but only on test runs)? And does test use different data than the leaderboard?
+
+---
+
+Are you still monitoring? Esp v1?
+
+---
+
+<task-notification>
+<task-id>a6e181ecdb1556fe7</task-id>
+<tool-use-id>toolu_01Q7R14j2ABsd4QyTGoYTXrs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6e181ecdb1556fe7.output</output-file>
+<status>completed</status>
+<summary>Agent "Build run/experiment tracking" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I built the tracker and seeded it with the two runs you named. Nothing is committed, and I didn't touch `agent/` or `CLAUDE.md`. Recording, the report, the hand-written section surviving a rewrite, and lookups by `sub_` and `reh_` ids all work; ruff passes at line length 120.
+
+**Files**
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/dev/track.py`: the CLI, stdlib only. Usage is at the top of its docstring.
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/experiments/runs.jsonl`: two seed records.
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/docs/experiments.md`: usage header, the table, and a marker line; everything below the marker is kept when the file is regenerated.
+
+**Commands** (from the repo root)
+```sh
+python3 dev/track.py local [--trace PATH] [--version v1] [--note "..."]
+python3 dev/track.py platform &lt;run_|reh_|sub_ id&gt; [--version v1] [--note "..."]
+python3 dev/track.py report
+```
+Both recording commands also take `--commit SHA` (record that commit instead of HEAD; the dirty flag then becomes unknown) and `--force` (record an id again; the report shows the newest record per id).
+
+**Generated table**
+
+| Date (UTC) | Kind | Version | Commit | Duration | Tokens in/out | Quality | Outcome | Note |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-10-10 15:40 | local `local-20261010-174027` | v1 | c493495* | 7.4 min | 247k / 5.0k |  | signed, 5 omitted, 2 stops, 1 errors/refusals | first signed bid, all positions omitted, TAN loop |
+| 2026-10-10 14:00 | test-run `run_561a4b180b6341fa` | v0-starter | 27f3dcb | 4 s |  | 0 | failed, $0.000, Run exited with code 0 without submitting an answer | starter kit stub before the harness; exits without an answer |
+
+I also wrote four starter bullets under "What we tried and learned", based on the traces: the TAN loop (mail worker started 6 times, 2 hit the 8-request limit), the tender worker using 36 requests and 433 s, and the token use.
+
+**Things that differ from the brief or that you should check**
+- **Where the result is:** no trace has an event of kind `result`. The final result is logged by the worker named `result` with kind `done`, and `track.py` reads that. The newest trace that has it is `run-20261010-174027.jsonl`, so that is what I recorded as v1. The newer-looking `run-20261010-173715.jsonl` has no result.
+- **The seed test run predates our code:** `run_561a4b180b6341fa` ran at 14:00 UTC, before the starter-kit commit at 14:04 UTC. I labelled it `v0-starter` and set its commit to `27f3dcb`, which is only approximate.
+- **Settings are limited:** traces don't record the model, thinking or step limits. A local record only has `models`/`browsers` from `agent/agent.json` plus any request limits that were hit (8), along with a breakdown per worker.
+- **`atira` quirks:**
+  - `atira status --json` hung until I gave it an empty stdin, so the script does that and uses a 120 s timeout.
+  - `atira status reh_...` returns nothing, so `reh_` ids are looked up in the team's test-run list.
+  - Test-run JSON has no token counts; submission JSON does.
+  - Every score breakdown so far is `null`, so it is stored as-is and the shape is still unknown.
+  - `atira logs` isn't used.
+- **Site values in `runs.jsonl`:** the local record includes the confirmation text you asked for, which contains the public-1 tender reference and receipt number. The markdown table leaves it out. Remove it if you'd rather the repo hold no site values.
+- **Python 3.9:** the system `python3` is 3.9, so the script avoids newer syntax.
+- **Not recorded:** two teammate submissions (`sub_394612e901042cdf`, `sub_4a78e252f841b4c4`) and a queued test run `run_8cdaf09699ca1a66` exist. Record them with `platform &lt;id&gt;` once they're relevant or finished.</result>
+<usage><subagent_tokens>90024</subagent_tokens><tool_uses>21</tool_uses><duration_ms>347179</duration_ms></usage>
+</task-notification>
+
+---
+
+"What it built:" can you or a subagent set this up as claude md or sth or hook or so (that are committed as pushed). then comit?
+
+---
+
+<task-notification>
+<task-id>bl6lsaxoa</task-id>
+<tool-use-id>toolu_019RwMb8qbagD26ymi13NkiG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bl6lsaxoa.output</output-file>
+<status>completed</status>
+<summary>Background command "Follow the test run logs until it ends" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bo417qj0b</task-id>
+<tool-use-id>toolu_01YEtYPMC7LTpzoh2Gmc1TyR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bo417qj0b.output</output-file>
+<status>completed</status>
+<summary>Background command "Check test run log and status" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Yes, but from the versions / experiments also others without that v2 to v4 but also other experiments? Is that possible?
+
+---
+
+Can you ask another agent if this even makes sense to commit this? Is this usable for others?
+
+---
+
+<task-notification>
+<task-id>a6d6f18cc58d1c5d9</task-id>
+<tool-use-id>toolu_01Ut67YAtPyiPKu5GsNMdQwc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6d6f18cc58d1c5d9.output</output-file>
+<status>completed</status>
+<summary>Agent "Review experiment tracking setup" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: keep it, with changes.** Labelling each test run and submission with a version, an experiment name and a note is useful, and the platform doesn't do it. Three parts cost more than they give for a one-day, five-person repo: the committed generated table, committed local runs, and the "always" rule.
+
+What I checked: `bash -n` passes on both wrappers. `python3 dev/track.py report` reproduces `docs/experiments.md` byte for byte. `atira test-run ./agent --dry-run` showed that `.gitignore` keeps `traces/` out of the uploaded package. I edited nothing.
+
+**Top changes, ranked**
+
+1. **Stop committing `docs/experiments.md`'s table.** Every regeneration rewrites the whole table, so two people who both record will conflict on every merge. Gitignore the generated table, or print it to stdout, and move "What we tried and learned" into its own hand-written file such as `docs/learned.md`. That file is the most valuable piece of the setup.
+2. **Add `experiments/runs.jsonl merge=union` to `.gitattributes`.** Two teammates appending lines always conflict at end of file. With union, git keeps both sides' lines.
+3. **Commit only test runs and submissions; keep local runs local.** Local runs are frequent and unscored, and they score nothing that would show what works. Record them to a gitignored file, or only when they taught something.
+4. **Weaken "Tracking runs (always)" in CLAUDE.md.** Make it: record every test run and submission, and add a bullet to the learned file when a run taught something. As written, another person's Claude session will churn the log on every debug run.
+5. **Don't rely on the git commit to pin the code.** `atira test-run` packs untracked files too: right now `agent/evidence.py`, `research*.py` and others are uploaded but in no commit. Both the commit and the `dirty` flag are taken when you record, not when the run started; for `test-run.sh` that is after `--follow` ends, so a pull in between records the wrong commit. `atira package &lt;id&gt;` already returns the exact uploaded package, so record that (the sha256) instead.
+
+**Redundancy with the platform:** `atira status`, `atira package` and the run pages already hold the score, breakdown, cost, error and code. What the setup adds is labels and notes. That supports the 90% version: a roughly 30-line `track.py platform`, the union-merged jsonl, and the hand-written learnings file.
+
+**Bugs and fragile spots**
+
+- `run-local.sh` uses `uv run --no-sync`, so it won't install dependencies on a fresh clone. It also brings back the stale-venv problem already in the log (the httpx crash). Drop `--no-sync` or run `uv sync` first.
+- `local` takes the newest trace by modification time. If the agent dies before creating a trace, the duplicate-id check aborts the recording instead of saving the wrong run. If two runs overlap, the wrong trace is recorded. Pass `--trace` explicitly.
+- A relative `TRACE_DIR` resolves against `agent/` in the agent but against the repo root in `track.py`, so they look in different places.
+- In `test-run.sh`, Ctrl-C during `--follow` loses the record with no hint, while the run keeps going on the platform.
+- Windows: these are POSIX `sh` scripts calling `python3`, so they need WSL or Git Bash. They work on macOS and Linux, and `track.py` works on the system Python 3.9.
+- `atira models proxy` is only mentioned in a comment. If it isn't running, the run fails late instead of the wrapper checking first.
+
+**Privacy and fair play**
+
+- `overrides()` records every variable starting with `AGENT_`, `LLM_`, `THINKING` or `MAX_STEPS` into a committed file. Today's `QWEN_API_KEY` and `CLEF_API_KEY` don't match, but a future `LLM_API_KEY` would be committed. Use an explicit allowlist or redact anything matching `KEY|TOKEN|SECRET`.
+- Local `outcome.confirmation` is model text read from the site and could carry site values.
+- Fair play looks fine: `dev/`, `experiments/` and `docs/` are outside `agent/`, the packer honours `.gitignore`, and the current notes contain no credentials or site values.
+
+The files involved are `dev/track.py`, `dev/run-local.sh`, `dev/test-run.sh`, `experiments/runs.jsonl`, `docs/experiments.md` and the "Tracking runs" section of `CLAUDE.md`, all under `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/`.</result>
+<usage><subagent_tokens>54982</subagent_tokens><tool_uses>6</tool_uses><duration_ms>59443</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bibbj04o1</task-id>
+<summary>Monitor event: "v1 visible run: TAN, notes, results, errors"</summary>
+<event>[Monitor expired after 25m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>byrvy2ss2</task-id>
+<tool-use-id>toolu_0171KDCZAut5aDKHy1jnqruc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/byrvy2ss2.output</output-file>
+<status>completed</status>
+<summary>Background command "Run and record the v1 test run via the wrapper" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Ok. Can we submit a scoring of v1 then?
+
+---
+
+<task-notification>
+<task-id>bhwbghowl</task-id>
+<summary>Monitor event: "v1 headless run: TAN, results, errors, exit"</summary>
+<event>[Monitor expired after 25m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>baiztpjar</task-id>
+<tool-use-id>toolu_01KoXo97R3Q7Vcb9zvbxM9Ec</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/baiztpjar.output</output-file>
+<status>completed</status>
+<summary>Background command "Retry the v1 submission without a timeout" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Can you enable all entire features, e.g. see here: https://hack.entire.io/ehl-munich-2026/ (I should have access)
+
+---
+
+<task-notification>
+<task-id>byfmg3xx3</task-id>
+<tool-use-id>toolu_01XsJRVe7TgNaQMmvcRN2bYh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/byfmg3xx3.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the v1 submission to finish" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+What subagents / what improvements are running right now? And can you kick off more to improve? Also with reasoning etc. we discussed earlier.
+
+---
+
+Can you start more, maybe also on using the Clef etc.? Or are we already using this?
+
+---
+
+Anything else to check out or improve while we are at it?
+
+---
+
+<task-notification>
+<task-id>a8272e1e3d757fdae</task-id>
+<tool-use-id>toolu_01PpEgpMVpN5rds8s97gCUWi</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a8272e1e3d757fdae.output</output-file>
+<status>completed</status>
+<summary>Agent "Fair-play pre-review of package" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: likely pass for the package committed at HEAD.** I found no scenario values, no fixed click path, no crawler and no secrets. It only talks to the platform, the run's sites and the model proxy, and in the sandbox it attaches to the provided browsers rather than starting its own. The real risks are in the untracked work-in-progress files.
+
+**Committed package at HEAD, ranked by severity**
+
+1. **Low to medium flag risk: the answer strategy is fixed in code** (`submit.py:63`, `81-91`). The bid goal hardcodes `decision: bid`, every position left out (Position auslassen), discount 0 and total 0,00. None of these are copied scenario values, but rule 11 says a model must "make the important decisions", and here the decision and the money fields are fixed. A reviewer may read this as a stub or a pre-decided answer. Fix: once v2 lands, let a model choose bid or no_bid from the evidence. Until then the docstring's frank "v1" wording is fine; don't add notes arguing it is compliant.
+2. **Low: the local browser launch has a weak guard** (`browsers.py:28`, `45-46`). `chromium.launch` is skipped only when `CDP_URLS`/`CDP_URL` are set, so if they were ever missing in the sandbox it would start an own browser. Fix: also refuse to launch when `CHALLENGE_RUN_TOKEN` is set.
+3. **Low: the generic helpers in `browser_tools.py` all look fine.**
+   - Auto login (`:173`) fills the run's own credentials.
+   - Cookie handling (`:196`) prefers the necessary-only answer.
+   - The popup closer (`:25-57`) only presses close buttons and never follows links.
+   - The error-page reload (`:229`) is a retry.
+   - These all fit "helpers may retry and fill forms". The human-check helper (`:61-83`, `:215`) sets sliders and ticks robot checkboxes by script. That is the one thing a strict reviewer could call circumventing a site control. It is narrowly scoped (other checkboxes are left to the model) and reported to the model. Optionally drop it and let the model use `fill` on the slider.
+   - `_on_dialog` (`:137`) accepts every browser confirm. Acceptable, because the model triggered the action.
+4. **Cosmetic:**
+   - `tests/test_kit.py:24` uses the public-1 siteId `tender-portal` in a fixture. Rename it to something like `site-a`.
+   - `tests/` launches a local Chromium, but only as tests, never in the run.
+   - `README.md` is still the starter-kit text and steers nothing.
+   - `calc.py` holds only rule mechanics and placeholder data.
+
+**Untracked files (risky once committed)**
+
+1. **Medium (likely flagged): text copied from site pages into prompts.** These phrases are not in the brief, so they most likely come from public-1 pages:
+   - `research_tender.py:270-271`: "Kein Rüstpool", "kein Projektbonus".
+   - `research_mail.py:208`: decoy labels "Entwurf", "nicht versandt", "Keine Freigabe".
+   - Fix: describe these generically ("statements of non-membership", "draft or unsent previews").
+2. **Medium (flag risk under rule 11): code decides what to investigate and what to choose.**
+   - `research_mail.py:173-189` plus `research_kind` send nine search tasks from a fixed list. Models still drive each search, but the plan itself is code.
+   - `research.py` `select_material` picks the material in code.
+   - Fix: let an orchestrating model decide which kinds of record to pursue from the brief and Q&amp;A, and let the model choose the material while code only validates the exact match.
+3. **Low to medium: sender names and subjects hardcoded from the public brief** (`research_mail.py:174-188`). Strings like `leitung`, `kalkulation` and the subject words do appear in the brief, so they are allowed. But they are copied from public-1's brief, and the private run may phrase them differently. Fix: have `briefing.py` pull the sender-to-subject mapping out of the run's brief.
+4. **Low: off-site navigation without a host check** (`research.py:667`, `718`). `_goto(urljoin(site url, link))` follows links reported by the model and does not check the host, unlike `goto` and `open_pages`. Fix: reuse the same-host check.
+
+German words from the brief (Hauptangebot, Position auslassen, Kataloggruppe, Werkpost) are used as the brief intends, so they are fine.</result>
+<usage><subagent_tokens>113949</subagent_tokens><tool_uses>19</tool_uses><duration_ms>113941</duration_ms></usage>
+</task-notification>
+
+---
+
+What score should we expect once we have v2? And when do you think it is ready? And how did one team get score 100?
+
+---
+
+Ok would it help to have more subagents to speed it up. Or do more runs (not submission) on the system or on ours? Or anything?
+
+---
+
+"The real bottleneck is the shared scouting account." could we improve that somehow? Like with an additional machine, login, etc. I guess the challenge providers have thought about this somehow?
+
+---
+
+Yes, definitely add this.
+
+---
+
+And have you notified subagents to use it? And for local can we also use more? or by using one of my ssh machines or so?
+
+---
+
+"every machine would use the same global scouting login" what is the issue there? What collides there?
+
+---
+
+<task-notification>
+<task-id>aca9e958470992e7f</task-id>
+<tool-use-id>toolu_01FkAiZC5FiFMnhbLf9GUbiT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/aca9e958470992e7f.output</output-file>
+<status>completed</status>
+<summary>Agent "Cut tokens in page views" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Waiting for the runs to complete.</result>
+<usage><subagent_tokens>153674</subagent_tokens><tool_uses>79</tool_uses><duration_ms>1037821</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aca9e958470992e7f</worktreePath><worktreeBranch>worktree-agent-aca9e958470992e7f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+"What doesn't collide: reading tender documents and Q&A, spec revisions, ERP materials and prices, and approval mails. Those are plain reads; each browser has its own session cookie and the data doesn't change. That's why the research agents can run in parallel without problems." so subagents could work on this independent? And can you ask an agent if we really cannot have more states of this at least for parts of it?
+
+---
+
+Also the challenge providers says one needs like multi agents to get good scores. Not sure if we explore this already.
+
+---
+
+<task-notification>
+<task-id>aca9e958470992e7f</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/aca9e958470992e7f.output</output-file>
+<status>completed</status>
+<summary>Agent "Cut tokens in page views" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Base run 1 is done. Waiting for the rest.</result>
+<usage><subagent_tokens>152873</subagent_tokens><tool_uses>79</tool_uses><duration_ms>1157711</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aca9e958470992e7f</worktreePath><worktreeBranch>worktree-agent-aca9e958470992e7f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Yeah just schedule some more exploration or testing agents if needed.
+
+---
+
+<task-notification>
+<task-id>a713df6b02283c882</task-id>
+<tool-use-id>toolu_01E1bmoxVcyJ8S17sGrwzu52</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a713df6b02283c882.output</output-file>
+<status>completed</status>
+<summary>Agent "Investigate isolated site state options" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Isolated state on the challenge sites: findings
+
+The platform gives teams no isolated scouting state, but most of it isn't needed: the bid wizard is already private to each browser session. The only shared state is the webmail, which holds the TAN mails.
+
+**1. What the docs and API offer: nothing per team.**
+- `api.md`: scouting returns "the logins the organizers publish… These are demo logins without a run token… nothing done with them counts." The response has `until_revoked: true` and never expires.
+- The OpenAPI spec has no reset endpoint, no extra accounts and no per-team scouting. The only related endpoint is `POST /v1/challenges/{id}/practice-runs`, marked "Deprecated and internal: organizers' demo access… participants never need it" (llms-full: "Organizers only"). I did not call it.
+- `faq.md`: "Can I run my agent outside the sandbox? While you develop, yes, anywhere, with the scouting logins."
+- The two announcements say nothing about this. One raised concurrent test runs to 4, but our learned.md says 5; worth checking.
+
+**2. Experiment (two separate headless browser contexts, no other agent running):**
+- **Bid wizard: tied to the session cookie, not the account.** Fresh contexts A and B both opened an empty step 1 (Bieterdaten). A filled in the bidder data once (the brief's company name and VAT id, plus the mailbox address read from the webmail) and pressed Weiter. After a reload, A showed step 2 (Angebotsart) and B still showed an empty step 1. The leftover state we saw earlier came from reusing our own session.
+- **Webmail: one mailbox shared by everyone.** Both contexts saw exactly the same list: 66 messages, the newest being TAN mails numbered "Anforderung 66, 65, 64…". So the TAN mails and their numbering are shared across all teams.
+- **Untested:** whether one TAN request cancels TANs requested from other sessions, because I was not allowed to request one. The shared numbering and the jumps we saw make account-wide cancellation likely.
+
+**3. Using a test run's logins from my laptop: technically possible, not advisable. I did not try it.**
+- A past test run's log shows the same public hostnames as scouting (`atira-rfq-*.kyora.run`). Runs get separate logins on the same public sites, so they would probably be reachable from outside.
+- The rules work against it:
+  - run-contract: "Site logins are issued per run and only work while that run is live."
+  - fair-play forbids "trying to get data out of the sandbox" and says "Nobody helps it during a run."
+- Our own agent would also share those accounts while the run is live, and code that prints `CHALLENGE_SITE_ACCESS` is exactly what the package reviewer flags.
+- Recommendation: don't do it without written permission from the organizers.
+
+## Options, best first
+
+1. **Use the session isolation we already have (no risk).** Run the bid form locally up to step 6, in separate browser contexts per developer. Add a stop before the TAN request, and test TAN signing only in test runs (up to 4–5 at once).
+2. **Ask the organizers (one message, low risk).** Ask for per-team scouting logins or a mailbox reset, and whether using a live test run's logins from outside is allowed. Mention that TAN requests from different teams collide in the shared mailbox.
+3. **Read the TAN by request number right after our own request.** This keeps local signing mostly working, but we still cancel other teams' TANs and they cancel ours. Use it sparingly.
+4. **Leak a test run's logins to a laptop (not recommended).** It risks a fair-play violation and collides with our own running agent.
+
+I appended one bullet with these results to `docs/learned.md` and committed nothing. The probe script and its logs are in `/Users/jonasstenglein/.claude/jobs/064ce75e/tmp/iso/`: `observe.py`, `obs1.log` and `obs2.log`.</result>
+<usage><subagent_tokens>88055</subagent_tokens><tool_uses>19</tool_uses><duration_ms>150949</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1a8b2c8cd6aff30f</task-id>
+<tool-use-id>toolu_01LqZ4FmEicKtd1kjKfnarjP</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a1a8b2c8cd6aff30f.output</output-file>
+<status>completed</status>
+<summary>Agent "v2 spec and ERP research workers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I built the spec and ERP research workers. On public-1 the last three runs gave correct records for all five requirements, but end-to-end time is 188 to 318 s against your ~3 min (180 s) target. Nothing is committed; I only created new files.
+
+**Files**
+- `agent/research.py`: both workers, the two read-only tools, and the `Erp` class (runs requirements and materials in parallel, one tab each).
+- `agent/evidence.py`: the record models, deterministic parsers, the exact-match validator `check_choice`, and the mapping to calc (`to_position_input` builds `calc.PositionInput` with `calc.Material` and `calc.PriceCondition` inside).
+- `dev/research_check.py`: the local runner.
+
+**How to run:** `eval "$(atira scout --env)"; HEADLESS=1 uv run --project agent python dev/research_check.py [--reserve KEY=MM ...] [--only A-3]`. Without `--reserve`, the two "nutzbarer Weg" requirements stay pending (their research is still collected).
+
+**How it works**
+- **Which site is which:** a model reads the brief (`research_sites`); nothing branches on siteId or URL.
+- **Spec:**
+  - With thinking off, a worker finds the document, passes the access gate and lists the revisions with their statuses.
+  - A thinking-on call picks the current revision; a validator checks it is one of the listed revisions.
+  - The worker then opens that revision and calls `read_document` with the "next page" control it chose. That tool pages through and stops when a page repeats.
+  - Each page is extracted in parallel and checked against the page text. Requirements are handed to the ERP stage as soon as they are parsed.
+- **ERP:**
+  - A warm-up worker signs in during the spec stage and runs again if the session sat idle too long.
+  - Per requirement, a worker searches the Kataloggruppe and lists every hit with its attributes. Every hit is then inspected.
+  - Per material, a worker opens the views it chooses (`open_pages` only opens links it has already seen). A reader turns the kept views into one record, checked against the view text. If facts are missing, it does a second pass that keeps what was already read.
+  - A thinking-on model chooses the material. `check_choice` (active status plus `calc.matching_materials`) sends a wrong choice back with the reason.
+
+**Coordinator's fair-play points, all addressed:** the model now chooses the material and code only validates it; links followed from model reports go through the same host check as `goto`; site wording is out of the prompts, and docstring examples use invented values.
+
+**Records produced on public-1 (match what I checked by hand):**
+- Current revision R-6156 ("gültig" in a tooltip), not R-4034, which opens first. All five requirements read correctly; A-2 and A-4 are "nutzbarer Weg" with keys ER-4001 and ER-9526; A-5 is 1 Satz = 5 Stück.
+- A-1 → HZ-1609 (HZ-8405 is blocked): free 31 (blocked 68 not counted), lead time 2 weeks from stock / 7 production, 11 per carton, allocation 3.1 kg, surcharge 2.125 kg, MET-4607, EUR per 1: 25+ 2743.58, 10+ 2930.65, 1+ 3117.71.
+- A-3 → HZ-9275 (HZ-9704 is 220 bar). A-5 → HZ-6932 (HZ-3567 has stroke 325), price unit 100 with en-US numbers parsed correctly.
+- A-2 → HZ-2170 holds two condition records (2026 and 2027), USD with FX-6282, price unit 100 vs 1. A-4 → HZ-3916, price unit 100, de-DE numbers.
+- The A-2/A-4 choices only came out because I passed reserves 5.5 and 12 on the command line. Those are invented values that fit the ERP strokes, used only to exercise the choice step; the real values must come from the Technikfreigabe mail.
+
+**Timings (end to end, with brief reading):**
+
+| Run | Total | Spec | ERP stage | Notes |
+| --- | --- | --- | --- | --- |
+| 4 | 188 s | ~73 s | 96 s | no session drops |
+| 6 | 318 s | ~93 s | 216 s | ERP session dropped mid-run |
+| 7 (final code) | 252 s | ~70 s | 169 s | one search retry |
+
+Model steps take about 2 s at the median, but hosted calls sometimes hang.
+
+**Accuracy and speed problems seen**
+- **ERP session drops:** the ERP ended the whole session mid-run twice, after about 85 s and about 130 s, and every tab then signed in again at once and failed ("Formular abgelaufen"). The scouting account is shared, so a sign-in from another process probably causes this; a real run has its own logins. The retry pass recovered every fact.
+- **Wasted steps:** without thinking, navigation workers sometimes keep refining a search that already has hits, or guess record pages that don't exist. Step limits (14 for search, 12 for detail) and one retry contain this, but it costs 30 to 60 s.
+- **Gap filling:** without data, the reader once filled in 0 or "unknown"; the prompt now forbids that and the completeness check retries.
+- **Spec dates:** the revision dates flip between day-first and month-first on every load, so I don't report them and the decision goes by the status the site marks.
+- **Earlier hang:** one early run had a 97 s stall, which looked like proxy hangs plus the 30 s client timeout.
+
+**Harness changes I recommend (not made)**
+1. **llm.py:** a per-call timeout. Thinking calls run 16 to 35 s and get killed at 30 s and retried. I work around it in `_slow_model()` by raising `LLM_TIMEOUT` (default 90 s) while the model is built.
+2. **browser_tools.py:** serialise sign-in per site, one lock per site shared by all tabs of a context, so a dropped session doesn't trigger N parallel logins.
+3. **browser_tools.py:** a public `SiteSession.goto(url)` with the host check, and a hook that records each view, so I can stop wrapping `session.look` and calling `_goto`.
+4. **worker.py:** a `validators=` parameter on `run_worker`, and recording the grounding refusals (`output_refused`) the workers hit.
+
+**Hooks for the other workers**
+- `effective_requirement(req, amendments, reserves, scenario_date)` applies scoped amendments and the nominal-stroke rule.
+- `await reselect(effective_reqs, erp_result)` re-runs the model's choice without browsing, so the material can be decided once reserves arrive.
+
+I stopped my scouting daemon by PID. On the processes the coordinator raised: my only pattern kill was `pkill -f rscout/daemon.py`, which only matches that daemon's path.</result>
+<usage><subagent_tokens>313625</subagent_tokens><tool_uses>111</tool_uses><duration_ms>3792963</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0f71dbdbb8caf177</task-id>
+<tool-use-id>toolu_01L1vrXf2bDHsCxn7WwMYQpq</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a0f71dbdbb8caf177.output</output-file>
+<status>completed</status>
+<summary>Agent "Evaluate and integrate Clef decisions" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>I ran an offline comparison of Clef and Qwen on real page views, and Clef only wins at one decision: spotting an error or dead-end page after an action. I added that one check behind a switch that is off by default. It hasn't been tested inside a full agent run: our only end-to-end flow asks for a TAN, which I was told not to do.
+
+## How I measured
+I hand-labelled 68 decisions on 55 distinct page views from the trace files, ran each model on them 3 times, and scored accuracy, latency and simulated cost. The labelled data contains site text, so it stays local and gitignored in `dev/clef_eval/data/`. Only the eval script and a results summary are committed.
+
+| Decision type | Model | Accuracy | Median / p90 s | $ per decision |
+| --- | --- | --- | --- | --- |
+| Which link or control to use (14 items) | Clef | 79 % | 1.4 / 2.0 | 0.00028 |
+| | Qwen, thinking off | **93 %** | 1.3 / 2.0 | 0.00013 |
+| | Qwen, thinking on | 86 % | 6.4 / 106 (one call hung) | 0.00044 |
+| Right document / revision / record (16 items) | Clef | 88 % | 1.1 / 1.6 | 0.00028 |
+| | Qwen, thinking off | 92 % | 1.1 / 2.0 | 0.00013 |
+| | Qwen, thinking on | **98 %** | 5.2 / 10.5 | 0.00044 |
+| Did the action work / error or decoy page (20 items) | Clef | **100 %** | 1.1 / 1.6 | 0.00015 |
+| | Qwen, thinking off | 93 % | 1.4 / 2.4 | 0.00008 |
+| | Qwen, thinking on (first 14 items only) | 100 % | 4.3 / 10.3 | 0.00044 |
+| Pre-filtering list rows (5 lists, 18 rows) | All three | 100 % | Clef 1.1, Qwen off 1.2, Qwen on 5.7 | per list |
+
+All the costs are tiny next to a worker step, so accuracy and speed are what matter.
+
+## Where Clef helps and where it doesn't
+- **Error or dead-end pages: Clef wins.** It got all 60 right, and its yes/no probabilities were well apart (at least 0.68 for dead ends, at most 0.09 for real pages), at the same ~1 s as Qwen without thinking. Qwen without thinking missed an empty reading pane every time and once misjudged a "TAN requested" page. Qwen with thinking is also exact but about 4x slower.
+- **Choosing a link: Clef loses.** It fails when the choice depends on order or a row's tooltip, such as the highest request number, the newest mail being on the previous page, or the revision marked valid only in a tooltip.
+- **Right document or record: Clef loses.** It took a `&lt;ref&gt;-A` look-alike for the exact tender reference and misread a stated quantity. Qwen without thinking also fell for the look-alike.
+- **Pre-filtering lists: no gain.** All three were perfect. Clef can answer many yes/no questions in one call, but Qwen already handles short lists in one step.
+- Clef gives the same answers on every repeat; Qwen without thinking varies between repeats.
+
+## What I integrated
+- **Switch:** `AGENT_CLEF=1` turns it on (`USE_CLEF=1` also works). I used the `AGENT_` prefix because `dev/track.py` already records those variables, so `AGENT_CLEF=1 dev/run-local.sh v1 "&lt;note&gt;" clef-pagecheck` would log the A/B run.
+- **New module `agent/clef.py`:** the Clef call with retries, a concurrency cap and token counting. It also has:
+  - a `page_check(last_action)` tool that workers can call to ask whether the current page is a dead end;
+  - an `outcome_hint(view, action)` helper for an automatic check after actions, not wired in yet;
+  - the link-choice and yes/no helpers the eval uses.
+- **Hook already in place:** `agent/worker.py` gets the import plus `tools=[*browser, *tools, *clef.tools()]` in `run_worker`. With the switch off this adds nothing.
+- **Hooks I only describe:** those files belong to the other agents.
+  - `browser_tools.py`: in `SiteSession.act` and `goto`, after `look()`, put `await clef.outcome_hint(self.view, f"{kind} {ref}")` above the view. This costs about 1 s per action, so it's better limited to searches, opening messages and submits.
+  - `submit.py`: `await clef.dead_end(view, "entered the TAN and submitted")` would catch a rejected TAN quickly.
+- **`agent.json`:** still lists only `"qwen"`. Add `"clef"` to `"models"` before shipping with the switch on. The sandbox can't take run variables, so a sandbox A/B also needs the default flipped in code.
+
+**Branch and commit:** `worktree-agent-a0f71dbdbb8caf177`, one commit `c0b62bf` "Add Clef page check behind AGENT_CLEF" (author josteng, nothing under `.claude/`, not pushed). The repo's Entire hook added an `Entire-Checkpoint` line to the commit message; I left it. The 55 unit tests pass. I added one bullet to `docs/learned.md`.
+
+Files:
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177/agent/clef.py`
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177/agent/worker.py`
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177/dev/clef_eval/eval.py`
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177/dev/clef_eval/RESULTS.md`
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177/docs/learned.md`
+- `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177/.gitignore`</result>
+<usage><subagent_tokens>172858</subagent_tokens><tool_uses>67</tool_uses><duration_ms>2043554</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177</worktreePath><worktreeBranch>worktree-agent-a0f71dbdbb8caf177</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Entire should stay enabled. What are the subagents going? Is there anything to act on or add to it?
+
+---
+
+<task-notification>
+<task-id>b0z0ejyg2</task-id>
+<tool-use-id>toolu_015JibVgyybsYSo5zQ2kesVG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/b0z0ejyg2.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for v1 run result and show the end" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bgq96t4ne</task-id>
+<tool-use-id>toolu_01CBCgrFnvm3tURpNDo7DF8A</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bgq96t4ne.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for the old v1 run to end" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a546a7d5cb47e8948</task-id>
+<tool-use-id>toolu_0118CCdNxgXPgM8CFCu4p4M6</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a546a7d5cb47e8948.output</output-file>
+<status>completed</status>
+<summary>Agent "Hand-derived answer and local scorer" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>I've built the local scorer and the hand-derived public-1 answer, all under `checks/` (now in `.gitignore`; nothing committed, `agent/` untouched). On the v1-style answer the scorer gives 10.00, the same as the platform. Points: decision 5 and reference 5. Discount, total, consistency, both extra checks and all position fields score 0.
+
+## Expected answer
+VG-2027-7093, bid, EUR, discount 5 %, total_net **356949.62**.
+
+| Pos | Material | Qty | Base | Surcharge | Packaging | Rebate | Unit price | Lead time (weeks) |
+|---|---|---|---|---|---|---|---|---|
+| 01.01 | HZ-1609 | 25 | 2743.58 | 6.69 | 1.59 | 0.00 | 2614.68 | 2 |
+| 01.02 | HZ-2170 | 29 | 705.15 | 5.91 | 4.57 | 0.00 | 680.37 | 3 |
+| 01.03 | HZ-2170 | 16 | 753.23 | 12.57 | 4.97 | 580.41 | 734.49 | 11 |
+| 01.04 | HZ-3916 | 21 | 2107.18 | 5.25 | 1.26 | 2131.11 | 1906.85 | 3 |
+| 01.05 | HZ-6932 | 130 | 1866.15 | 8.06 | 1.94 | 11683.58 | 1692.74 | 3 |
+
+The traps this answer depends on:
+- **01.01 quantity:** Q&amp;A 3916 is dated after 8148, so 25 (not 26), even though its number is lower.
+- **01.01 material:** HZ-8405 matches too but is blocked (status 03).
+- **01.05 quantity:** Q&amp;A 8152 (32 Satz) is withdrawn by 8153, so 26 Satz × 5 = 130 pieces.
+- **A-2 stroke:** the latest amendment gives 482 usable; adding 2 × 9 mm reserve gives 500 nominal.
+- **A-4 stroke:** 576 usable plus 2 × 12 mm reserve gives 600 nominal.
+- **Price units and locales:** the USD and EUR conditions are per 100 pieces, and "64,853 (en-US)" means 64853.
+- **Valid records:** the FX rate is 1.0873 (the 1.25 mail is future-dated) and the metal index is 3.15, the window containing 25.01.
+- **01.01 delivery:** pooled demand 25 exceeds the commitment ceiling of 24, so stock delivery applies (2 weeks).
+- **01.03 delivery:** pooled HZ-2170 demand is 45 against a ceiling of 44, so production (11 weeks).
+- **01.02 delivery:** the ceiling is 45, inclusive, so the 3-week commitment applies.
+
+## Fields I'm unsure about
+- **01.05 surcharge_per_unit:** rounding the whole per-piece sum once gives 8.06, which I used. Rounding each component separately gives 8.05. This is the only field where the two readings differ; `--alt` accepts 8.05.
+- **How the two extra checks map to fields (guess):** I scored `withdrawn_answer` as the 01.05 quantity, and `index_window` as the surcharge_per_unit of all five positions.
+- **Arithmetic consistency (guess):** I required every position to be present and total_net to equal the sum of quantity × unit price. v1 rules out a plain sum check: an empty answer with total 0 would pass it, yet the platform gave 0.
+- **Extra or duplicate positions:** each costs one position share (13 points), with position points floored at 0.
+
+## agent/calc.py
+I fed it the same facts and its output matches my independent Decimal derivation on every field. I found no bug that changes public-1. Three risks for other scenarios:
+- **Day-only date checks** (`calc.py:263`, `:294`, `:338`): records are compared by date only. A record dated the same day but later than the scenario time (for example 25.01 at 10:00 when the scenario is 09:00) would be accepted.
+- **Undated withdrawals** (`calc.py:259-266`): `resolve_quantity` honours a withdrawal even if the withdrawal itself is future-dated.
+- **Overlapping metal-index windows** (`calc.py:365`): if two windows contain the date, the last-listed rate wins.
+
+## Using the scorer
+```sh
+uv run --project agent python checks/derive.py         # rebuilds expected_public1.json, cross-checks calc.py
+python3 checks/score.py &lt;answer.json&gt; [--alt] [--json]  # per-field table and quality out of 100
+```
+It accepts the plain answer object or one wrapped as `{"answer": {...}}`, and money as numbers or German-format strings. Blank or missing fields score 0.
+
+Scouting was read-only: no bid form, no TAN requests. The browsing scripts and raw dumps are in `/Users/jonasstenglein/.claude/jobs/064ce75e/tmp/expect/`.
+
+Files are in `checks/`:
+- `expected_public1.json`
+- `derivation.md`
+- `score.py`
+- `derive.py`
+- `v1_answer.json`</result>
+<usage><subagent_tokens>232102</subagent_tokens><tool_uses>58</tool_uses><duration_ms>981975</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>affb9add17bc3753b</task-id>
+<tool-use-id>toolu_01RUSxJxCorefaXRdHv4fJvJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/affb9add17bc3753b.output</output-file>
+<status>completed</status>
+<summary>Agent "Speed up bid flow: thinking by phase" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The v1 bid now takes 87 to 105 s in sandbox test runs instead of 201 s, across 4 runs of the final variant. Every run scored quality 10, was eligible, had no extra positions, and signed with all 5 positions omitted. Cost per run fell from $0.019 to $0.008 to $0.010. Nothing was pushed, merged or submitted.
+
+Branch `worktree-agent-affb9add17bc3753b`, commits:
+- `7770963` Split bid worker into form and review phases
+- `dc42886` Check the summary once, then sign thinking off
+- `caf0c1c` Log fill_in actions and reject empty selects
+- `4ce4c18` Add bid speed-up lessons to learned.md
+- `3765615` Record final-variant test runs
+
+## Why most timing came from test runs, not local runs
+After your update about shared scouting logins I moved the full sign-and-TAN measurements to test runs. Local runs had shown a correct TAN being rejected because another team's request invalidated it.
+- Local runs now only cover the form phase. `AGENT_STOP_BEFORE_SIGN=1` stops before any TAN request, so we don't invalidate other teams' TANs.
+- One of my earlier full local runs did request TANs on the shared webmail before your warning.
+
+## Timings per variant (test runs)
+
+| Variant | Duration | Quality | Cost |
+|---|---|---|---|
+| Baseline (all thinking on) | 201 s | 10 | $0.019 |
+| A: form thinking off, review thinking on | 271 s (1 run) | 10 | $0.019 |
+| B: thinking off in both phases | 171 s (1 run) | 10 | $0.012 |
+| **Final variant** (4 runs) | **94, 96, 105, 87 s** | 10 each | $0.008 to $0.010 |
+
+Run A was slow because of three problems, all fixed in the final variant:
+- The model went off to read every tender document (35 s). The goal now says to tick the acknowledgement without opening them.
+- The mail lookup hit its 8-step limit once. It now reloads the inbox first, gets a hint to open the message's own page, and has 10 steps.
+- Some thinking-on steps took 20 to 34 s.
+
+On the local scouting sites, the form phase alone (stopping before the TAN) took 41 to 52 s with the final code, against about 126 s before.
+
+## What changed
+- **`briefing.py` and `llm.py`:** the briefing runs with thinking off and is still validated against the brief: 6 to 10 s instead of 17 to 45 s. `llm.thinking(phase, default)` reads `THINKING_BRIEF`, `THINKING_FORM`, `THINKING_REVIEW` and `THINKING_SIGN`, so experiments are recorded.
+- **`agent.py`:** all sites are signed in while the brief is being read.
+- **Bid worker in `submit.py`**, which now runs in three steps:
+  - **Form phase:** thinking off, up to the review/signing page. The contact email is looked up first and put straight into the goal.
+  - **Summary check:** one model call compares the review page with the requirements.
+  - **Signing phase:** thinking stays off when the check passes, and turns on if the check fails or finds problems.
+- **TAN hand-off:** a new `request_signing_tan(ref)` tool clicks the button the model chose, then fetches the TAN. It also passes the portal's reply (e.g. "Anforderung N") to the mail worker so it picks that exact message. The bid worker can't request another TAN while a lookup runs.
+- **Fewer steps:** a new `fill_in(actions)` tool lets the model do several fills, selects, ticks or clicks on one page in one step; switch it off with `AGENT_FILL_IN=0`. I did not turn on parallel tool calls: element refs are renumbered after every view, so batched clicks could hit the wrong button.
+- **Clean exit:** once the bid is in, the platform closes the run's model token and the last model call gets a 401. That error is now caught; the score was never affected.
+
+## Correctness checks
+- **Summary check accuracy:** I tested it offline on 6 edited copies of a real review page: one correct, plus an alternative offer, a 5 % discount, a position not omitted, an extra position and a transposed VAT id. With thinking off it judged all 6 correctly in 2 to 5 s; with thinking on, also all 6, but in 4 to 27 s. So it defaults to off.
+- **Wrong clicks:** with thinking off, the form phase sometimes clicks "Position hinzufügen" (add position) instead of "Weiter". It recovered in every run and the scores show no extra positions, but it costs steps.
+
+## Recommended defaults (already in the code)
+- `THINKING_BRIEF=0`, `THINKING_FORM=0`, `THINKING_REVIEW=0`, `THINKING_SIGN` on only when the check doesn't pass.
+- `AGENT_FILL_IN=1`.
+
+No changes to `worker.py`, `browser_tools.py` or `extract.py` were needed; the new tools live in `submit.py`. Lessons are added as bullets in `docs/learned.md`, and all test runs are recorded in `experiments/runs.jsonl`.</result>
+<usage><subagent_tokens>188842</subagent_tokens><tool_uses>95</tool_uses><duration_ms>2324344</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-affb9add17bc3753b</worktreePath><worktreeBranch>worktree-agent-affb9add17bc3753b</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Is ther more thing to explore etc. as I have some tokens next for the next 33min. Maybe also fable etc. Maybe still submit this sped up v1 as some in-btween to check performance does  not degenerate.
+
+---
+
+<task-notification>
+<task-id>aca9e958470992e7f</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/aca9e958470992e7f.output</output-file>
+<status>completed</status>
+<summary>Agent "Cut tokens in page views" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Waiting for the 3-rep series to finish.</result>
+<usage><subagent_tokens>175163</subagent_tokens><tool_uses>99</tool_uses><duration_ms>2583706</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aca9e958470992e7f</worktreePath><worktreeBranch>worktree-agent-aca9e958470992e7f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Also: Could we supply tools or so to the agent that do some of the comment steps our agents struggle with? Like without spending time and tokens on it? Or are the websites behaving too random?
+
+---
+
+<task-notification>
+<task-id>bfe5vat66</task-id>
+<tool-use-id>toolu_01GU1E9fWgrC3cuLmiSZANpr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/bfe5vat66.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the faster v1 submission and record it" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1517d68c93e50e27</task-id>
+<tool-use-id>toolu_01DmhpDUDSHgDFVSxmFYvjE5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a1517d68c93e50e27.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix calc.py date edge cases" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Committed and green. Nothing more is needed; here is the report.
+
+## Result
+
+Branch `worktree-agent-a1517d68c93e50e27`, commit `2a5267d` ("Compare record times, not days, in calc rules"), author `josteng &lt;jonas@stenglein.dev&gt;`, `Entire-Checkpoint:` trailer kept by the hook, nothing pushed, nothing under `.claude/` staged. Only `agent/calc.py` and `agent/tests/test_calc.py` changed. `uv sync -q &amp;&amp; uv run --no-sync python -m unittest discover -s tests`: 65 tests, OK (was 55).
+
+All paths below are under `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a1517d68c93e50e27/`.
+
+### Fixes in `agent/calc.py`
+
+**Shared timestamp semantics (lines 31-72).** New helpers `_instant` (naive stamps count as UTC), `_order` (total order over dates and timestamps, a date sorts as its UTC midnight), `_not_later(value, cutoff)` (two timestamps compare as instants; anything involving a date-only value compares by calendar day), and a `Stamp = Annotated[date | datetime, BeforeValidator(_parse_stamp)]` field type. The validator keeps `"2026-05-15"` a `date` and `"2026-05-15T09:00:00Z"` an aware `datetime` (plain pydantic would turn a midnight `T00:00:00Z` string into a date). `BidInput.scenario_date`, `QuantityChange.date`, `Amendment.date`, `DatedRecord.date`, `PriceCondition.valid_from/valid_to` and `MetalIndexRate.valid_from/valid_to` are now `Stamp`; existing `date`/`datetime` callers work unchanged.
+
+1. **Same-day-but-later records (risk 1)**: `resolve_quantity` (line 129-144), `apply_amendments` (line 160-178) and `latest_authoritative` (line 196-208) now filter with `_not_later(record.date, scenario_date)` and pick the latest with `_order(...)`, so a 10:00Z record does not apply to a 09:00Z scenario, a `+02:00` offset is honoured, and a date-only record on the scenario day still applies. `latest_authoritative` covers approvals (16/21), FX fixing, packaging, commitments, setup pool, bonus and metal-index mails; `Approval`/`fx_rates` carry no dates themselves, so no further change was needed there.
+2. **Future-dated withdrawals (risk 2)**: new `Withdrawal(number, date, withdraws)` model (line 122). `resolve_quantity` accepts `Iterable[str | Withdrawal]` for `withdrawn`; a `Withdrawal` only removes its target when `_not_later(w.date, scenario_date)`; bare strings keep the old meaning (already dated by the caller), so the `set[str]` API is backward compatible.
+3. **Overlapping metal windows (risk 3)**: `metal_rate` (line 233-256) no longer takes the last listed hit. Among windowed hits the latest `valid_from` wins (a missing start is the oldest); if the remaining candidates (equally late windows, or several unwindowed rates) carry different rates it raises `CalcError("ambiguous metal index rates ...")`. Windows are inclusive whole days against a scenario timestamp.
+4. **Rule 4 conditions**: `valid_condition` (line 213-219) uses `_not_later` on both inclusive endpoints; a scenario at 23:30Z on the `valid_to` day is still inside, and it no longer raises `TypeError` when the scenario is a `datetime` (previously `date &lt;= datetime` would have crashed once a timestamp was passed).
+
+### Tests added in `agent/tests/test_calc.py` (invented values: `T-0001`, `M-100`, `IDX`, `example.com`)
+
+- `Quantity.test_same_day_change_after_scenario_time_ignored`, `test_same_day_change_with_offset`, `test_date_only_change_on_scenario_day_applies`, `test_future_withdrawal_does_not_apply`
+- `Requirement.test_amendment_after_scenario_time_ignored`
+- `Pricing.test_condition_valid_on_timestamp`, `test_scenario_timestamp_in_bid` (end-to-end `calculate()` with `scenario_date="2026-05-15T09:00:00Z"`)
+- `Discount.test_record_after_scenario_time_is_future` (rule 21 helper with UTC, offset and date-only records)
+- `MetalIndex.test_overlapping_windows_latest_start_wins`, `test_ambiguous_windows_raise`, plus an inclusive-end-day assertion in `test_window_contains_date`
+
+One design note for the caller: a naive `datetime` from a site is treated as UTC. If a worker ever extracts local wall-clock times without an offset, it should attach the offset before handing them to calc.</result>
+<usage><subagent_tokens>97442</subagent_tokens><tool_uses>32</tool_uses><duration_ms>330256</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a1517d68c93e50e27</worktreePath><worktreeBranch>worktree-agent-a1517d68c93e50e27</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0f71dbdbb8caf177</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a0f71dbdbb8caf177.output</output-file>
+<status>completed</status>
+<summary>Agent "Evaluate and integrate Clef decisions" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The monitor that just expired was a leftover watch on the eval run, which had already finished. Nothing new came in and nothing needs doing; the results and the commit `c0b62bf` from my last message still stand.</result>
+<usage><subagent_tokens>172378</subagent_tokens><tool_uses>67</tool_uses><duration_ms>3011281</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177</worktreePath><worktreeBranch>worktree-agent-a0f71dbdbb8caf177</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0f71dbdbb8caf177</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a0f71dbdbb8caf177.output</output-file>
+<status>completed</status>
+<summary>Agent "Evaluate and integrate Clef decisions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>That notice was another leftover background wait on the same eval run, which had already finished. It adds no new results; the table and commit `c0b62bf` from my report still stand.</result>
+<usage><subagent_tokens>173053</subagent_tokens><tool_uses>67</tool_uses><duration_ms>3015418</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177</worktreePath><worktreeBranch>worktree-agent-a0f71dbdbb8caf177</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4138905529ccb8b3</task-id>
+<tool-use-id>toolu_01BaUK4AKhtPJLFqjKPhgtZ4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a4138905529ccb8b3.output</output-file>
+<status>completed</status>
+<summary>Agent "Robustness check with renamed sites" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The role mapping survives a mutated run: in all 4 runs, `briefing.py` mapped the bid and mail sites to the renamed ids. The worker checks are weaker: the tender read passed 3 of 3 final runs, but the mail lookup passed only 1 of 3, and both fail for reasons other than the mutation. The static audit of the committed `agent/` code found no site ids, URL paths or branching on siteId; the brief-specific wording sits mostly in the work-in-progress `research*.py`.
+
+## Robustness results
+Each run renames the site ids to site-a..d (shuffled) and replaces the product names. The model rewords the intro and submission paragraphs with every value kept, and the sections and bullets are reordered. A second variant also hides the URLs from the briefing step. Final script, seeds 2–4:
+
+| Check | Seed 2 | Seed 3 | Seed 4 |
+|---|---|---|---|
+| Briefing, renamed ids (roles, reference, company, VAT id) | PASS 27s | PASS 86s | PASS 79s |
+| Briefing, masked URLs (roles from the brief text alone) | PASS 17s | PASS 22s | PASS 51s |
+| Mail address (`Mailbox.address`) | PASS 4s | PASS 2s | PASS 4s |
+| Mail lookup, no TAN (director approval) | PASS 70s | FAIL 75s | FAIL 74s |
+| Tender positions (5, same each run) | PASS 89s | PASS 44s | PASS 77s |
+| Read-only guard | 0 blocked | 0 blocked | 0 blocked |
+
+Whole runs took 139–200s.
+
+- **Mail lookup failures:** both ran out of the 20-step budget. The mailbox needs a narrowed search behind gates that lock again on every page. Workers only see the siteId as a label, so this is a capability gap, not a mutation effect.
+- **Seed 1** ran with vaguer goals: both briefing variants passed, while the mail lookup and tender read ran out of steps.
+- **A hang:** in one attempt, starting the mail session hung for over 10 minutes after the cookie click timed out. `agent.solve()` starts the sessions with no time limit, so the same hang would block the real run.
+
+## Audit, highest risk first
+**HIGH**
+1. `research_mail.py:210, 377-382, 448, 525`: a sender counts only if it is exactly a role name from the brief at the bidder's own mail domain. A brief that names people or outside addresses rejects every record without saying so. Accept the sender identity the brief states.
+2. `research_mail.py:270-273`: the prompt states public-1's search behaviour as fact (AND search, nothing above 20 hits, separate archive search), which is close to a fixed click path. Say "search every folder; narrow the search if nothing shows".
+3. `research_tender.py:263-272` and `research_mail.py:181-224`: which facts live on which site is fixed in code. Map facts to sites from the brief through a model.
+4. `research_mail.py:283` and `research_tender.py:81-84`: the model converts numbers itself ("5,15 → 5.15"), so en-US "1,250" becomes 1.25. Keep the raw strings and parse them with `evidence.parse_number`.
+
+**MED**
+- The `research.py` goals describe public-1 traps: "Verbindliche Unterlagen", Originalwortlaut, one record per page, "search help".
+- `evidence.py` defaults to German formats: a lone comma is a decimal, slashed dates are day-first, and the "none" words are German.
+- `submit.py:52-53`: TAN messages assumed "newest first, highest request number".
+- `submit.py:86`: "German number format" is hardcoded. Use the format the brief's submission steps name.
+- `briefing.py` assumes exactly one bid site and one mail site, and ignores `submission.siteId` from the run contract.
+- `browser_tools.py:85-91, 173-194`: the sign-in, cookie and error-page helpers only know German and English wording and one-step password forms.
+- `calc.py:333-336`: the same sender-at-bidder-domain assumption as finding 1.
+
+**LOW:** the German hints in prompts (`worker.py:21` "German industrial company", USt-IdNr., Konditionsgruppe), rule numbers in comments, the `## Site access` split in `research.py:152`, and `dev/smoke.py` goals keyed on public-1 site ids.
+
+## Recommended fixes
+- Give `solve()` a time limit on session start, with one retry.
+- Use `task["submission"]["siteId"]` to confirm the bid site the briefing returns.
+- Make mail lookups take the search hints from the brief, and give them a budget that allows for gates locking again.
+- Parse every number through one locale-aware parser.
+- Treat sender rules and fact locations as data read from the brief, not code.
+
+## Branch and commit
+Branch `worktree-agent-a4138905529ccb8b3`, one commit `a4961c4` "Add robustness check against mutated runs". Not pushed, nothing under `agent/` changed. Run it from the repo root:
+
+`HEADLESS=1 uv run --project agent python dev/robustness.py --runs 3 [--seed N] [--json out.jsonl]`
+
+The script reads the scouting logins from `atira scout --env` itself, because this environment blocks `eval`. On the tender site it blocks submission, TAN and any other state-changing requests, and it never sends the logins to the model.
+
+Files are in /Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a4138905529ccb8b3:
+- dev/robustness.py</result>
+<usage><subagent_tokens>146146</subagent_tokens><tool_uses>49</tool_uses><duration_ms>1984683</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a4138905529ccb8b3</worktreePath><worktreeBranch>worktree-agent-a4138905529ccb8b3</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aab59b204c79e220a</task-id>
+<tool-use-id>toolu_0122Bg7cJ9jw1QFyiYyfmkHt</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/aab59b204c79e220a.output</output-file>
+<status>completed</status>
+<summary>Agent "Generic efficiency tools for workers" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Both tool variants are already past the list stage (mail: 7 rows over 3 pages in one call; spec: 4 rows over 4 pages). Waiting for the run to finish before I write up the numbers.</result>
+<usage><subagent_tokens>214652</subagent_tokens><tool_uses>95</tool_uses><duration_ms>1145508</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aab59b204c79e220a</worktreePath><worktreeBranch>worktree-agent-aab59b204c79e220a</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6463a61263f3c79d</task-id>
+<tool-use-id>toolu_01D7qVf6ahKZj2D2uZ6j6T2V</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a6463a61263f3c79d.output</output-file>
+<status>failed</status>
+<summary>Agent "v2 configurator position filling" failed: Agent terminated early due to an API error: You've hit your session limit · resets 7:30pm (Europe/Berlin) (error type rate_limit, HTTP 429, request id req_011CftwwoEhkDnYZUd9di3Zo, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now write the integration with a script (replacing `_requirements` and patching `submit_bid`).</result>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a6463a61263f3c79d</worktreePath><worktreeBranch>worktree-agent-a6463a61263f3c79d</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Can you continue now that the session limits reset, just maybe more Opus and not Fable?
+
+---
+
+<task-notification>
+<task-id>aca9e958470992e7f</task-id>
+<tool-use-id>toolu_01HGwuB3G7cTV9QMknE438qB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/aca9e958470992e7f.output</output-file>
+<status>completed</status>
+<summary>Agent "Cut tokens in page views" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've committed the view changes on branch `worktree-agent-aca9e958470992e7f`, rebased onto current main. All 73 tests pass. The biggest finding was a bug rather than a token saving: the old history trim removed the page the model was on. Token savings are clear on form pages (about 25% fewer input tokens) and small on read-only browsing.
+
+**What changed**
+- **Latest view kept (bug fix, `worker.py`).** The old trim kept the page only in the newest request. So after any `note()` call the model had no page in front of it and invented values. Traces show refused notes with made-up dates and prices, and pages reopened over and over. Now the newest page view stays until a newer one arrives. The first prompt's page view is cut to its URL once a newer view exists.
+- **Same-page diffs (`extract.py`, `browser_tools.py`).** After click, fill, select, check, goto or back on the same page, the model gets only the changed parts, or "unchanged". Each control counts as its own piece, so a changed field is one short line, and refs in unchanged parts stay valid. Navigating to another page, or a change bigger than 40% of the page, still sends the whole view. The full view stays in context, so it stays in the cached prefix.
+- **Long selects.** Option lists over 600 characters show the count, the first 8 and the last 2. A new `options(ref, contains)` tool lists or searches them. A failed `select` now names close matches instead of waiting 10 s for a timeout. Option text the model looks up counts as seen, so the grounding check still covers it.
+- **Grounding check unchanged in behaviour.** `session.seen` still gets every whole view.
+- **Stopped workers now report usage.** Workers that hit the step limit used to log no token counts; now they record requests, input, cached and output tokens.
+- **Prompt caching** needed no change: the instructions and tools never vary between steps.
+
+**Main moved, one fix needed.** The new `agent/research.py` reads `session.look()` text directly to extract content. So diffs only come from the browser tools (`look(brief=True)`). Every other caller still gets the whole view, and such a read resets the diff baseline. I did not touch `research.py`.
+
+**Before/after**
+
+Read-only smoke goals, 3 runs each. All runs used the same scouting account, alternating base and new:
+
+| site | variant | done | requests | input tokens | cached | seconds | tokens/request |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| tender-portal | base | 0/3 | 26.3 | 117,915 | 68,469 | 134 | 4,478 |
+| tender-portal | new | 1/3 | 24.0 | 94,524 | 55,403 | 119 | 3,938 |
+| customer-portal | base | 3/3 | 26.7 | 97,077 | 56,971 | 126 | 3,640 |
+| customer-portal | new | 2/3 | 26.3 | 88,180 | 51,221 | 105 | 3,349 |
+| erp | base | 3/3 | 6.7 | 16,199 | 6,795 | 23 | 2,430 |
+| erp | new | 3/3 | 7.3 | 18,391 | 9,931 | 33 | 2,508 |
+| mail | base | 3/3 | 2.7 | 8,584 | 1,045 | 24 | 3,219 |
+| mail | new | 3/3 | 6.3 | 18,848 | 9,408 | 42 | 2,976 |
+
+- **Mail costs more, but the answers are correct.** The inbox shows 3 messages per page. Base returned "5 newest" after 1 to 3 requests by guessing items 4 and 5, or saying it couldn't see them. New opens page 2 and returns the right five.
+- **Model wandering dominates the noise.** The model often keeps going after it has the answer, so read-only results vary a lot between runs.
+- **Diffs barely fired on read-only sites**, since those runs mostly navigate between pages.
+
+To test diffs where they matter, I made an invented local form (fill quantity and reference, pick 1 of 61 options, tick terms, save). This proxies the bid configurator, which I never opened:
+
+| variant | runs | correct | requests | input tokens | seconds |
+| --- | --- | --- | --- | --- | --- |
+| base | 7 | 7/7 | 6 to 7 | ~27,700 | 19 to 28 |
+| new | 13 | 13/13 | 7 to 8 | 17,700 to 21,900 | 20 to 38 |
+
+The configurator spends most of its steps on same-page actions, so this is where the 217k-token bid worker should save most. That is an estimate; I could not measure it under the read-only rule.
+
+**Evaluated and dropped**
+- **Repeated boilerplate removal.** Limited to lines that can't hide content, it saved only 1 to 4% of view text. Without that limit it would hide status words that are traps ("gültig", "ersetzt", table headers).
+- **Path-only URLs in old history stubs.** Tiny gain, and that part is mostly cached anyway.
+
+Per request, about 5k characters are fixed instructions and tools, about 3k history and 1.5 to 2.5k the current view. 40 to 55% of input tokens were reported as cached. Browser actions take 0.3 to 0.7 s and a model step 1 to 4 s, so the number of steps drives both tokens and time.
+
+**Accuracy risks**
+- The model must combine a diff with its last full view. On the form it did so correctly every time (20/20 runs), but the real configurator hasn't been tested.
+- With a long select, the model sometimes calls `options()` even when it knows the exact text, which costs one extra request. It never picks an option automatically, so look-alike entries like "&lt;ref&gt;-A" can't be chosen by mistake.
+- If the model never calls `options()`, it can't see the hidden options in a long list.
+
+**Branch and commits**
+- `660d2ec` Trim page views and keep the latest one (includes the `docs/learned.md` lessons)
+- `622a81e` Send view diffs only from browser tools
+
+Not pushed or merged.
+
+My measurement scripts are outside the repo, in `/tmp/rfqbench/`. `bench.py` is a smoke variant whose tender goal forbids the bid area, and `formbench.py` is the invented form. Two run-time notes:
+- One early run hung for over 15 minutes during site start-up and did not happen again. The bench now has a timeout there; `SiteSession.start()` in the agent still has none.
+- One ERP run hit the site's "guest_unavailable" error.</result>
+<usage><subagent_tokens>207148</subagent_tokens><tool_uses>15</tool_uses><duration_ms>162070</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-aca9e958470992e7f</worktreePath><worktreeBranch>worktree-agent-aca9e958470992e7f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae228d7357caa804d</task-id>
+<tool-use-id>toolu_011dPRW2A6KwPTtgoSheNcQc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/ae228d7357caa804d.output</output-file>
+<status>completed</status>
+<summary>Agent "v2 tender Q&amp;A and mail authority workers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The tender worker is correct on public-1, but the mail worker is not done: in the last full run it got 4 of its 9 record kinds, and the run took 471 s against the ~3 min target. Nothing is committed, and I didn't open the bid form or request TANs. One incident first: my early `pkill -f "atira scout"` very likely killed your other local `agent.py` run, because its shell command line contained that text. Since then I only stopped my own processes by PID.
+
+**Files (new, none existing edited):**
+- `agent/research_tender.py`: tender worker (positions + bidder Q&amp;A) and its records. It also holds the helpers the mail side reuses: `collect_pages`, `keep_pages`, `keep_results`, the grounding check and `reader_model()`.
+- `agent/research_mail.py`: model-planned mail research, the rule-21 selection and `bid_clauses()`, which maps everything onto calc's inputs. I kept my models here because `agent/evidence.py` belongs to the spec/ERP agent; I only use its `parse_number`/`parse_int`/`parse_date`.
+- `dev/research_check_records.py`: run with `eval "$(atira scout --env)"; HEADLESS=1 uv run --project agent python dev/research_check_records.py [tender|mail]`. `MAIL_TABS` defaults to 5; the runs below used 9.
+
+**Fixes you asked for, all applied:**
+- **Prompt wording:** prompts no longer contain text copied from public-1 pages.
+- **No fixed search list or senders:** `plan_searches()` has a model read the brief and return each record kind with its subject, its sender in the form the brief states it (local part at the bidder's domain, full address, or name) and the siteId that holds it. Code only lists the calc content types it can fill.
+- **Sender check:** a sender counts if it matches that brief-stated form.
+- **Search instructions:** now generic ("search every folder; change the words if nothing shows").
+- **Numbers:** readers copy numbers and dates as written, and parsing is locale-aware through `evidence` (the page's number format is reported too).
+- **Time checks:** use full timestamps, and `resolve_quantity` now gets the scenario datetime.
+- **Not fully done (your point 3):** the tender worker still runs on `briefing.bid_site`, which a model chose, but no model maps Q&amp;A facts to sites one by one.
+
+**Tender results (public-1, checked against the pages by hand):** all correct, about 50 to 120 s per run.
+- **Quantities:** 01.01 24→25 (answer 3916 is dated later than 8148, so it wins). 01.05 22→26 Satz, because answer 8153 withdraws 8152.
+- **Condition groups:** 01.02 K-3650, 01.03 K-2264, 01.05 K-9018.
+- **Keys:** packaging VP-1134 on all positions; delivery keys per position; pool RP-5730 and bonus PB-1474 on 01.03 to 01.05.
+- **Setup fees:** 85,00 (01.03) and 57,50 (01.05).
+- **Amendments:** R-6156 A-2 stroke 485, then 482 (the later one wins).
+
+**Mail results:** every record it did return was right, and the decoys were rejected:
+
+| Record | Value | Decoy avoided |
+|---|---|---|
+| Approval | 5 %, minimum order value 1.00 | the 4 % mail is older, the `-A` one is a look-alike |
+| Metal index MET-4607 | three windows: 2.75 / 3.15 / 3.95 | |
+| Packaging VP-1134 | 13.25 per carton | |
+| Setup pool RP-5730 | 517.25, largest remainder, ascending ties | |
+| Delivery commitments TZ-* | correct (earlier run) | |
+| FX FX-6282 | 1.0873 (earlier run) | future-dated 1.25 dropped |
+| End reserves ER-4001 / ER-9526 | 9 and 12 mm (earlier run) | |
+| Condition rules | correct (earlier run) | |
+
+In the last run, condition rules, end reserves, commitments, FX and project bonus timed out. The bonus has never been found in any run.
+
+**Why mail is slow and unreliable:**
+- **Proxy latency:** model calls were taking 30 to 36 s, so they hit the 30 s client timeout and retried. Several kinds made only 1 or 2 model calls in their 150 s budget, and the planner alone took about 230 s in that run.
+- **Navigation model:** with thinking off, Qwen invented message ids and subjects and lost track of which folder it was in. `keep_results` now only opens links the worker has actually seen. With thinking on it is more reliable but too slow for 20 steps.
+- **Site:** actions on the mail site sometimes stall for 30 s.
+- **Fragile reading:** the director's approval needs a subject the brief never names, so it depends on the planner's guess (it usually picks Rabattfreigabe, but has used other words that find nothing).
+
+**Harness changes I recommend:**
+1. Give `back()` a `reason: str = ""` parameter, as `submit.py`'s tools have. Qwen calls it with arguments, its retries run out and the worker stops.
+2. Add a timeout parameter to `llm.model()`. Thinking readers need about 180 s, so I built `reader_model()` with `with_options`.
+3. Let `run_worker` drop `note()` and the "record every fact with note()" instruction. Refused notes waste a lot of steps.
+4. Cap `SiteSession.settle()`/`act()` time: a cookie click that never returned once hung a tab for minutes, and form presses take 30 s.
+5. Read nested optional objects tolerantly: Qwen sends them as JSON strings. `MailRecord` decodes them; other typed outputs may need the same.
+6. Mail search: the planned `site_tools.py` search tool should take my `collect_pages` and `keep_results` helpers. My view is that mail search won't hit the time target until searches cost one step each.
+7. calc takes only one setup pool and one bonus plan; `bid_clauses` reports a problem if there are several.
+
+The tender records feed calc directly (quantity changes, withdrawals, amendments). End reserves are returned per key with their revision for the spec matcher.</result>
+<usage><subagent_tokens>435772</subagent_tokens><tool_uses>12</tool_uses><duration_ms>759095</duration_ms></usage>
+</task-notification>
+
+---
+
+So what quality are we at? And how far are we now?
+
+---
+
+"depending on how much mail finishes within the 20 minutes." what does this mean? Others are getting a score of 100 in under 10 minutes apparently.
+
+---
+
+Also: why do the other teams to so many test runs and we don't?
+
+---
+
+What is in v2?
+
+---
+
+And how much longer are you expecting this to take? And why does it take so long?
