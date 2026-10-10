@@ -1353,3 +1353,7 @@ What score do you expect overall?
 ---
 
 The sandbox ones are free btw (so the test runs on atira) so this would be possible? Or is it already doing test runs on atira?
+
+---
+
+How are the runs doing?
