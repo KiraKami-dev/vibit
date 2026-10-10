@@ -19,3 +19,9 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   total consistency score 0 even with every position omitted and total 0; positions need v2.
 - v1 submission: review passed, quality 10, 4:41 min, $0.024; team rank #4. Submit from a clean `git archive` export
   of agent/ so unfinished files never reach the package reviewer.
+- Clef vs Qwen offline eval (`dev/clef_eval/RESULTS.md`, 68 hand-labelled decisions from real page views, 3
+  repeats): Clef answers in ~1 s and is deterministic, but loses to Qwen at picking links (79 % vs 93 % thinking
+  off) and at judging the right record (88 % vs 98 % thinking on; it takes `<ref>-A` look-alikes for the exact
+  reference and misses ordering such as "highest request number"). It is exact at "is this an error, empty, locked
+  or decoy page after my action" (100 % vs 93 % for Qwen off, same speed). Kept only that check, behind
+  `AGENT_CLEF=1` (`page_check` tool); Clef's `score` criteria must be a list, and many `noul` questions fit one call.
