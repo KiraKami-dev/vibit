@@ -126,6 +126,29 @@ def position_on_page(view: str, position: str) -> bool:
     return re.search(r"(?<![\w.])" + re.escape(position.strip()) + r"(?![\w]|\.\d)", head) is not None
 
 
+def resolve_position(given: str, numbers, view: str) -> tuple[str | None, list[str]]:
+    """
+    Which of the bid's position `numbers` to enter now, and the bid's positions the page shows. The page decides:
+    forms show positions in their own order, and a model that expects the bid's order names the next position of
+    its list while the page shows another one (live runs omitted correct positions that way). So: the position
+    `given` names (also inside a longer label such as "Position 01.04") when the page shows it, else the one bid
+    position the page shows, else `given` itself if it is a bid position (the caller reports it is not on the page),
+    else None (the page shows none of the bid's positions, or several).
+    """
+    numbers = [str(n).strip() for n in numbers]
+    shown = [n for n in numbers if position_on_page(view, n)]
+    given = ZERO_WIDTH.sub("", given or "").strip()
+    named = [given] if given in numbers else [
+        n for n in numbers if re.search(r"(?<![\w.])" + re.escape(n) + r"(?![\w]|\.\d)", given)]
+    if len(named) == 1 and named[0] in shown:
+        return named[0], shown
+    if len(shown) == 1:
+        return shown[0], shown
+    if len(named) == 1 and not shown:
+        return named[0], shown
+    return None, shown
+
+
 def complete_positions(answer: dict, attributes: dict[str, dict[str, str]] | None = None) -> dict[str, dict]:
     """
     The positions that can be entered, by position number: every required answer field present and, for the

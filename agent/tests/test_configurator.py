@@ -15,6 +15,7 @@ from configurator import (  # noqa: E402
     match_option,
     parse_number,
     position_on_page,
+    resolve_position,
 )
 
 
@@ -90,6 +91,23 @@ class Controls(unittest.TestCase):
         self.assertTrue(position_on_page(VIEW, "2.10"))
         self.assertFalse(position_on_page(VIEW, "2.1"))
         self.assertFalse(position_on_page(VIEW, "10"))
+
+    def test_resolve_position_page_wins(self):
+        page = "## Item 3.07\nStep 4\nShape [e7 select \"Shape\" options: a | b]\n[e9 button \"Skip item\"]"
+        bid = ["3.01", "3.02", "3.07"]
+        # the model names the next item of its own list while the form shows another one of the bid
+        self.assertEqual(resolve_position("3.02", bid, page), ("3.07", ["3.07"]))
+        self.assertEqual(resolve_position("3.07", bid, page), ("3.07", ["3.07"]))
+        self.assertEqual(resolve_position("Item 3.07 (pump)", bid, page), ("3.07", ["3.07"]))
+        # the page shows an item outside the bid: nothing to enter there (the caller tells the model to omit it, or
+        # that the named bid item is not on the page and only items outside the bid are omitted)
+        other = page.replace("3.07", "3.05")
+        self.assertEqual(resolve_position("3.05", bid, other), (None, []))
+        self.assertEqual(resolve_position("3.02", bid, other), ("3.02", []))
+        # no item on the page at all (a page in transition): the named bid item, reported as not on the page
+        blank = "## Totals\n[e7 textbox \"Net\" value=\"\"]"
+        self.assertEqual(resolve_position("3.02", bid, blank), ("3.02", []))
+        self.assertEqual(resolve_position("9.99", bid, blank), (None, []))
 
 
 class Positions(unittest.TestCase):
