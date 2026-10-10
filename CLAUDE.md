@@ -9,14 +9,26 @@ per team). The agent lives in `agent/` and is built on the Atira starter kit. Ke
   site scouting notes and the roadmap v0 to v5. Read it first. Its scouting notes describe public-1 only: they inform
   generic helpers, they must never become hardcoded paths, labels, values or prompt text (the private final run uses
   other software, layouts and data).
-- `agent/`: starter kit (`run.py`, `browsers.py`, `models.py`) plus the harness (`llm.py`, `extract.py`,
-  `browser_tools.py`, `worker.py`, `tracing.py`) and v1: `agent.py` `solve()` reads the brief (`briefing.py`), then
-  `submit.py` signs a bid with every position omitted, fetching the contact address and TAN from the webmail.
-  `calc.py` holds the deterministic bid rules (tested, not wired in yet). `agent.json` asks for 2 browsers.
-- `dev/smoke.py`: the v0 check (one worker per site logs in and reads a page). From the repo root:
-  `eval "$(atira scout --env)"; HEADLESS=1 uv run --project agent python dev/smoke.py [siteId ...]`
-- Next: v2 to v4 for field points (research workers for spec, ERP, tender Q&A and mail, wired into `calc.py`). Use
-  `git status` and `atira status` for the current state; do not trust dated numbers in this file.
+- `agent/` (v2, reaches quality 100 in the sandbox): `agent.py` `solve()` warms all site sessions in the background,
+  reads the brief (`briefing.py`), runs research (`orchestrator.py` with `board.py`, `verify.py`; workers in
+  `research.py` spec + ERP, `research_tender.py`, `research_mail.py`; tools in `site_tools.py`), computes the answer
+  with `calc.py`, and enters/signs it via `submit.py` + `configurator.py` (positions without a complete answer are
+  omitted; the bid is always signed). Harness: `llm.py` (per-mode deadlines; opt-in `LLM_STREAM_WATCHDOG`),
+  `extract.py`, `browser_tools.py` (`SiteSession`: resilient starts, `revive()`), `worker.py`, `tracing.py` (run
+  summary printed at the end, since the platform keeps only the last ~260 output lines), `loopwatch.py`, `clef.py`
+  (off unless `AGENT_CLEF=1`). `agent.json` asks for 4 browsers.
+- `dev/`: `smoke.py` (v0 check), `run-local.sh`, `test-run.sh`, `track.py` (run log), `soak.py` (keeps N sandbox test
+  runs of HEAD going: `python3 dev/soak.py --slots 2`), `local-soak.sh` (local runs up to signing, scored by
+  `checks/score.py`), `robustness.py` (renamed sites, reworded brief), `research_check*.py`, `configurator_check.py`.
+- `checks/` (gitignored): hand-derived public-1 answer and `python3 checks/score.py <answer.json>`; never copy its
+  values into `agent/`.
+- Submitting: export committed code with `git archive HEAD agent` into a temp dir and submit/test from there, so
+  untracked work in progress never reaches the package reviewer. Test runs under 20 min can be promoted to a
+  submission (run page button or `POST /v1/runs/<run_id>/promotion`); the promoted run becomes the latest submission.
+- Branches `submitted/<sub id>` mark the exact code of each submission. Use `git status` and `atira status` for the
+  current state; do not trust dated numbers in this file.
+- The scouting logins are shared by all teams: the bid wizard is per browser session (safe), but webmail TANs and ERP
+  sessions collide, so local runs stop before the TAN (`AGENT_STOP_BEFORE_SIGN=1`) and run one at a time.
 
 ## Tracking runs
 
