@@ -30,6 +30,7 @@ from tracing import Trace  # noqa: E402
 # A record list that appends three rows per "load more" click and repeats itself past the end.
 LOAD_MORE = """
 <nav><a href="/x">Home</a><a href="/y">Next steps</a></nav>
+<div class="bar"><a href="/back" title="Zurück">←</a><button title="Neu laden">↻</button></div>
 <h1>Records</h1>
 <table id="hits"><thead><tr><th>Number</th><th>Bore</th></tr></thead><tbody id="rows">
 <tr><td><a href="/rec/1">M-1001</a></td><td>40 mm</td><td><span role="tooltip">status A</span></td></tr>

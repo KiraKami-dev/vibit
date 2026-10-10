@@ -35,8 +35,10 @@ _REF = re.compile(r"\[e\d+ ")
 
 # Words that mark a control which shows more of a list, in any language the sites use. Matched against the control's
 # own name only, so a "next" inside a record title does not count.
-NEXT_WORDS = r"(weiter|mehr|laden|nächste|naechste|next|more|load|show|zeige|folgende|vor|›|»|>|→)"
-STOP_WORDS = r"(zurück|zurueck|vorherige|previous|prev|back|‹|«|<|←|erste|first|letzte|last)"
+NEXT_WORDS = (r"(weiter|mehr|nächste|naechste|next|more|load more|show more|zeige|folgende|vorwärts|vorwaerts|"
+              r"›|»|>|→)")
+STOP_WORDS = (r"(zurück|zurueck|vorherige|previous|prev|back|‹|«|<|←|erste|first|letzte|last|neu laden|reload|"
+              r"aktualisier|refresh|↻|⟳|⌂|öffnen|open|download|herunterladen)")
 
 TOO_MANY = re.compile(r"[^.\n]*(zu viele|too many|mehr als \d+|more than \d+|einschränken|einschraenken|eingrenzen|"
                       r"verfeinern|narrow|refine|zu allgemein|too broad|maximal \d+|at most \d+|limit)[^.\n]*",
@@ -153,9 +155,13 @@ ROWS_JS = r"""
       if (rowsOf(e).length && score(e) > 0) { container = e; how = 'list at ref'; break; }
     }
   }
-  if (!container && path) {
-    try { const e = document.querySelector(path); if (e && rowsOf(e).length) { container = e; how = 'same list'; } }
-    catch (err) {}
+  if (!container && path) {  // the list read before: still marked (rows were loaded into it) or at the same path
+    const marked = document.querySelector('[data-ar-list]');
+    if (marked && rowsOf(marked).length) { container = marked; how = 'same list'; }
+    else try {
+      const e = document.querySelector(path);
+      if (e && rowsOf(e).length) { container = e; how = 'same list'; }
+    } catch (err) {}
   }
   if (!container) {
     let best = 0;
@@ -167,6 +173,8 @@ ROWS_JS = r"""
     }
   }
   if (!container) return {rows: [], path: '', how: ''};
+  document.querySelectorAll('[data-ar-list]').forEach(e => e.removeAttribute('data-ar-list'));
+  container.setAttribute('data-ar-list', '1');
   const rows = rowsOf(container).map(r => {
     const links = [];
     for (const a of r.querySelectorAll('a[href],button,[role=link],[role=button],summary')) {
@@ -188,8 +196,8 @@ NEXT_JS = r"""
 ([path, nextWords, stopWords]) => {
   const NEXT = new RegExp(nextWords, 'i'), STOP = new RegExp(stopWords, 'i');
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
-  let container = null;
-  try { container = path ? document.querySelector(path) : null; } catch (e) {}
+  let container = document.querySelector('[data-ar-list]');
+  try { if (!container && path) container = document.querySelector(path); } catch (e) {}
   const found = [];
   const CLICKABLE = 'a[href],button,[role=button],[role=link],input[type=submit],input[type=button]';
   for (const el of document.querySelectorAll(CLICKABLE)) {
@@ -200,11 +208,12 @@ NEXT_JS = r"""
     if (!name || name.length > 40 || !NEXT.test(name) || STOP.test(name)) continue;
     const chrome = el.closest('nav,header,footer,[role=navigation],[role=menubar]');
     if (chrome && !(container && container.contains(el))) continue;
-    let where = 2;
+    let where = 2;  // a control before a known list is never its pagination (toolbars, imitation browser chrome)
     if (container) {
       if (container.contains(el)) where = 0;
       else if (container.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) where = 1;
     }
+    if (container && where === 2) continue;
     found.push({ref: el.getAttribute('data-ar'), name, where});
   }
   found.sort((a, b) => a.where - b.where);
@@ -504,7 +513,9 @@ async def extract_fields(session: SiteSession, fields: dict[str, str], *, thinki
             lines.append(line)
     if dropped:
         lines.append("Not extracted: " + "; ".join(dropped) + ". Open the view that shows them if you need them.")
-    return "\n".join(lines)
+    out = "\n".join(lines)
+    session.seen += "\n" + out  # the readings are derived from page values, so the grounding check accepts them
+    return out
 
 
 async def extract(ctx: RunContext[Deps], fields: dict[str, str]) -> str:
