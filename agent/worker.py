@@ -8,6 +8,7 @@ import re
 import time
 from typing import TypeVar
 
+import clef
 import llm
 from browser_tools import TOOLS, Deps, SiteSession, unseen_values
 from pydantic_ai import Agent, ModelRetry, RunContext
@@ -110,7 +111,7 @@ async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, c
         "Record every fact you establish with note() as soon as you have it, then return the result.",
         "Return the result as soon as you have it.")
     agent = Agent(llm.model(), output_type=output_type, deps_type=Deps, instructions=instructions,
-                  tools=[*browser, *tools], model_settings=llm.settings(thinking), retries=4,
+                  tools=[*browser, *tools, *clef.tools()], model_settings=llm.settings(thinking), retries=4,
                   capabilities=[ProcessHistory(_forget_old_views)])
     if grounded:
         @agent.output_validator

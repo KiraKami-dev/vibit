@@ -1,3 +1,6 @@
 docs/experiments.md
 experiments/local-runs.jsonl
+# hand-derived public-1 answers: site values, local only
 checks/
+# hand-labelled eval set: copied site text, local only
+dev/clef_eval/data/

@@ -58,3 +58,9 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   as cached, so per-request token cuts are modest; the step count dominates tokens and seconds (browser actions
   take 0.3-0.7 s, a model step 1-4 s). Repeated boilerplate lines (footer, title bar) were 1-4 % of view text when
   restricted to safe lines: not worth the risk of hiding status lines, dropped.
+- Clef vs Qwen offline eval (`dev/clef_eval/RESULTS.md`, 68 hand-labelled decisions from real page views, 3
+  repeats): Clef answers in ~1 s and is deterministic, but loses to Qwen at picking links (79 % vs 93 % thinking
+  off) and at judging the right record (88 % vs 98 % thinking on; it takes `<ref>-A` look-alikes for the exact
+  reference and misses ordering such as "highest request number"). It is exact at "is this an error, empty, locked
+  or decoy page after my action" (100 % vs 93 % for Qwen off, same speed). Kept only that check, behind
+  `AGENT_CLEF=1` (`page_check` tool); Clef's `score` criteria must be a list, and many `noul` questions fit one call.
