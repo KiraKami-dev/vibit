@@ -349,6 +349,7 @@ class KindResult:
     kept: list[str] = field(default_factory=list)  # page views of the opened messages
     records: list[MailRecord] = field(default_factory=list)
     seconds: float = 0.0
+    stopped: bool = False  # ran out of time (or stalled) without keeping a message: worth another try
 
 
 async def read_message(view: str, kind: Kind, reference: str) -> MailRecord | None:
@@ -481,15 +482,16 @@ async def _usable(session: SiteSession) -> None:
 
 
 async def _search(session: SiteSession, kind: Kind, reference: str, kept: _Reading, until: float,
-                  again: bool) -> bool:
+                  again: bool) -> str:
     """
     One worker run; it ends at `until`, KEEP_GRACE after its first kept message (the other folders), or when the
-    tab showed no new page for STALL_SECONDS (then the tab is replaced). True if it stalled.
+    tab showed no new page for STALL_SECONDS (then the tab is replaced). Returns "done" (the model finished),
+    "ended" (stopped by time) or "stalled".
     """
     worker = asyncio.create_task(run_worker(
         session, _goal(kind, reference, again), Summary, deadline=until, max_steps=20, thinking=True,
         grounded=False, tools=(paging_tool(Collected()), keep_messages_tool(kept))))
-    stalled = False
+    stalled, ended = False, False
     progress, moved = (session.stamp, len(kept)), time.monotonic()
     try:
         while not worker.done():
@@ -503,6 +505,7 @@ async def _search(session: SiteSession, kind: Kind, reference: str, kept: _Readi
                           else "grace after the first hit" if kept.first else "budget")
                 session.trace.event(session.name, "mail_search_ended", record_kind=kind.name, kept=len(kept),
                                     reason=reason)
+                ended = True
                 break
             await asyncio.wait({worker}, timeout=min(2.0, max(0.1, stop - now)))
     finally:
@@ -517,7 +520,10 @@ async def _search(session: SiteSession, kind: Kind, reference: str, kept: _Readi
                             error=f"{type(error).__name__}: {str(error)[:160]}")
     if stalled:
         await _fresh_tab(session)
-    return stalled
+        return "stalled"
+    if ended or worker.cancelled() or worker.exception() is not None or worker.result()[0] is None:
+        return "ended"
+    return "done"
 
 
 async def _fresh_tab(session: SiteSession) -> None:
@@ -534,26 +540,33 @@ async def _fresh_tab(session: SiteSession) -> None:
         session.trace.event(session.name, "helper_error", helper="fresh_tab", error=str(error)[:160])
 
 
-async def research_kind(session: SiteSession, kind: Kind, reference: str, *, deadline: float | None = None
-                        ) -> KindResult:
+async def research_kind(session: SiteSession, kind: Kind, reference: str, *, deadline: float | None = None,
+                        seconds: float | None = None) -> KindResult:
     """
     Search one record kind on the tab and read what the worker keeps. Each kept message is read right away
-    (alongside the search); a search that keeps nothing gets one more try with a hint while its budget allows.
-    Returns READ_RESERVE before `deadline` at the latest, with whatever was read by then.
+    (alongside the search). `seconds` is the kind's whole search time (the caller shares the mail time over the
+    kinds); without it the kind takes kind_budget() and may add a RETRY_SECONDS retry. A search that keeps nothing
+    is tried once more, with a hint or on a fresh tab after a stall, within that time. Returns READ_RESERVE before
+    `deadline` at the latest, with whatever was read by then; `stopped` says it ran out of time with nothing kept.
     """
     started = time.monotonic()
     result = KindResult(kind)
-    until = started + kind_budget(started, deadline)
+    total = kind_budget(started, deadline) if seconds is None else seconds
+    if deadline is not None:
+        total = max(0.0, min(total, deadline - READ_RESERVE - started))
+    until = started + total
     kept = _Reading(kind, reference)
+    reads: list[asyncio.Task] = []
+    outcome = "ended"
     try:
         await _usable(session)
-        stalled = await _search(session, kind, reference, kept, until, False)
+        outcome = await _search(session, kind, reference, kept, until, False)
         if not kept:  # nothing kept (a stalled tab, a site hiccup, a missed search word): once more, with a hint
             now = time.monotonic()
-            retry = min(RETRY_SECONDS, kind_budget(now, deadline))
+            retry = until - now if seconds is not None else min(RETRY_SECONDS, kind_budget(now, deadline))
             if retry >= MIN_KIND_SECONDS:
                 await _usable(session)
-                await _search(session, kind, reference, kept, now + retry, again=not stalled)
+                outcome = await _search(session, kind, reference, kept, now + retry, again=outcome != "stalled")
         reads = list(kept.reads.values())
         if reads:
             limit = None if deadline is None else max(1.0, deadline - 5 - time.monotonic())
@@ -563,10 +576,11 @@ async def research_kind(session: SiteSession, kind: Kind, reference: str, *, dea
             if not task.done():
                 task.cancel()
     result.kept = list(dict.fromkeys(kept))
+    result.stopped = not kept and outcome != "done"
     result.records = [t.result() for t in reads if t.done() and not t.cancelled() and t.result() is not None]
     result.seconds = round(time.monotonic() - started, 1)
     session.trace.event(session.name, "mail_kind", record_kind=kind.name, seconds=result.seconds,
-                        kept=len(result.kept), read=len(result.records),
+                        kept=len(result.kept), read=len(result.records), stopped=result.stopped,
                         records=[r.model_dump(mode="json") for r in result.records])
     return result
 
