@@ -34,6 +34,7 @@ from briefing import Briefing
 from browser_tools import SiteSession
 from evidence import (EffectiveRequirement, Requirement, effective_requirement, merged_attributes, parse_date,
                       to_position_input, wording_differences)
+from gaps import Calculation, GapFiller
 from research import Erp, ErpResearch, SpecResult, research_spec, reselect, same_revision
 from tracing import Trace
 from verify import VERIFY_SECONDS, confirm_decision, verify_board, wording_check
@@ -857,6 +858,11 @@ class Orchestrator:
                             project_bonus=getattr(clauses, "project_bonus", None))
         return bid, problems
 
+    def calculate(self) -> Calculation:
+        """_calculate() with the form attributes it set, for the gap pass (run again after each gap round)."""
+        result, blank, problems = self._calculate()
+        return Calculation(result, blank, problems, dict(self.attributes))
+
     def fallback_answer(self) -> dict:
         """
         A bid with every position omitted: the reference, the decision, the discount of an approval that was read
@@ -935,7 +941,9 @@ class Orchestrator:
         if self.form_left() > 60:
             await self._bounded(self.verify(), "verify")
         await self._bounded(self.select_materials(), "select")
-        result, blank, problems = self._calculate()
+        # The second pass: what the first answer lacks is retried while research time is left (gaps.py).
+        best = await GapFiller(self).run(self.calculate(), self.calculate)
+        result, blank, problems, self.attributes = best.result, best.blank, best.problems, best.attributes
         if result is not None and result.decision == "no_bid" and result.missing_materials and self.form_left() > 45:
             # Before a no_bid is accepted: are the mismatches that leave positions without material only wording?
             try:
