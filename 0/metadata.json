@@ -1,0 +1,89 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4KHV4SG1YH5WAQM70YXPZZX",
+  "session_id": "064ce75e-f288-40e2-8ed8-853ec224ce81",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-10T18:40:13.254367Z",
+  "branch": "worktree-agent-ac41ca3c327cb4450",
+  "checkpoints_count": 2,
+  "save_step_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "079a880dcabf",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 676,
+    "cache_creation_tokens": 520018,
+    "cache_read_tokens": 100727044,
+    "output_tokens": 253215,
+    "api_call_count": 311,
+    "subagent_tokens": {
+      "input_tokens": 20,
+      "cache_creation_tokens": 29682,
+      "cache_read_tokens": 737712,
+      "output_tokens": 5941,
+      "api_call_count": 10
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_018GPE3fZdLrsUaJFPGx1MCC",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "entire"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bca9216c5d23",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2378,
+        "end": 2379,
+        "entry_ids": [
+          "c3cd0caf-b49d-44e6-9790-d5249b0fa9a9"
+        ],
+        "tool_use_id": "toolu_018GPE3fZdLrsUaJFPGx1MCC"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_018GPE3fZdLrsUaJFPGx1MCC"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: entire",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 90
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 12,
+      "user_lines_removed": 1,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 11,
+        ".claude/skills/entire-search/SKILL.md": 1
+      },
+      "user_removed_per_file": {
+        ".claude/skills/entire-search/SKILL.md": 1
+      }
+    }
+  ]
+}
