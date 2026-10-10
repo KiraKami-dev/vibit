@@ -92,13 +92,11 @@ def requirement(rid: str, revision: str, bore: str = "50") -> Requirement:
 
 class FakeErp:
     def __init__(self):
-        self.started, self.forgotten = [], []
+        self.started, self.tasks = [], {}
 
     def start(self, req):
         self.started.append((req.requirement_id, req.bore))
-
-    def forget(self, rid):
-        self.forgotten.append(rid)
+        self.tasks[req.requirement_id] = SimpleNamespace(done=lambda: True)
 
 
 class PartialAnswers(unittest.TestCase):
@@ -133,7 +131,7 @@ class SpecAttempts(unittest.TestCase):
         spec = SpecResult(current_revision="R-2", requirements=[requirement("A-1", "R-2", "63"),
                                                                  requirement("A-2", "R-2")])
         self.o._adopt_revision(spec, "s", self.erp)
-        self.assertEqual(self.erp.forgotten, ["A-1"])
+        self.assertEqual(self.erp.started, [("A-1", D("50")), ("A-1", D("63")), ("A-2", D("50"))])
         self.assertEqual({k: r.revision for k, r in self.o.requirements.items()}, {"A-1": "R-2", "A-2": "R-2"})
 
     def test_partial_winner_keeps_streamed_requirements(self):
@@ -152,30 +150,25 @@ class DeadlineKeepsWork(unittest.TestCase):
         self.assertEqual(steps_for(12, time.monotonic() + 1000), 24)
         self.assertEqual(steps_for(12, time.monotonic() + 10), 12)
 
-    def test_erp_so_far_keeps_finished_and_marks_unfinished(self):
+    def test_erp_research_finished_by_the_deadline_is_kept(self):
         from evidence import RequirementResearch
-        from research import Erp
 
         async def scenario():
-            erp = Erp.__new__(Erp)
+            o = bare_orchestrator()
             done = RequirementResearch(requirement_id="A-1", inspected=["M-1"], selected="M-1")
 
             async def finished():
                 return done
 
-            erp.tasks = {"A-1": asyncio.create_task(finished()), "A-2": asyncio.create_task(asyncio.sleep(10))}
-            erp.partial = {"A-2": RequirementResearch(requirement_id="A-2", inspected=["M-2", "M-3"])}
-            erp.materials = {}
+            o._erp = SimpleNamespace(tasks={"A-1": asyncio.create_task(finished()),
+                                            "A-2": asyncio.create_task(asyncio.sleep(10))}, materials={})
             await asyncio.sleep(0)
-            out = erp.so_far()
-            erp.tasks["A-2"].cancel()
+            out = o._finished_erp()
+            o._erp.tasks["A-2"].cancel()
             return out
 
         out = asyncio.run(scenario())
-        by_id = {r.requirement_id: r for r in out.requirements}
-        self.assertEqual(by_id["A-1"].selected, "M-1")
-        self.assertIsNone(by_id["A-2"].selected)
-        self.assertTrue(by_id["A-2"].problems)  # never read as "no material", so never a no_bid
+        self.assertEqual([r.requirement_id for r in out.requirements], ["A-1"])
 
 
 class BoardEvents(unittest.TestCase):

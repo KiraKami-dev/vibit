@@ -47,7 +47,7 @@ from research_tender import (
     reader_settings,
     ungrounded,
 )
-from worker import run_worker, steps_for
+from worker import run_worker
 
 KIND_SECONDS = 150.0  # one record kind's search; a stuck tab must not hold up the others
 
@@ -331,7 +331,6 @@ class KindResult:
     kept: list[str] = field(default_factory=list)  # page views of the opened messages
     records: list[MailRecord] = field(default_factory=list)
     seconds: float = 0.0
-    stopped: bool = False  # the search ran out of its budget (or steps) before it returned
 
 
 async def read_message(view: str, kind: Kind, reference: str) -> MailRecord | None:
@@ -355,15 +354,14 @@ async def read_message(view: str, kind: Kind, reference: str) -> MailRecord | No
         return None
 
 
-async def research_kind(session: SiteSession, kind: Kind, reference: str, *, deadline: float | None = None,
-                        seconds: float | None = None) -> KindResult:
+async def research_kind(session: SiteSession, kind: Kind, reference: str, *, deadline: float | None = None
+                        ) -> KindResult:
     started = time.monotonic()
     result = KindResult(kind)
-    budget = time.monotonic() + (seconds or KIND_SECONDS)
-    summary, _ = await run_worker(session, _goal(kind, reference), Summary, deadline=min(deadline or budget, budget),
-                                  max_steps=steps_for(20, budget, per_step=7.0), thinking=True,
-                                  grounded=False, tools=(paging_tool(Collected()), keep_results_tool(result.kept)))
-    result.stopped = summary is None
+    budget = time.monotonic() + KIND_SECONDS
+    await run_worker(session, _goal(kind, reference), Summary, deadline=min(deadline or budget, budget),
+                     max_steps=20, thinking=True,
+                     grounded=False, tools=(paging_tool(Collected()), keep_results_tool(result.kept)))
     views = list(dict.fromkeys(result.kept))
     records = await asyncio.gather(*(read_message(v, kind, reference) for v in views))
     result.records = [r for r in records if r is not None]

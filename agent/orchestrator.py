@@ -15,6 +15,7 @@ The tender Q&A and mail research modules are optional imports: without one the p
 (spec + ERP + calc), and fields that need its facts stay blank. The mail side has its own deadline. Nothing here names a site, a label or a value of any dataset.
 """
 import asyncio
+import inspect
 import os
 import re
 import time
@@ -51,6 +52,7 @@ MAIL_TABS = int(os.environ.get("MAIL_TABS", "4"))
 SPEC_STEPS_FAST = int(os.environ.get("SPEC_STEPS_FAST", "25"))  # navigation steps of the fast spec attempt
 SPEC_STEPS_THINKING = int(os.environ.get("SPEC_STEPS_THINKING", "35"))  # and of the careful one, run alongside
 SELECT_SECONDS = 75.0  # the final material choice (a model call per requirement, in parallel)
+KIND_OPTIONS = set(inspect.signature(research_mail.research_kind).parameters) if research_mail else set()
 KIND_MIN_SECONDS = 120.0  # a mail record kind's search budget: at least this
 KIND_MAX_SECONDS = 240.0  # and at most this, from the mail time left per kind
 MAIL_RETRY_SECONDS = 90.0  # mail time a kind's second try needs
@@ -463,8 +465,9 @@ class Orchestrator:
             self.board.problem("specification", f"attempts disagree on the revision ({self.spec_revision} vs "
                                                 f"{spec.current_revision}); the finished attempt's is used")
             for rid in list(self.requirements):
-                if erp:
-                    erp.forget(rid)
+                task = erp.tasks.pop(rid, None) if erp else None  # researched for the other revision
+                if task is not None and not task.done():
+                    task.cancel()
             self.requirements = {}
             self.spec_revision = None
         for req in spec.requirements:
@@ -561,8 +564,10 @@ class Orchestrator:
             while not queue.empty() and time.monotonic() < deadline - 20:
                 kind, tries = queue.get_nowait()
                 try:
+                    budget = self._kind_seconds(deadline, queue.qsize())
+                    options = {"seconds": budget} if "seconds" in KIND_OPTIONS else {}
                     found = await research_mail.research_kind(session, kind, self.reference, deadline=deadline,
-                                                               seconds=self._kind_seconds(deadline, queue.qsize()))
+                                                               **options)
                 except Exception as error:  # one failed kind must not cost the others
                     self.board.problem("mails", f"{kind.name}: {type(error).__name__}: {str(error)[:160]}")
                     continue
@@ -571,7 +576,10 @@ class Orchestrator:
                     found.records = [*earlier.records, *found.records]
                     found.kept = [*earlier.kept, *found.kept]
                 self.mail_results[kind.name] = found
-                if (getattr(found, "stopped", False) and not tries
+                stopped = getattr(found, "stopped", None)
+                if stopped is None:  # out of its budget without reading a message
+                    stopped = not found.records and found.seconds >= min(budget, getattr(research_mail, "KIND_SECONDS", budget)) - 5
+                if (stopped and not tries
                         and deadline - time.monotonic() > MAIL_RETRY_SECONDS):
                     # Out of its budget: once more at the end of the queue, from a fresh start on this tab.
                     self.board.problem("mails", f"{kind.name}: search stopped at its budget; tried once more")
@@ -653,9 +661,17 @@ class Orchestrator:
             for task in [*self._erp.tasks.values(), *self._erp.materials.values()]:
                 if not task.done():
                     task.cancel()
-            if self.erp is None:  # stopped at the deadline: what finished still counts, searches included
-                self.erp = self._erp.so_far()
+            if self.erp is None:  # stopped at the deadline: what finished still counts
+                so_far = getattr(self._erp, "so_far", None)
+                self.erp = so_far() if so_far is not None else self._finished_erp()
         self.rework = {"mails": self._rework_mail}
+
+    def _finished_erp(self) -> ErpResearch:
+        def finished(tasks):
+            return {k: t.result() for k, t in tasks.items()
+                    if t.done() and not t.cancelled() and t.exception() is None and t.result() is not None}
+        return ErpResearch(requirements=list(finished(self._erp.tasks).values()),
+                           materials=finished(self._erp.materials))
 
     async def _rework_mail(self, doubtful: list) -> None:
         names = {f.key.split("/")[0] for f in doubtful}
@@ -686,11 +702,18 @@ class Orchestrator:
             return
         effective = [self.effective(req) for req in self.requirements.values()]
         own = {r.requirement_id: r.selected for r in self.erp.requirements}
-        try:  # one hung model call must not hold the bid: choices not made in time are the ERP workers' own
-            chosen = await reselect(effective, self.erp, self.trace, timeout=SELECT_SECONDS)
-        except Exception as error:
-            self.board.problem("select", f"reselect: {type(error).__name__}; the ERP workers' choices are used")
-            chosen = {}
+        # One choice per requirement, side by side: one hung model call must not cost the others; choices not made
+        # in time are the ERP workers' own.
+        tasks = {req.requirement_id: asyncio.create_task(reselect([req], self.erp, self.trace)) for req in effective}
+        _, late_tasks = await asyncio.wait(tasks.values(), timeout=SELECT_SECONDS)
+        for task in late_tasks:
+            task.cancel()
+        if late_tasks:
+            await asyncio.gather(*late_tasks, return_exceptions=True)
+        chosen = {}
+        for rid, task in tasks.items():
+            if task.done() and not task.cancelled() and task.exception() is None:
+                chosen.update(task.result())
         late = sorted(set(own) - set(chosen))
         if late:
             self.board.problem("select", f"no new choice in time for {late}; the ERP workers' choices are used")
