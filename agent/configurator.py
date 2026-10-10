@@ -126,6 +126,20 @@ def position_on_page(view: str, position: str) -> bool:
     return re.search(r"(?<![\w.])" + re.escape(position.strip()) + r"(?![\w]|\.\d)", head) is not None
 
 
+def unmapped(view: str, entry: dict, fields: dict[str, str]) -> tuple[list[str], list[str]]:
+    """
+    Answer values of `entry` that no control is mapped to, and the labels of the page's fields (text boxes, lists)
+    that no mapping names. Both non-empty means the model probably skipped part of the form (a live run left every
+    price breakdown field empty that way).
+    """
+    mapped = {clean(label) for label in fields}
+    names = set(fields.values())
+    values = sorted(k for k in entry if k in MONEY_KEYS | COUNT_KEYS | {"material_number"} and k not in names)
+    labels = [label for _, kind, label in controls(view)
+              if kind in ("select", "textbox", "textarea") and clean(label) not in mapped]
+    return values, labels
+
+
 def resolve_position(given: str, numbers, view: str) -> tuple[str | None, list[str]]:
     """
     Which of the bid's position `numbers` to enter now, and the bid's positions the page shows. The page decides:

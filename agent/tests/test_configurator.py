@@ -16,6 +16,7 @@ from configurator import (  # noqa: E402
     parse_number,
     position_on_page,
     resolve_position,
+    unmapped,
 )
 
 
@@ -91,6 +92,15 @@ class Controls(unittest.TestCase):
         self.assertTrue(position_on_page(VIEW, "2.10"))
         self.assertFalse(position_on_page(VIEW, "2.1"))
         self.assertFalse(position_on_page(VIEW, "10"))
+
+    def test_unmapped(self):
+        page = ('Qty [e7 textbox "Qty" value=""]\nPrice [e8 textbox "Price" value=""]\n'
+                'Base [e9 textbox "Base per piece" value=""]\n[e10 button "Next"]')
+        entry = {"position": "1", "quantity": 4, "unit_price": 2.5, "base_unit_price": 2.0, "bore": "40"}
+        self.assertEqual(unmapped(page, entry, {"Qty": "quantity", "Price": "unit_price"}),
+                         (["base_unit_price"], ["Base per piece"]))
+        full = {"Qty": "quantity", "Price": "unit_price", "base per piece": "base_unit_price"}
+        self.assertEqual(unmapped(page, entry, full), ([], []))
 
     def test_resolve_position_page_wins(self):
         page = "## Item 3.07\nStep 4\nShape [e7 select \"Shape\" options: a | b]\n[e9 button \"Skip item\"]"

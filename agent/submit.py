@@ -18,7 +18,8 @@ import llm
 from briefing import Briefing
 from browser_tools import Deps, SiteSession
 from calc import position_key
-from configurator import FillPlan, complete_positions, fill_position, find_control, german, resolve_position
+from configurator import (FillPlan, complete_positions, fill_position, find_control, german, resolve_position,
+                          unmapped)
 from extract import locate
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
@@ -180,6 +181,7 @@ class PositionDesk:
         self.entered: set[str] = set()
         self.choices: dict[str, dict[str, str]] = {}
         self.next_button = ""
+        self.asked_unmapped = False
 
     @property
     def tools(self) -> tuple:
@@ -246,6 +248,14 @@ class PositionDesk:
         if time.monotonic() > self.deadline - SIGNING_RESERVE:
             return refuse("time", "Time is short: leave this and every remaining position out and go on to "
                                   "signing. " + self.so_far(session))
+        values, labels = unmapped(view, entry, plan.fields)
+        if values and labels and not self.asked_unmapped:  # asked once per run; the next call fills as mapped
+            self.asked_unmapped = True
+            return refuse("unmapped", f"Nothing entered yet. This bid has values for {', '.join(values)}, but no "
+                                      f"control is mapped to them, while these fields of the page are not mapped: "
+                                      f"{'; '.join(labels)}. Call again now with fields that add every one of them "
+                                      "that takes such a value (the mapping you gave stays); leave out fields that "
+                                      "match none.")
         async with session.lock:
             log: list[str] = []
             try:
