@@ -72,16 +72,17 @@ ul.feed li:first-child{border-top:0}
 </section>
 
 <section>
-  <h2>Leaderboard</h2>
+  <h2>Test-run leaderboard</h2>
+  <p class="hint" id="doneHint"></p>
+  <div class="card"><table id="done"></table></div>
+</section>
+
+<section>
+  <h2>Submission leaderboard</h2>
   <p class="hint">Order: eligible, then quality, then cost × time. “vs us” compares cost × time with ours.</p>
   <div class="card"><table id="board"></table></div>
 </section>
 
-<section>
-  <h2>Runs we watched finish</h2>
-  <p class="hint">Only runs this monitor has seen end; it starts empty and fills as the stage rotates.</p>
-  <div class="card"><table id="done"></table></div>
-</section>
 </main>
 
 <script>
@@ -113,8 +114,8 @@ function render(){
   $('kpis').innerHTML=k.map(([a,b])=>`<div class="kpi"><b>${num(b)}</b><span>${a}</span></div>`).join('');
 
   // live runs
-  const runs=[...S.runs].sort((a,b)=>(b.secs||0)-(a.secs||0));
-  $('liveHint').textContent=`The stage page lists ${S.listed} of ${S.running_total??'?'} running runs at a time and rotates them; we show what it shows.`;
+  const runs=[...S.window].sort((a,b)=>(b.secs||0)-(a.secs||0));
+  $('liveHint').textContent=`The stage page lists only ${S.listed} of ${S.running_total??'?'} running runs (the newest starts). We record every run it shows, so each team's early pace builds up below.`;
   $('live').innerHTML=runs.length?`<thead><tr><th>Team</th><th class="l">Type</th><th class="l">Phase</th><th>Elapsed</th><th>Calls</th><th>Cost</th><th>Calls/min</th><th>$/call</th><th>Calls</th></tr></thead><tbody>`+
     runs.map(r=>{const m=r.secs>0?r.calls/(r.secs/60):null,pc=r.calls>0?r.cost/r.calls:null;
       return `<tr class="${r.team===us?'us':''}"><td>${esc(r.team)}</td><td class="l"><span class="tag ${/scored/i.test(r.kind)?'scored':''}">${esc(r.kind||'run')}</span></td>
@@ -137,12 +138,22 @@ function render(){
   $('board').insertAdjacentHTML('afterend','');
   scatter(E,us);
 
-  // finished
-  const F=S.finished.filter(r=>r.secs!=null).slice(0,25);
-  $('done').innerHTML=F.length?`<thead><tr><th>Team</th><th class="l">Type</th><th>Duration</th><th>Calls</th><th>Cost</th><th>Ended</th></tr></thead><tbody>`+
-    F.map(r=>`<tr class="${r.team===us?'us':''}"><td>${esc(r.team)}</td><td class="l"><span class="tag ${/scored/i.test(r.kind)?'scored':''}">${esc(r.kind||'run')}</span></td>
-    <td>${fmtT(r.secs)}</td><td>${num(r.calls)}</td><td>${usd(r.cost)}</td><td class="mute">${ago(r.ended*1000)}</td></tr>`).join('')+'</tbody>'
-    :'<tbody><tr><td class="empty">Nothing yet.</td></tr></tbody>';
+  // test-run leaderboard (early pace, from every test run the stage has shown)
+  const T={};
+  for(const r of S.all){
+    if(!/test/i.test(r.kind||'')||!(r.secs>=20)||!(r.calls>0))continue;
+    const t=T[r.team]||(T[r.team]={team:r.team,runs:0,secs:0,calls:0,cost:0,deep:0,last:0});
+    t.runs++;t.secs+=r.secs;t.calls+=r.calls;t.cost+=r.cost;t.deep=Math.max(t.deep,r.secs);t.last=Math.max(t.last,r.last);
+  }
+  const TL=Object.values(T).sort((a,b)=>a.cost/a.secs-b.cost/b.secs);
+  const dwell=S.all.filter(r=>r.last>r.first).map(r=>r.last-r.first);
+  const avgDwell=dwell.length?dwell.reduce((a,b)=>a+b,0)/dwell.length:null;
+  $('doneHint').textContent=`Test runs only, no quality. Built from what the stage shows: early-run pace, not final totals. ${S.all.length} runs recorded`+(avgDwell?`, each visible about ${fmtT(avgDwell)} on average`:'')+'. Sorted by cost per minute, cheapest first.';
+  $('done').innerHTML=TL.length?`<thead><tr><th>#</th><th class="l">Team</th><th>Runs seen</th><th>Calls/min</th><th>Cost/min</th><th>$/call</th><th>Avg at last sight</th><th>Furthest seen</th><th>Last seen</th></tr></thead><tbody>`+
+    TL.map((t,i)=>`<tr class="${t.team===us?'us':''}"><td>${i+1}</td><td class="l">${esc(t.team)}</td><td>${t.runs}</td>
+    <td>${(t.calls/t.secs*60).toFixed(0)}</td><td>${usd(t.cost/t.secs*60)}</td><td>${usd(t.cost/t.calls)}</td>
+    <td>${fmtT(t.secs/t.runs)}</td><td>${fmtT(t.deep)}</td><td class="mute">${ago(t.last*1000)}</td></tr>`).join('')+'</tbody>'
+    :'<tbody><tr><td class="empty">No test runs recorded yet.</td></tr></tbody>';
 
   // feed
   const ev=((L.activity&&L.activity.events)||[]).slice(0,14);
@@ -174,34 +185,13 @@ function scatter(E,us){
   svg.innerHTML=o;
 }
 
-// Run history is built here, in the viewer's browser, from successive snapshots.
 const US=new URLSearchParams(location.search).get('us')||'error404.ai';
-const KEY='stage-watch-v1',MAX_SAMPLES=300,GONE_AFTER=2;
-let store={runs:{},finished:[]};
-try{const d=JSON.parse(localStorage.getItem(KEY)||'null');if(d&&d.runs)store=d}catch(e){}
-const persist=()=>{try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){}};
-
 function ingest(snap){
-  const now=snap.at,seen=new Set();
-  for(const r of snap.rows){
-    seen.add(r.id);
-    const run=store.runs[r.id]||(store.runs[r.id]={id:r.id,team:r.team,kind:r.kind,first_seen:now,samples:[],miss:0});
-    Object.assign(run,{phase:r.phase,last_seen:now,miss:0});
-    if(r.kind)run.kind=r.kind;
-    if(r.secs!=null){
-      Object.assign(run,{secs:r.secs,calls:r.calls,cost:r.cost});
-      const l=run.samples[run.samples.length-1];
-      if(!l||l[1]!==r.secs||l[2]!==r.calls||l[3]!==r.cost){run.samples.push([now,r.secs,r.calls,r.cost]);if(run.samples.length>MAX_SAMPLES)run.samples.shift()}
-    }
-  }
-  for(const id of Object.keys(store.runs)){
-    if(seen.has(id))continue;
-    const run=store.runs[id];
-    if(++run.miss>=GONE_AFTER){run.ended=run.last_seen;store.finished.unshift(run);delete store.runs[id];store.finished.length=Math.min(store.finished.length,200)}
-  }
-  persist();
-  S={us:US,polled_at:now,running_total:snap.running_total,listed:snap.rows.length,
-     runs:Object.values(store.runs),finished:store.finished,live:snap.live};
+  const hist=Object.entries(snap.runs||{}).map(([id,r])=>({id,team:r.team,kind:r.kind,phase:r.phase,
+    secs:r.secs,calls:r.calls,cost:r.cost,first:r.first,last:r.last,samples:r.s||[]}));
+  const inWin=new Set(snap.rows.map(r=>r.id));
+  S={us:US,polled_at:snap.at,running_total:snap.running_total,listed:snap.rows.length,
+     window:hist.filter(r=>inWin.has(r.id)),all:hist,live:snap.live,errors:snap.errors||{}};
 }
 
 async function tick(){

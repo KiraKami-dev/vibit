@@ -54,7 +54,7 @@ def parse_fragment(markup):
     return total, rows
 
 
-def snapshot():
+def fetch_snapshot():
     api = lambda n: get(f"{BASE}/v1/challenges/{CHALLENGE}/{n}")
     jobs = {
         "fragment": lambda: get(f"{BASE}/challenges/{CHALLENGE}/stage.fragment", False),
@@ -73,6 +73,83 @@ def snapshot():
         e.pop("members", None)
         e.pop("history", None)
     return {"at": time.time(), "running_total": total, "rows": rows, "live": out, "errors": errors}
+
+
+# --- shared run history, kept in one Vercel Blob object -----------------------
+HIST_PATH = "stage-history.json"
+KEEP_SECS = 6 * 3600       # forget runs not seen for this long
+MAX_SAMPLES = 40           # per run; thinned by dropping every other point
+
+
+def _blob_token():
+    tok = os.environ.get("BLOB_READ_WRITE_TOKEN")
+    if tok:
+        return tok
+    env = os.path.join(os.path.dirname(__file__), "..", ".env.local")   # local check only
+    try:
+        for line in open(env):
+            if line.startswith("BLOB_READ_WRITE_TOKEN="):
+                return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return None
+
+
+def load_history(tok):
+    store = tok.split("_")[3].lower()        # vercel_blob_rw_<storeId>_<secret>
+    url = f"https://{store}.public.blob.vercel-storage.com/{HIST_PATH}?t={time.time_ns()}"
+    try:
+        return json.loads(get(url, False)).get("runs", {})
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {}
+        raise
+
+
+def save_history(tok, runs):
+    req = urllib.request.Request(
+        f"https://blob.vercel-storage.com/{HIST_PATH}",
+        data=json.dumps({"runs": runs}).encode(), method="PUT",
+        headers={"Authorization": f"Bearer {tok}", "x-api-version": "7", "User-Agent": UA,
+                 "x-content-type": "application/json", "x-add-random-suffix": "0",
+                 "x-allow-overwrite": "1", "x-cache-control-max-age": "60"})
+    urllib.request.urlopen(req, timeout=8, context=CTX).read()
+
+
+def merge(runs, rows, now):
+    for r in rows:
+        run = runs.setdefault(r["id"], {"team": r["team"], "kind": r["kind"], "first": now, "s": []})
+        run.update(last=now, phase=r["phase"])
+        if "secs" in r:
+            run.update(secs=r["secs"], calls=r["calls"], cost=r["cost"])
+            pt = [round(now), r["secs"], r["calls"], r["cost"]]
+            if not run["s"] or run["s"][-1][1:] != pt[1:]:
+                run["s"].append(pt)
+                if len(run["s"]) > MAX_SAMPLES:
+                    run["s"] = run["s"][::2] + run["s"][-1:]
+    for rid in [k for k, v in runs.items() if now - v["last"] > KEEP_SECS]:
+        del runs[rid]
+    return runs
+
+
+def snapshot():
+    snap = fetch_snapshot()
+    tok = _blob_token()
+    runs, err = {}, None
+    if tok:
+        try:
+            runs = merge(load_history(tok), snap["rows"], snap["at"])
+            save_history(tok, runs)
+        except Exception as e:                      # live view still works without history
+            err = f"history: {e}"
+            runs = merge({}, snap["rows"], snap["at"])
+    else:
+        err = "history: no blob token"
+        runs = merge({}, snap["rows"], snap["at"])
+    if err:
+        snap["errors"]["history"] = err
+    snap["runs"] = runs
+    return snap
 
 
 class handler(BaseHTTPRequestHandler):
