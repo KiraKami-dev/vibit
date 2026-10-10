@@ -54,7 +54,7 @@ from evidence import (
     parse_weeks,
 )
 from tracing import Trace
-from worker import run_worker
+from worker import run_worker, steps_for
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -419,7 +419,7 @@ async def research_spec(session: SiteSession, briefing: Briefing, *, context: st
     from site_tools import collect  # one step for a document register or a revision list
     views = _keep_views(session, by_text=True)  # every page the attempt shows, for the salvage readers below
     history, _ = await run_worker(session, FIND_SPEC_GOAL, RevisionHistory, context=goal_context, deadline=deadline,
-                                  max_steps=max_steps, tools=(collect,),
+                                  max_steps=steps_for(max_steps, deadline, most=1.4), tools=(collect,),
                                   **_worker_kwargs(notes=False, thinking=thinking))
     if history is None or not history.revisions:
         # The navigator ran out of steps or time, often while already on the history: read the revisions from the
@@ -730,6 +730,7 @@ class Erp:
         self.lock = asyncio.Lock()
         self.idle_limit = float(os.environ.get("ERP_IDLE_SECONDS", "200"))
         self.tasks: dict[str, asyncio.Task] = {}
+        self.partial: dict[str, RequirementResearch] = {}  # searched requirements whose choice is still open
         # a few tabs at once: when the ERP drops its session, every open tab signs in again at the same moment
         self.tabs = asyncio.Semaphore(int(os.environ.get("ERP_TABS", "8")))
         self.started_at: float | None = None
@@ -803,7 +804,8 @@ class Erp:
                 except Exception:
                     continue
                 report, _ = await run_worker(session, SEARCH_GOAL.format(group=req.catalog_group, want=_want(req)),
-                                             SearchReport, deadline=self.deadline, max_steps=14,
+                                             SearchReport, deadline=self.deadline,
+                                             max_steps=steps_for(14, self.deadline),
                                              **_worker_kwargs(notes=False))
                 await self._close(session)
             finally:
@@ -813,6 +815,7 @@ class Erp:
         if report is None:
             out.problems.append("search worker returned no result")
             return out
+        self.partial[req.requirement_id] = out  # what is known so far, should the deadline come first
         out.search_term = report.search_term
         out.candidates = [Candidate(material_number=c.material_number.strip(), link=c.link.strip(),
                                     bore=_num(c.bore), stroke=_num(c.stroke), pressure=_num(c.pressure),
@@ -851,7 +854,8 @@ class Erp:
                 if link:
                     await self.open(session, link)
                 coverage, _ = await run_worker(session, DETAIL_GOAL.format(material=number, focus=focus), Coverage,
-                                               deadline=self.deadline, max_steps=12, tools=(open_pages,),
+                                               deadline=self.deadline, max_steps=steps_for(12, self.deadline),
+                                               tools=(open_pages,),
                                                **_worker_kwargs(notes=False, grounded=False))
                 await self._close(session)
             finally:
@@ -876,6 +880,7 @@ class Erp:
 
     def forget(self, requirement_id: str) -> None:
         """Drop a requirement's research (it was started for a revision that did not prevail)."""
+        self.partial.pop(requirement_id, None)
         task = self.tasks.pop(requirement_id, None)
         if task is not None and not task.done():
             task.cancel()
@@ -908,6 +913,26 @@ class Erp:
                 materials[number] = record
         return ErpResearch(requirements=results, materials=materials,
                            seconds=round(time.monotonic() - (self.started_at or time.monotonic()), 1))
+
+    def so_far(self) -> ErpResearch:
+        """
+        What the ERP research has at this moment (the research deadline): finished requirements as they are; a
+        requirement whose search finished but whose materials are not all read keeps its hits, marked unfinished,
+        so a later choice among the materials read so far can still find its exact match (a requirement without
+        a choice stays out of the bid, never a no_bid).
+        """
+        def finished(task: asyncio.Task):
+            return task.done() and not task.cancelled() and task.exception() is None and task.result() is not None
+
+        requirements = {k: t.result() for k, t in self.tasks.items() if finished(t)}
+        for k, research in self.partial.items():
+            if k in self.tasks and k not in requirements:
+                research = research.model_copy(deep=True)
+                research.problems.append("material inspection unfinished at the research deadline")
+                requirements[k] = research
+        materials = {k: t.result() for k, t in self.materials.items() if finished(t)}
+        return ErpResearch(requirements=[requirements[k] for k in sorted(requirements, key=calc.position_key)],
+                           materials=materials)
 
     async def research(self, requirements: list[EffectiveRequirement]) -> ErpResearch:
         for req in requirements:
@@ -970,9 +995,10 @@ async def choose_material(req: EffectiveRequirement, research: RequirementResear
 
 
 async def reselect(requirements: list[EffectiveRequirement], erp: ErpResearch,
-                   trace: Trace | None = None) -> dict[str, str | None]:
+                   trace: Trace | None = None, timeout: float | None = None) -> dict[str, str | None]:
     """Choose again once reserves or amendments have resolved the requirements (the ERP stage inspected every hit,
-    so no further browsing is needed)."""
+    so no further browsing is needed). With `timeout`, the choices finished by then are returned; requirements
+    still being chosen are left out (their ERP workers' own choices stand)."""
     by_id = {r.requirement_id: r for r in erp.requirements}
 
     async def one(req: EffectiveRequirement) -> str | None:
@@ -982,5 +1008,13 @@ async def reselect(requirements: list[EffectiveRequirement], erp: ErpResearch,
         materials = {n: erp.materials[n] for n in research.inspected if n in erp.materials}
         return (await choose_material(req, research, materials, trace))[0]
 
-    chosen = await asyncio.gather(*(one(r) for r in requirements))
-    return {r.requirement_id: c for r, c in zip(requirements, chosen)}
+    tasks = {r.requirement_id: asyncio.create_task(one(r)) for r in requirements}
+    if not tasks:
+        return {}
+    _, late = await asyncio.wait(tasks.values(), timeout=timeout)
+    for task in late:
+        task.cancel()
+    if late:
+        await asyncio.gather(*late, return_exceptions=True)
+    return {rid: t.result() for rid, t in tasks.items()
+            if t.done() and not t.cancelled() and t.exception() is None}

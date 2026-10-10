@@ -143,6 +143,41 @@ class SpecAttempts(unittest.TestCase):
         self.assertEqual(set(self.o.requirements), {"A-1", "A-3"})
 
 
+class DeadlineKeepsWork(unittest.TestCase):
+    def test_step_budget_grows_with_time_left(self):
+        import time
+
+        from worker import steps_for
+        self.assertEqual(steps_for(12, None), 12)
+        self.assertEqual(steps_for(12, time.monotonic() + 1000), 24)
+        self.assertEqual(steps_for(12, time.monotonic() + 10), 12)
+
+    def test_erp_so_far_keeps_finished_and_marks_unfinished(self):
+        from evidence import RequirementResearch
+        from research import Erp
+
+        async def scenario():
+            erp = Erp.__new__(Erp)
+            done = RequirementResearch(requirement_id="A-1", inspected=["M-1"], selected="M-1")
+
+            async def finished():
+                return done
+
+            erp.tasks = {"A-1": asyncio.create_task(finished()), "A-2": asyncio.create_task(asyncio.sleep(10))}
+            erp.partial = {"A-2": RequirementResearch(requirement_id="A-2", inspected=["M-2", "M-3"])}
+            erp.materials = {}
+            await asyncio.sleep(0)
+            out = erp.so_far()
+            erp.tasks["A-2"].cancel()
+            return out
+
+        out = asyncio.run(scenario())
+        by_id = {r.requirement_id: r for r in out.requirements}
+        self.assertEqual(by_id["A-1"].selected, "M-1")
+        self.assertIsNone(by_id["A-2"].selected)
+        self.assertTrue(by_id["A-2"].problems)  # never read as "no material", so never a no_bid
+
+
 class BoardEvents(unittest.TestCase):
     def test_wait_returns_once_the_producer_finishes(self):
         async def scenario():

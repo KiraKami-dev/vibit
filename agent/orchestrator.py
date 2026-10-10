@@ -51,6 +51,8 @@ MAIL_TABS = int(os.environ.get("MAIL_TABS", "4"))
 SPEC_STEPS_FAST = int(os.environ.get("SPEC_STEPS_FAST", "25"))  # navigation steps of the fast spec attempt
 SPEC_STEPS_THINKING = int(os.environ.get("SPEC_STEPS_THINKING", "35"))  # and of the careful one, run alongside
 SELECT_SECONDS = 75.0  # the final material choice (a model call per requirement, in parallel)
+KIND_MIN_SECONDS = 120.0  # a mail record kind's search budget: at least this
+KIND_MAX_SECONDS = 240.0  # and at most this, from the mail time left per kind
 MAIL_RETRY_SECONDS = 90.0  # mail time a kind's second try needs
 MAIL_TAB_STAGGER = 4.0  # seconds between the mail tabs' sign-ins
 MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "540"))  # from the orchestrator's start
@@ -285,32 +287,54 @@ class Orchestrator:
     async def tender(self, site: str) -> None:
         board = self.board
         try:
-            session = await self.session(site, "tender")
+            session, qa_session = await asyncio.gather(self.session(site, "tender"), self.session(site, "qa"),
+                                                       return_exceptions=True)
+            if isinstance(session, BaseException):
+                if isinstance(qa_session, BaseException):
+                    raise session
+                session, qa_session = qa_session, None
+            elif isinstance(qa_session, BaseException):
+                board.problem("tender", f"no second tab ({type(qa_session).__name__}); one worker reads all")
+                qa_session = None
+
+            def on_facts(facts) -> None:
+                self.tender_facts = facts
+                self._post_tender(facts, site, session)
+
             facts = await research_tender.research_tender(session, self.reference, self.scenario,
-                                                          deadline=self.research_deadline)
+                                                          deadline=self.research_deadline, qa_session=qa_session,
+                                                          on_facts=on_facts)
             if facts is None:
                 board.problem("tender", "no positions found")
                 return
-            self.tender_facts = facts
-            for p in facts.positions:
-                value = {k: (str(v) if isinstance(v, Decimal) else v) for k, v in p.model_dump(mode="json").items()}
-                board.post("position", p.position, value,
-                           Source(site=site, url=session.page.url,
-                                  quote=quote_for(session.seen, p.position, str(p.tender_quantity))
-                                  or quote_for(session.seen, p.position)), "tender")
-            for a in getattr(facts, "amendments", []):
-                key = f"{a.revision}/{a.requirement}/{'+'.join(a.attributes)}"
-                board.post("amendment", key, {"date": a.date.isoformat(), **{k: str(v) for k, v in a.attributes.items()}},
-                           Source(site=site, quote=quote_for(session.seen, a.requirement, *map(str, a.attributes.values()))),
-                           "tender")
-            for number in getattr(facts, "withdrawn", []):
-                board.post("withdrawn", number, number, Source(site=site, quote=quote_for(session.seen, number)),
-                           "tender")
+            if self.tender_facts is not facts:  # in case the module did not report it
+                on_facts(facts)
+        except asyncio.CancelledError:
+            if self.tender_facts is not None:
+                board.problem("tender", "stopped at the deadline: positions without the full Q&A are used")
+            raise
         except Exception as error:
             board.problem("tender", f"{type(error).__name__}: {str(error)[:200]}")
         finally:
             for kind in ("position", "amendment", "withdrawn"):
                 board.finish(kind)
+
+    def _post_tender(self, facts, site: str, session: SiteSession) -> None:
+        board = self.board
+        for p in facts.positions:
+            value = {k: (str(v) if isinstance(v, Decimal) else v) for k, v in p.model_dump(mode="json").items()}
+            board.post("position", p.position, value,
+                       Source(site=site, url=session.page.url,
+                              quote=quote_for(session.seen, p.position, str(p.tender_quantity))
+                              or quote_for(session.seen, p.position)), "tender")
+        for a in getattr(facts, "amendments", []):
+            key = f"{a.revision}/{a.requirement}/{'+'.join(a.attributes)}"
+            board.post("amendment", key, {"date": a.date.isoformat(), **{k: str(v) for k, v in a.attributes.items()}},
+                       Source(site=site, quote=quote_for(session.seen, a.requirement,
+                                                         *map(str, a.attributes.values()))), "tender")
+        for number in getattr(facts, "withdrawn", []):
+            board.post("withdrawn", number, number, Source(site=site, quote=quote_for(session.seen, number)),
+                       "tender")
 
     def _amendments(self) -> list[calc.Amendment]:
         return list(getattr(self.tender_facts, "amendments", []) or [])
@@ -491,6 +515,14 @@ class Orchestrator:
         await asyncio.sleep(MAIL_TAB_STAGGER * i)
         return await self.session(site, f"mail{i + 1}")
 
+    def _kind_seconds(self, deadline: float, waiting: int) -> float:
+        """One kind's search budget from the mail time left, shared with the kinds still waiting over the open
+        tabs: more than the default while time is ample, never less than KIND_MIN_SECONDS."""
+        tabs = max(1, len(self.mail_sessions))
+        rounds = 1 + -(-waiting // tabs)  # this kind plus the waiting ones, a round per tab
+        share = (deadline - 20 - time.monotonic()) / rounds
+        return max(KIND_MIN_SECONDS, min(KIND_MAX_SECONDS, share))
+
     async def _mailbox(self) -> str:
         """The bidder's own address (its domain authorises the record senders): the first tab that shows it."""
         if not self.mailbox:
@@ -529,7 +561,8 @@ class Orchestrator:
             while not queue.empty() and time.monotonic() < deadline - 20:
                 kind, tries = queue.get_nowait()
                 try:
-                    found = await research_mail.research_kind(session, kind, self.reference, deadline=deadline)
+                    found = await research_mail.research_kind(session, kind, self.reference, deadline=deadline,
+                                                               seconds=self._kind_seconds(deadline, queue.qsize()))
                 except Exception as error:  # one failed kind must not cost the others
                     self.board.problem("mails", f"{kind.name}: {type(error).__name__}: {str(error)[:160]}")
                     continue
@@ -620,12 +653,8 @@ class Orchestrator:
             for task in [*self._erp.tasks.values(), *self._erp.materials.values()]:
                 if not task.done():
                     task.cancel()
-            if self.erp is None:  # stopped at the deadline: what finished still counts
-                def finished(tasks):
-                    return {k: t.result() for k, t in tasks.items()
-                            if t.done() and not t.cancelled() and t.exception() is None and t.result() is not None}
-                self.erp = ErpResearch(requirements=list(finished(self._erp.tasks).values()),
-                                       materials=finished(self._erp.materials))
+            if self.erp is None:  # stopped at the deadline: what finished still counts, searches included
+                self.erp = self._erp.so_far()
         self.rework = {"mails": self._rework_mail}
 
     async def _rework_mail(self, doubtful: list) -> None:
@@ -656,11 +685,16 @@ class Orchestrator:
         if self.erp is None or not self.requirements:
             return
         effective = [self.effective(req) for req in self.requirements.values()]
-        try:  # one hung model call must not hold the bid; the ERP worker's own choices stand in
-            self.chosen = await asyncio.wait_for(reselect(effective, self.erp, self.trace), SELECT_SECONDS)
+        own = {r.requirement_id: r.selected for r in self.erp.requirements}
+        try:  # one hung model call must not hold the bid: choices not made in time are the ERP workers' own
+            chosen = await reselect(effective, self.erp, self.trace, timeout=SELECT_SECONDS)
         except Exception as error:
             self.board.problem("select", f"reselect: {type(error).__name__}; the ERP workers' choices are used")
-            self.chosen = {r.requirement_id: r.selected for r in self.erp.requirements}
+            chosen = {}
+        late = sorted(set(own) - set(chosen))
+        if late:
+            self.board.problem("select", f"no new choice in time for {late}; the ERP workers' choices are used")
+        self.chosen = {**own, **chosen}
         self.trace.event("select", "done", chosen=self.chosen)
 
     def _unknown_clauses(self, p, clause, pool, bonus) -> None:

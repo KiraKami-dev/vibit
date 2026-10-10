@@ -105,6 +105,17 @@ def _forget_old_views(messages: list[ModelMessage]) -> list[ModelMessage]:
     return result
 
 
+def steps_for(base: int, deadline: float | None, *, per_step: float = 8.0, most: float = 2.0) -> int:
+    """
+    A step budget that grows with the time left: `base` steps at least, more while the deadline is far (one per
+    `per_step` seconds), at most `most` x base. A worker that is getting somewhere is not cut off by a fixed count
+    while there is time; the deadline still bounds every worker.
+    """
+    if deadline is None:
+        return base
+    return max(base, min(int(base * most), int((deadline - time.monotonic()) / per_step)))
+
+
 async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, context: str = "",
                      deadline: float | None = None, max_steps: int = 40, thinking: bool = False,
                      grounded: bool = True, tools: tuple = (), notes: bool = True

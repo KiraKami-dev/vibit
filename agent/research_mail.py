@@ -47,7 +47,7 @@ from research_tender import (
     reader_settings,
     ungrounded,
 )
-from worker import run_worker
+from worker import run_worker, steps_for
 
 KIND_SECONDS = 150.0  # one record kind's search; a stuck tab must not hold up the others
 
@@ -355,13 +355,13 @@ async def read_message(view: str, kind: Kind, reference: str) -> MailRecord | No
         return None
 
 
-async def research_kind(session: SiteSession, kind: Kind, reference: str, *, deadline: float | None = None
-                        ) -> KindResult:
+async def research_kind(session: SiteSession, kind: Kind, reference: str, *, deadline: float | None = None,
+                        seconds: float | None = None) -> KindResult:
     started = time.monotonic()
     result = KindResult(kind)
-    budget = time.monotonic() + KIND_SECONDS
+    budget = time.monotonic() + (seconds or KIND_SECONDS)
     summary, _ = await run_worker(session, _goal(kind, reference), Summary, deadline=min(deadline or budget, budget),
-                                  max_steps=20, thinking=True,
+                                  max_steps=steps_for(20, budget, per_step=7.0), thinking=True,
                                   grounded=False, tools=(paging_tool(Collected()), keep_results_tool(result.kept)))
     result.stopped = summary is None
     views = list(dict.fromkeys(result.kept))
