@@ -8,6 +8,7 @@ reload transient error pages and sign in again after a session timeout. What to 
 left to the model through `TOOLS`.
 """
 import asyncio
+import contextvars
 import os
 import re
 import time
@@ -21,7 +22,18 @@ from tracing import Trace
 
 SETTLE_SECONDS = 45  # upper bound for waiting on a page and its helpers after one action
 MAX_VIEW = 14000  # characters of a page shown at once; read_more pages through the rest
-START_SECONDS = float(os.environ.get("SESSION_START_SECONDS", "90"))  # one sign-in attempt
+# A start waits on one tab as long as it is loading: a slow site under load is still alive, and a new tab only
+# queues behind the old request. Only an error page, a closed tab or this budget ends one attempt.
+START_SECONDS = float(os.environ.get("SESSION_START_SECONDS", "210"))  # one sign-in attempt, on the same tab
+GOTO_SECONDS = 60  # a navigation may take this long before the page is waited on in smaller steps
+LOOK_SECONDS = 30  # one try to read a page that is still loading during a start
+LOGIN_PATIENCE = 45  # a sign-in form still showing this soon after sending it is the post still pending
+START_BACKOFF = (30, 60, 120)  # seconds between failed attempts (the last repeats)
+START_MARGIN = 300  # by default a start keeps retrying until this long before the run's deadline
+MIN_ATTEMPT = 30  # an attempt with less time than this is not begun
+FRESH_AFTER = 2  # after this many failed attempts, one in a fresh browser context (rules out the context)
+DEADLINE: float | None = None  # the run's deadline (time.monotonic()); agent.solve sets it
+_STARTING: contextvars.ContextVar = contextvars.ContextVar("starting", default=None)  # the session start() runs for
 LOOP_VISITS = 3  # arriving on one page this often in a session gets the model a loop hint
 
 # Closes modal <dialog>s and aria-modal popups through their own close button as soon as they open, and records
@@ -114,7 +126,13 @@ class SiteSession:
     base: tuple = ()  # the same for the latest view it got in full; changes are told against this one
     visits: dict[str, int] = field(default_factory=dict)  # page URL -> times the model arrived on it
     last_url: str = ""
-    scripted: bool = False  # the popup closer is installed in this context
+    scripted: object = None  # the context the popup closer is installed in
+    until: float | None = None  # a running start retries until then; may be moved while it runs
+    ok: bool = False  # a start succeeded
+    settled: asyncio.Event = field(default_factory=asyncio.Event)  # the latest start ended, either way
+    login_at: tuple = ()  # (time.monotonic(), url) of the latest sign-in the helpers sent
+    _start_owner: object = None  # set while start() runs; its own looks (any task under it) must not wait
+    _old_context: object = None
 
     @property
     def name(self) -> str:
@@ -126,37 +144,156 @@ class SiteSession:
         self.pages = open_pages
         return open_pages[-1]
 
-    async def start(self, attempts: int = 2) -> str:
+    def default_until(self) -> float:
+        if DEADLINE is not None:
+            return DEADLINE - START_MARGIN
+        return time.monotonic() + 2 * START_SECONDS + START_BACKOFF[0]
+
+    @property
+    def starting(self) -> bool:
+        return self._start_owner is not None
+
+    async def start(self, attempts: int | None = None, until: float | None = None) -> str:
         """
-        Open the site's start page in a new tab, signed in, within START_SECONDS, once more on failure: a hung
-        sign-in (a cookie button that never answers, a page that never loads) must not hold a worker, or the
-        whole bid, for minutes. A tab that lands on the browser's own error page counts as failed.
+        Open the site's start page in a new tab, signed in. One attempt keeps waiting on its tab while the page
+        loads (up to START_SECONDS); it ends early only on the browser's error page or a closed tab. Failed attempts
+        are retried after a backoff until `until` (default: START_MARGIN before the run's deadline; `self.until`
+        may be moved while this runs) or `attempts` attempts; the third runs in a fresh browser context. A hung
+        sign-in thus never holds a worker past its own limit, and a slow site is not given up after two tabs.
         """
-        for attempt in range(attempts):
-            try:
-                view = await asyncio.wait_for(self._open(), START_SECONDS)
-                if self.page.url.startswith("chrome-error:") or not self.view.strip():
-                    raise ConnectionError(f"the start page did not load ({self.page.url[:80]})")
-                return view
-            except Exception as error:
-                self.trace.event(self.name, "start_failed", attempt=attempt + 1,
-                                 error=f"{type(error).__name__}: {str(error)[:160]}")
-                for page in self.pages:
+        if until is not None or self.until is None:
+            self.until = until if until is not None else self.default_until()
+        self._start_owner = _STARTING.set(self)
+        self.ok = False
+        self.settled.clear()
+        began = time.monotonic()
+        tries, fresh = 0, None
+        try:
+            while True:
+                tries += 1
+                if tries == FRESH_AFTER + 1:
+                    fresh = await self._fresh_context()
+                end = min(time.monotonic() + START_SECONDS, self.until)
+                try:
+                    view = await self._attempt(end)
+                    self.ok = True
+                    self.trace.event(self.name, "start_ok", attempt=tries, seconds=round(time.monotonic() - began, 1),
+                                     fresh_context=fresh is not None and self.context is fresh)
+                    return view
+                except asyncio.CancelledError:
+                    await self._close_pages()
+                    raise
+                except Exception as error:
+                    self.trace.event(self.name, "start_failed", attempt=tries,
+                                     seconds=round(time.monotonic() - began, 1),
+                                     error=f"{type(error).__name__}: {str(error)[:160]}")
+                    await self._close_pages()
+                if fresh is not None and self.context is fresh:  # the fresh context did not help: back
+                    self.context, self.scripted = self._old_context, None
                     try:
-                        await page.close()
+                        await asyncio.wait_for(fresh.close(), 10)
                     except Exception:
                         pass
-                self.pages = []
-        raise TimeoutError(f"{self.name}: the site could not be opened in {attempts} attempts")
+                if attempts is not None and tries >= attempts:
+                    break
+                wait = START_BACKOFF[min(tries, len(START_BACKOFF)) - 1]
+                if time.monotonic() + wait + MIN_ATTEMPT > self.until:
+                    break
+                self.trace.event(self.name, "start_retry", after=wait, attempt=tries + 1)
+                await asyncio.sleep(wait)
+            raise TimeoutError(f"{self.name}: the site could not be opened in {tries} attempts "
+                               f"({round(time.monotonic() - began)} s)")
+        finally:
+            _STARTING.reset(self._start_owner)
+            self._start_owner = None
+            self.settled.set()
 
-    async def _open(self) -> str:
-        if not self.scripted:
+    async def _fresh_context(self) -> BrowserContext | None:
+        """A new context of the same browser for one attempt, so a broken context (cookies, a stuck tab) is ruled
+        out. None when the browser cannot make one."""
+        try:
+            browser = self.context.browser
+            if browser is None:
+                return None
+            fresh = await asyncio.wait_for(browser.new_context(viewport={"width": 1280, "height": 800}), 20)
+        except Exception as error:
+            self.trace.event(self.name, "helper_error", helper="fresh_context", error=str(error)[:160])
+            return None
+        self._old_context, self.context, self.scripted = self.context, fresh, None
+        self.trace.event(self.name, "helper", action="fresh_context")
+        return fresh
+
+    async def _close_pages(self) -> None:
+        for page in self.pages:
+            try:
+                await asyncio.wait_for(page.close(), 10)
+            except Exception:
+                pass
+        self.pages = []
+
+    async def _attempt(self, end: float) -> str:
+        """One start attempt on one tab: navigate, then settle and look until the page shows, the browser's error
+        page shows, the tab closes, or `end`."""
+        if self.scripted is not self.context:
             await self.context.add_init_script(AUTO_CLOSE_JS)
-            self.scripted = True
+            self.scripted = self.context
         page = await self.context.new_page()
         self._watch(page)
-        await self._goto(self.site["url"])
-        return await self.look()
+        try:
+            await page.goto(self.site["url"], wait_until="domcontentloaded",
+                            timeout=max(1.0, min(GOTO_SECONDS, end - time.monotonic())) * 1000)
+        except Exception as error:  # still loading: the request is not given up, the tab waits on
+            self.trace.event(self.name, "start_wait", phase="goto", url=page.url[:120],
+                             error=str(error).splitlines()[0][:120])
+        self.logins = 0
+        view = ""
+        while True:
+            left = end - time.monotonic()
+            self._check_alive()
+            if left <= 1:
+                if view:  # it shows something (a sign-in still pending): better than another tab
+                    return view
+                raise TimeoutError(f"still loading ({self.page.url[:80]})")
+            try:
+                await asyncio.wait_for(self._settle(), min(SETTLE_SECONDS, left))
+            except asyncio.TimeoutError:
+                self.trace.event(self.name, "start_wait", phase="settle", url=self.page.url[:120])
+                continue
+            self._check_alive()
+            try:
+                view = await asyncio.wait_for(self.look(), max(1.0, min(LOOK_SECONDS, end - time.monotonic())))
+            except asyncio.TimeoutError:
+                self.trace.event(self.name, "start_wait", phase="look", url=self.page.url[:120])
+                view = ""
+                continue
+            if not self.view.strip() or self.view.startswith(("(the page does not respond", "(page error")):
+                view = ""
+                await asyncio.sleep(2.0)
+                continue
+            if await self._login_pending():
+                self.trace.event(self.name, "start_wait", phase="login", url=self.page.url[:120])
+                await asyncio.sleep(2.0)
+                continue
+            return view
+
+    def _check_alive(self) -> None:
+        """Raise when the attempt's tab is provably dead: closed, or the browser's own error page."""
+        open_pages = [p for p in self.pages if not p.is_closed()]
+        if not open_pages:
+            raise ConnectionError("the tab closed")
+        if open_pages[-1].url.startswith("chrome-error:"):
+            raise ConnectionError(f"the start page did not load ({open_pages[-1].url[:80]})")
+
+    async def _login_pending(self) -> bool:
+        """The sign-in was just sent and its form still shows: the post-login page is still loading."""
+        if not self.login_at or time.monotonic() - self.login_at[0] > START_SECONDS:
+            return False
+        if self.page.url != self.login_at[1]:
+            return False
+        try:
+            return bool(await asyncio.wait_for(self.page.locator("input[type=password]:visible").count(), 5))
+        except Exception:
+            return False
 
     def _watch(self, page: Page) -> None:
         self.pages.append(page)
@@ -173,7 +310,11 @@ class SiteSession:
 
     async def revive(self) -> None:
         """A session whose tabs are all gone (e.g. after a failed start) gets a fresh tab on the site's start page,
-        so looking and acting never fail on an empty tab list."""
+        so looking and acting never fail on an empty tab list. While a start runs in another task, this waits for
+        it (its tab is the one to use), so a session can be handed out before it is up."""
+        if self.starting and _STARTING.get() is not self:
+            self.trace.event(self.name, "helper", action="wait_for_start")
+            await self.settled.wait()
         if any(not page.is_closed() for page in self.pages):
             return
         page = await self.context.new_page()
@@ -184,7 +325,7 @@ class SiteSession:
 
     async def _goto(self, url: str) -> None:
         try:
-            await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=GOTO_SECONDS * 1000)
         except Exception as error:  # a slow load event still leaves a usable page
             self.events.append(f"navigation was slow or failed: {str(error).splitlines()[0][:160]}")
         await self.settle()
@@ -193,14 +334,17 @@ class SiteSession:
         """Let the page finish and run the generic helpers, but never longer than SETTLE_SECONDS: a click that never
         returns (seen on a cookie notice) must not block the tab for minutes."""
         try:
-            await asyncio.wait_for(self._settle(), SETTLE_SECONDS)
+            await asyncio.wait_for(self._settle_fresh(), SETTLE_SECONDS)
         except asyncio.TimeoutError:
             self.events.append("the page kept loading; continuing with what it shows")
             self.trace.event(self.name, "helper_error", helper="settle", error=f"timeout after {SETTLE_SECONDS} s")
 
+    async def _settle_fresh(self) -> None:
+        self.logins = 0  # a timeout later in the run may need a fresh sign-in
+        await self._settle()
+
     async def _settle(self) -> None:
         page = self.page
-        self.logins = 0  # a timeout later in the run may need a fresh sign-in
         for _ in range(6):
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=15000)
@@ -226,6 +370,8 @@ class SiteSession:
         password = page.locator("input[type=password]:visible")
         if not await password.count() or self.logins >= 2:
             return False
+        if self.login_at and self.login_at[1] == page.url and time.monotonic() - self.login_at[0] < LOGIN_PATIENCE:
+            return False  # sent moments ago and the old page still shows: the post is pending, do not resend it
         self.logins += 1
         form = password.first.locator("xpath=ancestor::form[1]")
         scope = form if await form.count() else page.locator("body")
@@ -240,6 +386,7 @@ class SiteSession:
             await password.first.press("Enter", timeout=5000)
         except Exception:
             pass  # the form was sent; the page is still loading, which settle waits for
+        self.login_at = (time.monotonic(), page.url)
         self.events.append("signed in with this run's login")
         self.trace.event(self.name, "helper", action="login", url=page.url)
         await asyncio.sleep(0.3)

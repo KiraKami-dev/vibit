@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 
+import browser_tools
 import browsers
 import loopwatch
 import run as contract
@@ -24,6 +25,26 @@ from tracing import Trace
 
 SAFETY_SECONDS = 90  # the answer must be in before the run expires
 LOCAL_SECONDS = 20 * 60  # the scouting run does not expire; behave like a scored run
+RESEARCH_START_SECONDS = 600  # a website that only research needs is warmed this long, then given up
+
+
+def warm_up(sessions: dict[str, SiteSession], deadline: float, critical: set[str]) -> dict[str, asyncio.Task]:
+    """
+    Start signing in to every website in the background and return at once: nothing waits for all of them. The
+    `critical` ones (the bid website, the mailbox) keep retrying until START_MARGIN before the deadline; the others
+    give up after RESEARCH_START_SECONDS. A session whose start is still running can be handed out: its first look
+    waits for the start (SiteSession.revive).
+    """
+    browser_tools.DEADLINE = deadline
+    tasks = {}
+    for name, session in sessions.items():
+        limit = deadline - browser_tools.START_MARGIN
+        if name not in critical:
+            limit = min(limit, time.monotonic() + RESEARCH_START_SECONDS)
+        session.until = limit
+        tasks[name] = asyncio.create_task(session.start(until=limit), name=f"start@{name}")
+        tasks[name].add_done_callback(lambda t: t.cancelled() or t.exception())  # failures are traced in start
+    return tasks
 
 
 async def solve(task: dict, page, answer: dict | None = None,
@@ -39,23 +60,26 @@ async def solve(task: dict, page, answer: dict | None = None,
     loopwatch.Watchdog(activity=lambda: trace.last).start()  # a blocked loop or a silent run dumps its stacks
     left = min(contract.seconds_left(task), LOCAL_SECONDS)
     deadline = time.monotonic() + left - SAFETY_SECONDS
-    # Sign in to every website while the model reads the brief: which one plays which part is only known after it.
+    # Sign in to every website in the background: the brief, the planner and the workers never wait for all of
+    # them. The bid website (named by the run contract) keeps warming; the mailbox too, once the brief names it.
     contexts = await browsers.more_contexts(page, len(task["access"]))
     sessions = {site["siteId"]: SiteSession(site, context, trace) for site, context in zip(task["access"], contexts)}
-    started = asyncio.gather(*(session.start() for session in sessions.values()), return_exceptions=True)
-    briefing, outcomes = await asyncio.gather(read_brief(task), started)
-    # The run contract names the submission website; it wins over the model's reading of the brief.
     contract_site = (task.get("submission") or {}).get("siteId")
+    starts = warm_up(sessions, deadline, {contract_site} if contract_site in sessions else set(sessions))
+    briefing = await read_brief(task)
+    # The run contract names the submission website; it wins over the model's reading of the brief.
     if contract_site in sessions and contract_site != briefing.bid_site:
         trace.event("briefing", "bid_site_corrected", read=briefing.bid_site, contract=contract_site)
         briefing = briefing.model_copy(update={"bid_site": contract_site})
     trace.event("briefing", "done", **briefing.model_dump(exclude={"submission_steps"}))
-    failed = {name for name, outcome in zip(sessions, outcomes) if isinstance(outcome, BaseException)}
     bid, mail = sessions[briefing.bid_site], sessions[briefing.mail_site]
-    await asyncio.gather(*(session.start() for session in (bid, mail) if session.name in failed),
-                         return_exceptions=True)  # submit_bid copes with a session that is still down
+    for session in (bid, mail):  # critical after all: warm until the margin before the deadline
+        session.until = max(session.until or 0, deadline - browser_tools.START_MARGIN)
     if answer is None and os.environ.get("AGENT_RESEARCH", "1") != "0":
-        answer, attributes = await research(task, briefing, contexts, trace, deadline)
+        answer, attributes = await research(task, briefing, contexts, trace, deadline, sessions)
+    # A start still running is waited for by the session's first look; one that gave up gets a fresh tab there.
+    trace.event("starts", "state", **{name: ("up" if s.ok else "starting" if s.starting else "down")
+                                      for name, s in sessions.items()}, pending=sum(not t.done() for t in starts.values()))
     try:
         result = await submit_bid(bid, Mailbox(mail, briefing, deadline), briefing, deadline, answer, attributes)
     except Exception as error:  # never end without trying to sign: one more pass with what is on screen
@@ -65,15 +89,15 @@ async def solve(task: dict, page, answer: dict | None = None,
     return None
 
 
-async def research(task: dict, briefing, contexts: list, trace: Trace, deadline: float
-                   ) -> tuple[dict | None, dict[str, dict[str, str]] | None]:
+async def research(task: dict, briefing, contexts: list, trace: Trace, deadline: float,
+                   warm: dict[str, SiteSession] | None = None) -> tuple[dict | None, dict[str, dict[str, str]] | None]:
     """The orchestrator's answer and material attributes; (None, None) when it fails or builds nothing."""
     answer, attributes, problems = None, None, []
     orchestrator = None
     started = time.monotonic()
     try:
         orchestrator = Orchestrator(task, briefing, {s["siteId"]: c for s, c in zip(task["access"], contexts)},
-                                    trace, deadline)
+                                    trace, deadline, warm=warm)
         problems = orchestrator.board.problems
         answer, _ = await orchestrator.run()
         attributes = orchestrator.attributes
