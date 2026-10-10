@@ -162,3 +162,14 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - sub_63a81b12d47a68b9 (promoted from soak run run_262c91398cd64598): quality 100 in 7:33 for $0.110, rank #2.
   Final candidate since 22:17 UTC; exact code is 8c7ab8f (branch submitted/sub_63a81b12). Same code over 6 soak
   runs: 100, 100, 100, 100, 59, 37.1.
+- ERP reliability, local read-only checks (shared scouting login, so session drops from other users are frequent):
+  base ERP stage 288 s with three detail workers at the 12-step limit and a 95 s reselect (one thinking-on call
+  hung to its 90 s timeout); with search/collect for the group search, open_pages that lists unopened links and
+  skips views already read, reused tabs, serialised sign-ins and one gate pass per drop: 209 s, searches in 3 to 5
+  steps, details in 4, reselect 4.5 s (choices that still pass check_choice stand without a model call). Same
+  materials and records as the hand derivation.
+- The ERP search worker looped when its hit did not fit the requirement it was shown (A-2 before the amendment and
+  reserve: 507 vs 500): it refined and re-ran the search for 16 steps and the position was omitted (test run 51.2).
+  The search goal now only asks for every hit of the group (no requirement shown), and a stopped search worker's
+  hit list is read from its kept views. Gate recovery runs only on a sign-in form or a known gate path, since some
+  views redirect and looked like a dropped session.
