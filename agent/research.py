@@ -626,11 +626,12 @@ class MaterialSeen(BaseModel):
 SEARCH_GOAL = """\
 List the ERP materials of catalogue group {group}. Open the ERP's material search (search help) and call
 search(field_ref, query, submit_ref) on its search field with that group as the query: it types, submits and
-returns every hit row with its links in one step. As soon as hits show, return every hit of that group with its
-link target and the technical attributes (bore, stroke, pressure, mounting, certification) the rows show; never
-refine a search that already lists hits. If the site refuses the search or shows no hits, change the query or the
-search field it offers. If a sign-in or notice page interrupts, get past it. Only if the rows show no attributes, open the hits to read them. The materials are
-compared with the requirement later ({want})."""
+returns every hit row with its links in one step. As soon as hits of that group show, return every one of them
+with its link target and the technical attributes (bore, stroke, pressure, mounting, certification) the rows show,
+whether or not they look like a fit: which material fits is decided later from their records, so never refine or
+repeat a search that already lists hits of the group and do not open the hits. If the site refuses the search or
+shows no hits, change the query or the search field it offers. If a sign-in or notice page interrupts, get past
+it."""
 
 DETAIL_GOAL = """\
 Open the views of ERP material {material} (you start on its record) that show these facts: its status and the
@@ -790,6 +791,28 @@ class ErpResearch(BaseModel):
     seconds: float = 0
 
 
+SALVAGE_SEARCH = """\
+You read the page a browsing worker ended on in an ERP. If it lists material hits of a search for catalogue group
+{group}, report the search term shown and every listed hit of that group with its link target and the technical
+attributes the list shows, exactly as written. If it shows no such hit list, return an empty list of candidates."""
+
+
+async def _salvage_search(session: SiteSession, views: dict[str, str], group: str) -> SearchReport | None:
+    """The hits on the latest page of a stopped search worker that lists the group with links (one grounded reader
+    call), or None."""
+    text = next((t for t in reversed(views.values()) if group in t and "->" in t), "")
+    if not text:
+        return None
+    try:
+        report = await asyncio.wait_for(_grounded_read(
+            SearchReport, SALVAGE_SEARCH.format(group=group), f"Page:\n{text[:16000]}", text, trace=session.trace,
+            name=session.name, what="search salvage"), 60)
+    except Exception as error:
+        session.trace.event(session.name, "search_salvage_failed", error=f"{type(error).__name__}: {str(error)[:160]}")
+        return None
+    return report if report.candidates else None
+
+
 class Erp:
     """
     The ERP website: one signed-in context and a few reused tabs, so requirements and materials run in parallel.
@@ -813,6 +836,7 @@ class Erp:
         self.checking = asyncio.Lock()  # one idle check at a time
         self.gate = asyncio.Lock()  # one tab gets past an entry gate at a time
         self.passes = 0  # gates passed; a tab that waited for another one's pass just opens its view again
+        self.gate_paths: set[str] = set()  # paths of the sign-in / notice gates seen
         self.home = ""  # the path the start address lands on while signed in and past the gate
         self.busy = 0  # workers using the ERP now
         self.active_at = 0.0  # last time a worker used it
@@ -846,6 +870,8 @@ class Erp:
     async def _pass_gate(self, session: SiteSession) -> None:
         """A model gets the tab past the sign-in / notice gate; then the start address shows where a signed-in
         tab lands (`home`). Called with `gate` held."""
+        if not await self._at_home(session):  # the page it is on is a gate (a later drop may land there again)
+            self.gate_paths.add(urlparse(session.page.url).path or "/")
         await run_worker(session, GATE_GOAL, Ready, deadline=self._until(0), max_steps=8,
                          **_worker_kwargs(notes=False, grounded=False))
         self.passes += 1
@@ -867,8 +893,13 @@ class Erp:
         return bool(self.home) and (urlparse(session.page.url).path or "/") == self.home \
             and not await self._signin_form(session)
 
+    async def _at_gate(self, session: SiteSession) -> bool:
+        return (urlparse(session.page.url).path or "/") in self.gate_paths or await self._signin_form(session)
+
     async def recover(self, session: SiteSession) -> None:
         """The tab did not reach its view (session dropped, entry gate): get past the gate once for all tabs."""
+        if not await self._at_gate(session):  # e.g. a view that redirects elsewhere: not a dropped session
+            return
         passes = self.passes
         async with self.gate:
             if self.passes != passes:  # another tab passed the gate while this one waited
@@ -1012,11 +1043,14 @@ class Erp:
                 session = await self._worker_tab(req.requirement_id if not attempt else f"{req.requirement_id}+")
                 if session is None:
                     continue
+                views = _keep_views(session)
                 try:
                     report, _ = await run_worker(
-                        session, SEARCH_GOAL.format(group=req.catalog_group, want=_want(req)), SearchReport,
+                        session, SEARCH_GOAL.format(group=req.catalog_group), SearchReport,
                         deadline=until, max_steps=steps(until, 6, 16), tools=(site_tools.search, site_tools.collect),
                         **_worker_kwargs(notes=False))
+                    if report is None:  # stopped (steps, time): the hit list it ended on may still be there
+                        report = await _salvage_search(session, views, req.catalog_group)
                 finally:
                     await self._close(session)
             if report is not None:
