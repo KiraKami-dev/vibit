@@ -5,3 +5,4 @@ __pycache__/
 .env.*
 *.tar.gz
 traces/
+!.env.example

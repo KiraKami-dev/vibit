@@ -75,7 +75,7 @@ class Fake:
 
 WATCH = {"LLM_STREAM_WATCHDOG": "1", "LLM_FIRST_TOKEN_TIMEOUT": "0.3", "LLM_IDLE_TIMEOUT": "0.2",
          "LLM_MAX_CALL": "5", "LLM_RETRIES": "2", "LLM_HEDGE_AFTER": "", "LLM_TIMEOUT": "0.6",
-         "LLM_TIMEOUT_THINKING": "0.6"}
+         "LLM_TIMEOUT_THINKING": "0.6", "LLM_BACKEND": ""}
 TOOL = ToolDefinition(name="answer", parameters_json_schema={"type": "object", "properties": {}})
 
 

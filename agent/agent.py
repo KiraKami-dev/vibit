@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 
+import localenv  # noqa: F401  (first: local runs read agent/.env before any module reads its settings)
 import browser_tools
 import browsers
 import loopwatch

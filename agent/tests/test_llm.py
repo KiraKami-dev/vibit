@@ -16,7 +16,7 @@ from openai._models import FinalRequestOptions  # noqa: E402
 
 import llm  # noqa: E402
 
-TIMEOUT_VARS = ("LLM_TIMEOUT", "LLM_TIMEOUT_THINKING", "LLM_RETRIES")
+TIMEOUT_VARS = ("LLM_TIMEOUT", "LLM_TIMEOUT_THINKING", "LLM_RETRIES", "LLM_BACKEND", "LLM_MODEL")
 
 
 def env(**values: str):

@@ -23,9 +23,17 @@ text and reasoning token by token but holds back tool-call arguments until they 
 tools may stay silent after its last token for as long as its timeout above; one without tools may pause
 LLM_IDLE_TIMEOUT (15 s). LLM_HEDGE_AFTER sends a second copy of a call that has not started after that many
 seconds and keeps whichever starts first (the losing copy may still be billed).
+
+LLM_BACKEND=anthropic runs the same agents on a Claude model with the team's own key instead (LLM_MODEL, default
+claude-haiku-5-5; ANTHROPIC_API_KEY, a team secret in test and scored runs). Its calls go through the run's metering
+proxy too: ANTHROPIC_BASE_URL, which the platform sets to $LLM_PROXY_URL/anthropic. Without a key the run falls back
+to the hosted Qwen. Thinking off maps to Anthropic's thinking off (or the closest the model allows), thinking on to
+adaptive thinking at LLM_EFFORT (default medium); see `anthropic_thinking`. The per-mode deadlines, the retries and
+the call log are the same; the stream watchdog is Qwen-only (Claude calls do not hang the way the hosted model does).
 """
 import asyncio
 import contextvars
+import dataclasses
 import os
 import time
 from contextlib import AsyncExitStack
@@ -33,13 +41,17 @@ from contextlib import AsyncExitStack
 import httpx2
 from openai import AsyncOpenAI
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
-from pydantic_ai.messages import ModelMessage, ModelResponse
-from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.messages import ModelMessage, ModelResponse, ThinkingPart
+from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
+import localenv  # noqa: F401  (local runs only: loads agent/.env on import; the environment wins)
+
 QWEN_MODEL = "qwen3.8-flash-next"
+ANTHROPIC_MODEL = "claude-haiku-5-5"
+USER_AGENT = "error404ai-rfq-agent"
 DEFAULT_TIMEOUT = 45.0  # thinking off: steps answer in seconds, so a hang shows early
 DEFAULT_TIMEOUT_THINKING = 90.0  # thinking on: a call reading a whole page may take 25 to 45 s
 DEFAULT_RETRIES = 6
@@ -275,7 +287,9 @@ class _WatchdogModel(OpenAIChatModel):
 
 def _thinking(request: httpx2.Request) -> str:
     content = request.content or b""
-    return "on" if b'"enable_thinking": true' in content or b'"enable_thinking":true' in content else "off"
+    markers = (b'"enable_thinking": true', b'"enable_thinking":true',  # Qwen
+               b'"type": "adaptive"', b'"type":"adaptive"')  # Anthropic
+    return "on" if any(marker in content for marker in markers) else "off"
 
 
 async def _sent(request: httpx2.Request) -> None:
@@ -359,14 +373,179 @@ class _DeadlineClient(httpx2.AsyncClient):
         return response
 
 
-def model() -> OpenAIChatModel:
+_WARNED: set[str] = set()
+
+
+def _warn_once(key: str, text: str) -> None:
+    if key not in _WARNED:
+        _WARNED.add(key)
+        print(text, flush=True)
+
+
+def backend() -> str:
+    """Which model backend the run uses: "qwen" (the hosted model, the default) or "anthropic" (LLM_BACKEND=anthropic,
+    with the team's own key). Anthropic without ANTHROPIC_API_KEY falls back to Qwen, so a missing secret costs speed,
+    not the run."""
+    value = os.environ.get("LLM_BACKEND", "").strip().lower()
+    if value in ("anthropic", "claude"):
+        if os.environ.get("ANTHROPIC_API_KEY", "").strip():
+            return "anthropic"
+        _warn_once("no-key", "[model] LLM_BACKEND=anthropic but ANTHROPIC_API_KEY is not set: using the hosted Qwen")
+    elif value not in ("", "qwen", "hosted"):
+        _warn_once("unknown", f"[model] unknown LLM_BACKEND {value!r}: using the hosted Qwen")
+    return "qwen"
+
+
+def model_name() -> str:
+    """The model id: LLM_MODEL, else the backend's default (AGENT_MODEL still picks a Qwen-endpoint model)."""
+    chosen = os.environ.get("LLM_MODEL", "").strip()
+    if backend() == "anthropic":
+        return chosen or ANTHROPIC_MODEL
+    return chosen or os.environ.get("AGENT_MODEL", "").strip() or QWEN_MODEL
+
+
+def anthropic_base_url() -> str | None:
+    """Where Anthropic calls go: ANTHROPIC_BASE_URL (the platform sets it to the run's proxy), else the run's proxy
+    from LLM_PROXY_URL, else (only on a developer's machine) the SDK's default, the Anthropic API itself."""
+    explicit = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+    if explicit:
+        return explicit
+    proxy = os.environ.get("LLM_PROXY_URL", "").strip()
+    return proxy.rstrip("/") + "/anthropic" if proxy else None
+
+
+def model() -> Model:
     """The worker model. The client's own timeout is the thinking-off one; `settings()` overrides it per request,
     so a thinking-on agent gets its longer timeout without a client of its own. With LLM_STREAM_WATCHDOG on, the
-    model streams each call and judges it by progress instead (`_WatchdogModel`)."""
+    Qwen model streams each call and judges it by progress instead (`_WatchdogModel`)."""
+    http_client = _DeadlineClient(event_hooks={"request": [_sent], "response": [_answered]})
+    if backend() == "anthropic":
+        return _anthropic_model(http_client)
     client = AsyncOpenAI(base_url=os.environ["QWEN_BASE_URL"], api_key=os.environ["QWEN_API_KEY"],
-                         timeout=timeout_seconds(thinking=False), max_retries=retries(),
-                         http_client=_DeadlineClient(event_hooks={"request": [_sent], "response": [_answered]}))
-    return _WatchdogModel(os.environ.get("AGENT_MODEL", QWEN_MODEL), provider=OpenAIProvider(openai_client=client))
+                         timeout=timeout_seconds(thinking=False), max_retries=retries(), http_client=http_client)
+    return _WatchdogModel(model_name(), provider=OpenAIProvider(openai_client=client))
+
+
+def _anthropic_model(http_client: httpx2.AsyncClient) -> Model:
+    from anthropic import AsyncAnthropic
+    from pydantic_ai.providers.anthropic import AnthropicProvider
+
+    if watchdog():
+        _warn_once("watchdog", "[model] LLM_STREAM_WATCHDOG applies to the hosted Qwen only; Claude calls keep the "
+                               "per-mode deadline")
+    client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"], base_url=anthropic_base_url(),
+                            timeout=timeout_seconds(thinking=False), max_retries=retries(),
+                            default_headers={"User-Agent": USER_AGENT}, http_client=http_client)
+    return _anthropic_class()(model_name(), provider=AnthropicProvider(anthropic_client=client))
+
+
+THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+DEFAULT_EFFORT = "medium"  # thinking on: Haiku 5.5's own default; Sonnet 5.5 would otherwise think at high
+DEFAULT_MAX_TOKENS = 16000  # well above any answer the agents write; keeps calls unstreamed
+# Models that cannot turn thinking off at all, and the one that turns it off with `between_tools` instead of
+# `disabled` (which it rejects with a 400).
+_ALWAYS_THINKING = ("claude-opus-5-5", "claude-fable-5", "claude-mythos-5")
+_BETWEEN_TOOLS = ("claude-sonnet-5-5",)
+
+
+def effort(thinking: bool) -> str:
+    """The Anthropic effort for thinking-on calls (LLM_EFFORT, default medium) and for the thinking-off calls of a
+    model that always thinks (LLM_EFFORT_OFF, default low)."""
+    name, default = ("LLM_EFFORT", DEFAULT_EFFORT) if thinking else ("LLM_EFFORT_OFF", "low")
+    value = os.environ.get(name, "").strip().lower()
+    return value if value in EFFORTS else default
+
+
+def anthropic_thinking(name: str, thinking: bool) -> tuple[dict, str | None]:
+    """Our thinking on/off as Anthropic's `thinking` object and `effort` (None: the model's default).
+
+    On: adaptive thinking at `effort(True)`. The workers shrink older page views between steps, which changes the
+    history a thinking block was made with; `drop_block` makes the API drop such blocks instead of failing the call
+    (it needs THINKING_BINDING_BETA). Off: `disabled`; Sonnet 5.5 rejects that and takes `between_tools`; models that
+    always think get adaptive thinking at the lowest effort instead.
+    """
+    adaptive = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
+    if thinking:
+        return adaptive, effort(True)
+    if name.startswith(_BETWEEN_TOOLS):
+        return {"type": "between_tools"}, None  # takes no other field; the default effort (high) is allowed
+    if name.startswith(_ALWAYS_THINKING):
+        return adaptive, effort(False)
+    return {"type": "disabled"}, None  # Haiku 5.5's default effort (medium) is allowed with thinking off
+
+
+def max_tokens() -> int:
+    try:
+        value = int(os.environ.get("LLM_MAX_TOKENS", "") or DEFAULT_MAX_TOKENS)
+    except ValueError:
+        return DEFAULT_MAX_TOKENS
+    return value if value > 0 else DEFAULT_MAX_TOKENS
+
+
+def anthropic_settings(name: str, thinking: bool, timeout: float) -> ModelSettings:
+    """Model settings for a Claude agent. No temperature: the 5.5 models reject sampling settings. Prompt caching
+    marks the instructions, the tools and the conversation (see `_AnthropicModel`)."""
+    config, level = anthropic_thinking(name, thinking)
+    values: dict = dict(
+        parallel_tool_calls=False,  # one tab per worker: actions must run in order
+        timeout=timeout,
+        max_tokens=max_tokens(),
+        extra_headers={"User-Agent": USER_AGENT},  # pydantic-ai would send its own
+        anthropic_thinking=config,
+        anthropic_cache_instructions=True,
+        anthropic_cache_tool_definitions=True,
+        anthropic_cache_messages=True,
+    )
+    if level is not None:
+        values["anthropic_effort"] = level
+    if "block_binding" in config:
+        values["anthropic_betas"] = [THINKING_BINDING_BETA]
+    return ModelSettings(**values)  # type: ignore[typeddict-item]
+
+
+_ANTHROPIC_CLASS = None
+
+
+def _anthropic_class():
+    """The pydantic-ai Anthropic model with two changes for our workers (built on first use, so a Qwen run never
+    imports the Anthropic SDK):
+
+    - Cache breakpoints on the last two messages, not just the last: a worker's next step shrinks the page view in
+      the last message, so only a breakpoint before it (on the model's last tool call) is still a prefix next time.
+    - Without adaptive thinking (thinking off), thinking blocks from earlier steps are left out of the history: the
+      API would reject them once the history before them changed, and `drop_block` only works with adaptive thinking.
+    """
+    global _ANTHROPIC_CLASS
+    if _ANTHROPIC_CLASS is not None:
+        return _ANTHROPIC_CLASS
+    from pydantic_ai.models.anthropic import AnthropicModel
+
+    class _AnthropicModel(AnthropicModel):
+        def _apply_message_cache_control(self, anthropic_messages, ttl) -> None:
+            if len(anthropic_messages) >= 2:
+                self._add_message_cache_control(anthropic_messages[-2], ttl)
+            super()._apply_message_cache_control(anthropic_messages, ttl)
+
+        async def request(self, messages: list[ModelMessage], model_settings: ModelSettings | None,
+                          model_request_parameters: ModelRequestParameters) -> ModelResponse:
+            config = (model_settings or {}).get("anthropic_thinking") or {}
+            if config.get("type") != "adaptive":
+                messages = without_thinking(messages)
+            return await super().request(messages, model_settings, model_request_parameters)
+
+    _ANTHROPIC_CLASS = _AnthropicModel
+    return _ANTHROPIC_CLASS
+
+
+def without_thinking(messages: list[ModelMessage]) -> list[ModelMessage]:
+    """The history with the thinking parts of earlier responses left out (other parts unchanged)."""
+    result = []
+    for message in messages:
+        if isinstance(message, ModelResponse) and any(isinstance(p, ThinkingPart) for p in message.parts):
+            message = dataclasses.replace(message, parts=[p for p in message.parts if not isinstance(p, ThinkingPart)])
+        result.append(message)
+    return result
 
 
 def thinking(phase: str, default: bool) -> bool:
@@ -378,10 +557,14 @@ def thinking(phase: str, default: bool) -> bool:
 
 def settings(thinking: bool = False, *, timeout: float | None = None) -> ModelSettings:
     """Model settings for one agent: thinking on or off, and the matching per-request timeout (an explicit
-    `timeout` in seconds wins, for calls that are known to be slow or quick regardless of mode)."""
+    `timeout` in seconds wins, for calls that are known to be slow or quick regardless of mode). The settings
+    follow the backend (`anthropic_settings` for Claude)."""
+    seconds = timeout if timeout is not None else timeout_seconds(thinking)
+    if backend() == "anthropic":
+        return anthropic_settings(model_name(), thinking, seconds)
     return ModelSettings(
         temperature=0.2,
         parallel_tool_calls=False,  # one tab per worker: actions must run in order
-        timeout=timeout if timeout is not None else timeout_seconds(thinking),
+        timeout=seconds,
         extra_body={"chat_template_kwargs": {"enable_thinking": thinking}},
     )
