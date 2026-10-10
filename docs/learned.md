@@ -137,3 +137,7 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   followed a message list into a session expiry); kept on the paging tool for now.
 - First v2 sandbox test run (orchestrator branch 405b1f4): quality 100, eligible, about 10 min, 308 model calls,
   $0.134. The full pipeline works in the sandbox; the variance across repeats decides what to submit.
+- v2 round 1 (4 sandbox test runs of 405b1f4): 100 (10 min), 100 with the watchdog (15 min), 10 (spec navigator
+  found no revision history, so every position was omitted and the found discount was lost too), and NO BID: a false
+  summary-check alarm switched signing to thinking, the model went back in the wizard (clears later steps) and the
+  deadline cut it before the TAN was entered. Signing needs its own time reserve and must never go back.
