@@ -151,3 +151,10 @@ On macOS, python.org Python needs `Install Certificates.command` or `SSL_CERT_FI
   bullets; no attribution trailers (no Co-Authored-By, no session links); never stage anything under `.claude/`;
   never push or open a PR without asking first.
 - Never put real credentials, personal data or site values in tests, fixtures, docs or comments; invent placeholders.
+
+<!-- entire-graph:begin -->
+This repo has the entire-graph code graph installed. Before exploring code with
+grep/find/whole-file reads, read .entire/graph-agent.md — resolution-first guidance
+for using graph retrieval, focused source inspection, and verification.
+@.entire/graph-agent.md
+<!-- entire-graph:end -->

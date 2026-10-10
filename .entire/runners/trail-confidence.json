@@ -1,0 +1,37 @@
+{
+  "id": "trail-confidence",
+  "display_name": "Confidence Eval",
+  "enabled": true,
+  "scope": "trail",
+  "runtime": {
+    "kind": "prompt_runner",
+    "agent": "claude",
+    "timeout_ms": 300000,
+    "sandbox": {
+      "base_template": "claude",
+      "repo_token": "read"
+    }
+  },
+  "automation": {
+    "kind": "trail_prompt"
+  },
+  "prompt": {
+    "template": "You are a confidence evaluator for an agentic RFQ-to-bid solver (Python in agent/, tests in agent/tests, tracked runs in experiments/). Analyze the changes on branch \"{{branch}}\" compared to \"{{base_branch}}\".\n\nRun `git diff origin/{{base_branch}}...HEAD` to see the changes, then score **confidence** from 0 to 100 (higher = more confident the changes are correct and well-tested).\n\nConsider:\n- Deterministic logic (calc.py bid rules, parsing, validation, date/authority selection) should have unit tests covering edge cases: scale boundaries, validity windows, rounding, packaging multiples, superseded records. Untested changes there warrant low confidence.\n- Generality: logic must work across unseen sites/layouts/data, not just the scouted public site. Anything that looks tuned to one layout or scenario lowers confidence.\n- LLM/browser-driven changes cannot be fully unit tested; look for a recorded test run or local run (experiments/runs.jsonl entry) and a docs/learned.md note when behavior changed, plus sensible step budgets, retries and error handling.\n- Consistency between code, agent.json, pyproject/lockfile, and tests; tests that actually assert behavior rather than just run.\n\nScore bands:\n- 0-30: bid-affecting or submission logic changed with no tests or measured run.\n- 31-60: plausible but only partially tested, or agentic changes without a recorded run.\n- 61-85: tested deterministic logic, or agentic change backed by a recorded run.\n- 86-100: small, well-covered, clearly correct change.\n\nOutput ONLY this JSON object as the very last line of your response:\n\n{\"value\": <number 0-100>, \"rationale\": \"<1-2 sentence explanation>\"}"
+  },
+  "select": {
+    "trigger_types": [
+      "api",
+      "push"
+    ]
+  },
+  "output": {
+    "adapter": "last_json_line",
+    "result_type": "trail_monitor",
+    "trail_monitor": {
+      "key": "confidence",
+      "label": "Confidence",
+      "value_type": "percent",
+      "polarity": "higher_is_better"
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "id": "trail-risk",
+  "display_name": "Risk Eval",
+  "enabled": true,
+  "scope": "trail",
+  "runtime": {
+    "kind": "prompt_runner",
+    "agent": "claude",
+    "timeout_ms": 300000,
+    "sandbox": {
+      "base_template": "claude",
+      "repo_token": "read"
+    }
+  },
+  "automation": {
+    "kind": "trail_prompt"
+  },
+  "prompt": {
+    "template": "You are a risk evaluator for an agentic RFQ-to-bid solver (Python, pydantic-ai on Qwen, browser workers driving a tender portal, supplier portal, ERP and webmail, plus deterministic bid rules in calc.py). Analyze the changes on branch \"{{branch}}\" compared to \"{{base_branch}}\".\n\nRun `git diff origin/{{base_branch}}...HEAD` to see the changes, then score **risk** from 0 to 100 (higher = more potential damage if something is wrong).\n\nWeigh these dimensions:\n- Bid correctness: changes to calc.py or anything computing quantities, prices, discounts, scales, validity dates, packaging, or authority/time selection (latest record dated no later than the scenario date, exact tender reference, superseded/look-alike mails, current spec revision). A wrong number silently produces a wrong signed bid.\n- Irreversible actions: signing/submitting the bid, TAN use, form submission in the configurator. Check for double-submits, submitting before evidence is gathered, or missing validation/retry guards.\n- Fair-play violations (cause rejection or flagging): hardcoded scenario values (tender refs, material numbers, prices, discounts, logins, TANs), branching on siteId/URL/layout, site-specific paths or labels in code or prompts, fixed click paths replacing model decisions, crawlers that pre-gather all evidence, notes aimed at steering a reviewer.\n- Credential/data leakage: scouting logins or values copied from sites into code, prompts, fixtures, notes, traces or tracking files (experiments/*.jsonl must have secrets redacted).\n- Harness stability: llm.py, browsers.py, browser_tools.py, worker.py, run.py, models.py, agent.json (browser count 1-4), dependency/lockfile changes; use of local models or own browsers in the sandbox; unbounded loops or step/time budgets that could exceed run limits.\n\nScore bands:\n- 0-20: docs, notes, tests, tracking data, or isolated refactors with no behavior change.\n- 21-45: prompt/tool tweaks or new helpers not yet wired into the solve path; small harness changes with tests.\n- 46-70: changes to agent flow, worker/browser tooling, model/LLM settings, or dependencies that alter how evidence is gathered.\n- 71-100: changes to bid calculation or submission/signing, any hardcoded scenario value or site-specific branching, leaked credentials, or edits that could make the run reject, flag, or submit a wrong bid.\n\nOutput ONLY this JSON object as the very last line of your response:\n\n{\"value\": <number 0-100>, \"rationale\": \"<1-2 sentence explanation>\"}"
+  },
+  "select": {
+    "trigger_types": [
+      "api",
+      "push"
+    ]
+  },
+  "output": {
+    "adapter": "last_json_line",
+    "result_type": "trail_monitor",
+    "trail_monitor": {
+      "key": "risk",
+      "label": "Risk",
+      "value_type": "percent",
+      "polarity": "lower_is_better"
+    }
+  }
+}
