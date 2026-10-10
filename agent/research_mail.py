@@ -331,6 +331,7 @@ class KindResult:
     kept: list[str] = field(default_factory=list)  # page views of the opened messages
     records: list[MailRecord] = field(default_factory=list)
     seconds: float = 0.0
+    stopped: bool = False  # the search ran out of its budget (or steps) before it returned
 
 
 async def read_message(view: str, kind: Kind, reference: str) -> MailRecord | None:
@@ -359,9 +360,10 @@ async def research_kind(session: SiteSession, kind: Kind, reference: str, *, dea
     started = time.monotonic()
     result = KindResult(kind)
     budget = time.monotonic() + KIND_SECONDS
-    await run_worker(session, _goal(kind, reference), Summary, deadline=min(deadline or budget, budget),
-                     max_steps=20, thinking=True,
-                     grounded=False, tools=(paging_tool(Collected()), keep_results_tool(result.kept)))
+    summary, _ = await run_worker(session, _goal(kind, reference), Summary, deadline=min(deadline or budget, budget),
+                                  max_steps=20, thinking=True,
+                                  grounded=False, tools=(paging_tool(Collected()), keep_results_tool(result.kept)))
+    result.stopped = summary is None
     views = list(dict.fromkeys(result.kept))
     records = await asyncio.gather(*(read_message(v, kind, reference) for v in views))
     result.records = [r for r in records if r is not None]

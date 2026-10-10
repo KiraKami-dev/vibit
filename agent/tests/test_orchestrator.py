@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import calc  # noqa: E402
 from board import Board, Source  # noqa: E402
+from evidence import Requirement, SpecResult  # noqa: E402
 from orchestrator import Orchestrator, answer_from, rules_text, safe_calculate, scenario_time  # noqa: E402
 
 MATERIAL = calc.Material(material_number="M-1", free_stock=10, stock_lead_time_weeks=2, production_lead_time_weeks=6)
@@ -72,6 +73,74 @@ class Helpers(unittest.TestCase):
         tariff = calc.PackagingTariff(price_per_carton=D("3"))
         orchestrator._unknown_clauses(p, SimpleNamespace(packaging=tariff), pool, None)
         self.assertEqual(orchestrator.blank_hints, {})
+
+
+def bare_orchestrator(approval=None) -> Orchestrator:
+    """An orchestrator without browsers or models, for its bookkeeping."""
+    o = Orchestrator.__new__(Orchestrator)
+    o.board, o.requirements, o.spec_revision = Board(), {}, None
+    o.reference, o.scenario_stamp = "T-1", date(2026, 6, 1)
+    o.mail_facts = SimpleNamespace(approval=approval)
+    o.tender_facts, o.erp = None, None
+    return o
+
+
+def requirement(rid: str, revision: str, bore: str = "50") -> Requirement:
+    return Requirement(requirement_id=rid, revision=revision, bore=D(bore), stroke=D("100"), pressure=D("160"),
+                       mounting="Flange", certification="None", catalog_group="G-1")
+
+
+class FakeErp:
+    def __init__(self):
+        self.started, self.forgotten = [], []
+
+    def start(self, req):
+        self.started.append((req.requirement_id, req.bore))
+
+    def forget(self, rid):
+        self.forgotten.append(rid)
+
+
+class PartialAnswers(unittest.TestCase):
+    def test_fallback_keeps_reference_and_unconditional_discount(self):
+        answer = bare_orchestrator(calc.Approval(percent=D("3"))).fallback_answer()
+        self.assertEqual((answer["tender_reference"], answer["decision"], answer["discount_percent"],
+                          answer["positions"], answer["total_net"]), ("T-1", "bid", 3.0, [], 0.0))
+
+    def test_fallback_conditional_discount_without_positions_is_zero(self):
+        approval = calc.Approval(percent=D("3"), min_order_value=D("1000"))
+        self.assertEqual(bare_orchestrator(approval).fallback_answer()["discount_percent"], 0.0)
+
+    def test_fallback_without_approval(self):
+        self.assertEqual(bare_orchestrator().fallback_answer()["discount_percent"], 0.0)
+
+
+class SpecAttempts(unittest.TestCase):
+    def setUp(self):
+        self.o = bare_orchestrator()
+        self.o.effective = lambda req: req
+        self.erp = FakeErp()
+
+    def test_requirements_stream_once_and_from_one_revision(self):
+        self.o._requirement_found(requirement("A-1", "R-2"), "s", "", "", self.erp)
+        self.o._requirement_found(requirement("A-1", "R-2", "63"), "s", "", "", self.erp)  # the other attempt
+        self.o._requirement_found(requirement("A-2", "R-1"), "s", "", "", self.erp)  # another revision
+        self.assertEqual(self.erp.started, [("A-1", D("50"))])
+        self.assertEqual(set(self.o.requirements), {"A-1"})
+
+    def test_winner_of_another_revision_replaces_the_streamed_ones(self):
+        self.o._requirement_found(requirement("A-1", "R-1"), "s", "", "", self.erp)
+        spec = SpecResult(current_revision="R-2", requirements=[requirement("A-1", "R-2", "63"),
+                                                                 requirement("A-2", "R-2")])
+        self.o._adopt_revision(spec, "s", self.erp)
+        self.assertEqual(self.erp.forgotten, ["A-1"])
+        self.assertEqual({k: r.revision for k, r in self.o.requirements.items()}, {"A-1": "R-2", "A-2": "R-2"})
+
+    def test_partial_winner_keeps_streamed_requirements(self):
+        self.o._requirement_found(requirement("A-1", "R-2"), "s", "", "", self.erp)
+        self.o._adopt_revision(SpecResult(current_revision="R-2", requirements=[requirement("A-3", "R-2")]),
+                               "s", self.erp)
+        self.assertEqual(set(self.o.requirements), {"A-1", "A-3"})
 
 
 class BoardEvents(unittest.TestCase):
