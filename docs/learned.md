@@ -35,3 +35,16 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   answering summed to 933 s, about 9 s per call with thinking on), four of six TAN lookups stopped at the 8-request
   limit, and after the accepted answer the agent kept calling the model and ended in a 401 traceback. v1's time is
   not stable: one run says little, and thinking on in the bid form is the first thing to measure.
+- run_b63b37e9c3b6b1df (first v2: research workers, plan, bid entry): quality 34.3 (from 10), 184 calls, 7.5 min,
+  $0.085. Two of five positions entered; both right on material, quantity and base price, one right on lead time.
+  Discount and the withdrawn-answer check scored. Unit price, total and consistency scored 0 because surcharge,
+  packaging and bonus are not built; three positions were omitted because their stroke is a usable stroke whose
+  end reserve was not looked up. The TAN took one request and one lookup of one call.
+- A plan must not conclude "no material matches" from wording: two sources name the same mounting or certification
+  differently. A local run sent a wrong no_bid for that reason. Numbers are compared in code, wording is the
+  model's call, and no_bid needs the model to have chosen no material as well.
+- With thinking on, a worker can spend its whole answer deliberating (token limit reached with nothing recorded);
+  the tender positions worker lost a local run that way. It now gets one more try with thinking the other way.
+- A page view shows a local time and, in brackets, the element's machine timestamp. Parsing the first with the
+  zone of the second shifted every such date; the machine timestamp now wins.
+- Mail lookups: an empty folder costs the full 10-request limit, because the model keeps trying search words.
