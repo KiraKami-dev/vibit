@@ -3086,3 +3086,12 @@ If this event is something the user would act on now, send a PushNotification. R
 <event>01:27 run_f1b9cd1d064032fa acdffa1 quality=100 11.3min $0.167 signed</event>
 If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>btn6x8r1l</task-id>
+<summary>Monitor event: "soak results on main"</summary>
+<event>01:33 run_9f6e6e23f55952fc acdffa1 quality=30.6 11.9min $0.088 signed</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
