@@ -151,5 +151,5 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - Spec redundancy (branch spec-redundancy): a fast and a thinking spec navigator run at once in separate contexts,
   the first with a revision and requirements wins; a stopped navigator still gets its revisions read from its last
   page. Tender documents and Q&A run in two tabs and positions post before the Q&A; a run without complete positions
-  still answers (reference, decision, discount, total 0). Test runs: 100 (12.5 min, $0.177); one earlier run had a
+  still answers (reference, decision, discount, total 0). Test runs: 100 (12.5 min, $0.177) and 100 (13.5 min, $0.184); one earlier run had a
   full research answer (82 offline) but signing timed out (fixed on main by the signing reserve).
