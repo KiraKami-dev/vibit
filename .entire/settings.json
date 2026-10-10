@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "summary_generation": {
+    "provider": "claude-code"
+  },
+  "checkpoints": {
+    "primary": {
+      "type": "git-refs"
+    }
+  }
+}
