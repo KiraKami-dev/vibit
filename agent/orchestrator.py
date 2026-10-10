@@ -63,6 +63,9 @@ MAIL_TAB_STAGGER = 4.0  # seconds between the mail tabs' sign-ins
 MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "540"))  # from the orchestrator's start
 FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys before planning from the brief alone
 PLAN_PATIENT_TIMEOUT = 90.0  # per call when the quick mail plan failed: a loaded model answers in up to ~90 s
+# doubtful mail facts go back to their search in the gap pass's first round (side by side with the gap retries)
+# instead of in a round of their own before calc, which held the first answer back by up to 2 minutes
+GAP_REWORK = os.environ.get("AGENT_GAP_REWORK", "1") == "1"
 REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at least this much research time left
 
 
@@ -269,6 +272,7 @@ class Orchestrator:
         self.mail_kinds: list = []
         self.mail_sessions: list[SiteSession] = []
         self.rework: dict[str, object] = {}  # worker -> coroutine function for doubtful facts
+        self.gap_rework = GAP_REWORK  # doubtful mail kinds are retried in the gap pass (gaps.py)
         self.blank_hints: dict[str, set[str]] = {}  # position -> answer fields that stay blank
         self.attributes: dict[str, dict[str, str]] = {}  # position -> chosen material's attributes, for the form
         self.mailbox = ""
@@ -746,6 +750,8 @@ class Orchestrator:
         by_worker: dict[str, list] = {}
         for fact in doubtful:
             by_worker.setdefault(fact.worker, []).append(fact)
+        if GAP_REWORK:  # the doubtful mail kinds are searched again in the gap pass, alongside the other retries
+            return
         for worker, facts in by_worker.items():
             rework = self.rework.get(worker)
             if rework is None or self.left() < REWORK_SECONDS:

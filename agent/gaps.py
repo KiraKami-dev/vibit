@@ -74,7 +74,10 @@ def _incomplete(record) -> list[str]:
     return incomplete(record)
 
 
-def detect_gaps(o, calc_problems: list[str] = ()) -> list[Gap]:
+DOUBT = "verifier doubt"
+
+
+def detect_gaps(o, calc_problems: list[str] = (), doubts: bool = False) -> list[Gap]:
     """
     What the answer still lacks, from the orchestrator's state (duck-typed: tender_facts, requirements, erp,
     chosen, mail_facts, board, effective()) and the calculation's problems. One gap per thing to retry; a gap that
@@ -142,6 +145,8 @@ def detect_gaps(o, calc_problems: list[str] = ()) -> list[Gap]:
     for fact in (getattr(board, "facts", None) or {}).values():
         if fact.verdict and fact.verdict != "ok":
             add("doubt", fact.ident, fact.verdict[:160])
+            if doubts and fact.worker == "mails":  # its record kind is searched once more (verify's rework)
+                add("mail", fact.key.split("/")[0], f"{DOUBT}: {fact.verdict[:140]}")
     return list(gaps.values())
 
 
@@ -214,7 +219,7 @@ class GapFiller:
 
     async def _rounds(self, first: Calculation, calculate) -> Calculation:
         best = first
-        gaps = detect_gaps(self.o, first.problems)
+        gaps = detect_gaps(self.o, first.problems, doubts=getattr(self.o, "gap_rework", False))
         self._report(gaps, set())
         while self.round < GAP_ROUNDS:
             todo = [g for g in gaps if self.feasible(g) and self.tries.get(g.ident, 0) < self.limit(g)]
@@ -230,7 +235,7 @@ class GapFiller:
             new = calculate()
             after = detect_gaps(self.o, new.problems)
             open_now = {g.ident for g in after}
-            filled = [g.ident for g in todo if g.ident not in open_now]
+            filled = [g.ident for g in todo if g.ident not in open_now and not g.reason.startswith(DOUBT)]
             for ident in filled:
                 self.trace("gap_filled", gap=ident, round=self.round)
             self._report(after, {g.ident for g in gaps})

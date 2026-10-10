@@ -123,6 +123,13 @@ class DetectGaps(unittest.TestCase):
         o.mail_facts.packaging = {"P-1": object()}
         self.assertEqual(idents(detect_gaps(o)), {"material/M-1": ("1",)})
 
+    def test_doubtful_mail_facts_become_mail_gaps_on_request(self):
+        o = state([], [])
+        o.board.post("mail", "fx/USD", "1.1", Source(site="s"), "mails").verdict = "future-dated"
+        self.assertNotIn("mail/fx", idents(detect_gaps(o)))
+        found = {g.ident: g.reason for g in detect_gaps(o, doubts=True)}
+        self.assertTrue(found["mail/fx"].startswith(gaps.DOUBT))
+
     def test_no_positions_and_doubts(self):
         o = state([], [])
         o.board.post("mail", "fx/USD", "1.1", Source(site="s"), "mails").verdict = "future-dated"
