@@ -133,6 +133,16 @@ class Prompts(unittest.TestCase):
         self.assertNotIn("go back", _positions(answer, PositionDesk({}, 0), filled=False))
         self.assertNotIn("go back", _positions(answer, PositionDesk({}, 0), filled=True, prepared=True))
 
+    def test_a_named_option_carries_to_the_same_value_on_later_positions(self):
+        desk = self.desk()
+        desk.remember({"Finish": "certification", "Bore": "bore"})
+        first = {"bore": "10", "certification": "None"}
+        self.assertEqual(desk.picks("1.1", first, {"Finish": "Without finish"}), {"Finish": "Without finish"})
+        self.assertEqual(desk.picks("1.2", {"bore": "20", "certification": "none"}, None),
+                         {"Finish": "Without finish"})
+        self.assertEqual(desk.picks("1.3", {"bore": "10", "certification": "Coated"}, None), {})
+        self.assertEqual(desk.picks("1.1", first, None), {"Finish": "Without finish"})  # a revisit
+
     def test_remember_drops_unknown_names_and_keeps_earlier_ones(self):
         desk = self.desk()
         self.assertIn("Unknown value names", desk.remember({"Colour": "colour"}))  # nothing usable at all

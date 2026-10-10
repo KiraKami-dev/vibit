@@ -19,7 +19,7 @@ import llm
 from briefing import Briefing
 from browser_tools import Deps, SiteSession
 from calc import position_key
-from configurator import (VALUE_NAMES, FillPlan, complete_positions, fill_position, find_control, german,
+from configurator import (VALUE_NAMES, FillPlan, clean, complete_positions, fill_position, find_control, german,
                           mapping_problems, resolve_position, unmapped)
 from extract import locate
 from pydantic import BaseModel, Field
@@ -181,6 +181,7 @@ class PositionDesk:
         self.failures: dict[str, int] = {}
         self.entered: set[str] = set()
         self.choices: dict[str, dict[str, str]] = {}
+        self.synonyms: dict[tuple[str, str], str] = {}  # (control label, wanted value) -> the option the model named
         self.next_button = ""
         self.asked_unmapped = False
 
@@ -289,9 +290,7 @@ class PositionDesk:
         async with session.lock:
             log: list[str] = []
             try:
-                remembered = self.choices.setdefault(position, {})
-                remembered.update(choices or {})  # a revisit of the position needs the same picks
-                error = await fill_position(session, entry, plan, log, remembered)
+                error = await fill_position(session, entry, plan, log, self.picks(position, entry, choices))
             except Exception as exc:  # a slow or changed page: the model decides to retry or omit
                 error = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
             moved = ""
@@ -324,6 +323,24 @@ class PositionDesk:
         """The bid's positions not entered yet: the form may show them in any order; none of them is omitted."""
         left = sorted(set(self.entries) - self.entered, key=position_key)
         return ", ".join(left) or "none"
+
+    def picks(self, position: str, entry: dict, choices: dict[str, str] | None) -> dict[str, str]:
+        """
+        The model's option picks for this position's worded choices: what it named for this position (a revisit
+        needs the same), and what it named for the same control and the same value on an earlier position (a
+        "none" attribute that the form words differently comes up again and needs no second failed attempt).
+        """
+        remembered = self.choices.setdefault(position, {})
+        remembered.update(choices or {})
+        for label, option in (choices or {}).items():
+            key = next((k for l, k in self.plan.fields.items() if clean(l) == clean(label)), None)
+            if key is not None and entry.get(key) is not None:
+                self.synonyms[(clean(label), clean(str(entry[key])))] = option
+        picks = {label: self.synonyms[(clean(label), clean(str(entry[key])))]
+                 for label, key in self.plan.fields.items()
+                 if entry.get(key) is not None and (clean(label), clean(str(entry[key]))) in self.synonyms}
+        picks.update(remembered)
+        return picks
 
     def so_far(self, session: SiteSession) -> str:
         """The running net total, told after every position so the totals step needs no arithmetic."""
