@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01HZNSop2LCBd5HMhhakWPSg",
+  "agent_id": "a1d0cca4a7d0d81f7",
+  "subagent_type": "general-purpose",
+  "task_description": "Streaming watchdog for hung model calls",
+  "token_usage": {
+    "input_tokens": 138,
+    "cache_creation_tokens": 430433,
+    "cache_read_tokens": 6778281,
+    "output_tokens": 55864,
+    "api_call_count": 69
+  },
+  "started_at": "2026-10-10T20:36:55.829858+02:00",
+  "completed_at": "2026-10-10T21:22:14.542314+02:00"
+}
