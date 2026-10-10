@@ -26,6 +26,7 @@ from worker import run_worker
 
 ADDRESS_WAIT = 15  # seconds the bid worker waits for the contact address before it starts without it
 SIGNING_RESERVE = 240  # seconds kept for the review, the TAN round trip and submitting
+LAST_CHANCE = 45  # seconds a final sign-only pass needs at least
 # AGENT_FILL_IN=0 leaves out fill_in(), the several-actions-per-step form tool
 
 
@@ -407,7 +408,10 @@ clicking it.
 
 Brief's submission steps:
 {briefing.submission_steps}"""
-    ready, _ = await run_worker(bid_session, form_goal, FormReady, deadline=deadline,
+    left = deadline - time.monotonic()
+    # the form never eats the signing reserve; with little time left, half of it still goes to the form
+    form_deadline = deadline - SIGNING_RESERVE if left > SIGNING_RESERVE + 90 else time.monotonic() + left / 2
+    ready, _ = await run_worker(bid_session, form_goal, FormReady, deadline=form_deadline,
                                 max_steps=45 + 3 * len(desk.entries), notes=False,
                                 thinking=llm.thinking("form", False), tools=tools)
 
@@ -418,8 +422,10 @@ Brief's submission steps:
         task = ("The form was filled in up to the signing step by an earlier pass, and its summary was checked "
                 "against the requirements below; the current view shows it.")
     elif check:
-        task = (f"The form was filled in up to the signing step by an earlier pass, but a check of the summary "
-                f"found: {check.problems} Fix that first (mind the page's warnings about going back).")
+        task = (f"The form was filled in up to the signing step by an earlier pass. A quick check of the summary "
+                f"(which can be wrong) reported: {check.problems} Fix it only if the fix is on the current page; "
+                f"never go back to earlier steps (that clears them). If it cannot be fixed here, sign anyway: a "
+                f"signed bid with a flaw is worth far more than none.")
     else:
         task = ("An earlier pass started filling in the form but may not have finished; continue from the current "
                 "view, and check the summary against the requirements below." +
@@ -427,7 +433,6 @@ Brief's submission steps:
     if os.environ.get("AGENT_STOP_BEFORE_SIGN") == "1":  # local timing runs: never request a TAN (shared webmail)
         address.cancel()
         return None
-    careful = not (check and check.matches)
     review_goal = f"""Sign and submit the bid for tender {briefing.tender_reference} on this website. {task}
 The bid must be:
 {requirements}
@@ -440,10 +445,23 @@ Brief's submission steps:
     result = None
     try:
         result, _ = await run_worker(bid_session, review_goal, SubmissionResult, deadline=deadline, max_steps=30,
-                                     notes=False, thinking=llm.thinking("sign", careful),
+                                     notes=False, thinking=llm.thinking("sign", False),
                                      tools=(*tools, request_signing_tan))
     except Exception as error:  # in a run, the platform closes the model token once the bid is in
         bid_session.trace.event(bid_session.name, "stopped", reason=f"{type(error).__name__}: {str(error)[:200]}")
+    if not (result and result.submitted) and deadline - time.monotonic() > LAST_CHANCE:
+        # the signing pass ran out of steps or got stuck: one short pass that only signs what is on screen
+        last_goal = f"""Submit the bid for tender {briefing.tender_reference} now, as it stands. Do not change or
+re-check any entry and never go back to earlier steps. If the signing step is not on screen, go forward to it.
+Request the signing TAN with request_signing_tan(ref of the TAN request button), enter the TAN it returns at once
+and submit bindingly. Return once the website confirms the submission (or shows why it failed)."""
+        bid_session.trace.event(bid_session.name, "last_chance", seconds_left=round(deadline - time.monotonic()))
+        try:
+            result, _ = await run_worker(bid_session, last_goal, SubmissionResult, deadline=deadline, max_steps=15,
+                                         notes=False, thinking=False, tools=(request_signing_tan,))
+        except Exception as error:
+            bid_session.trace.event(bid_session.name, "stopped",
+                                    reason=f"{type(error).__name__}: {str(error)[:200]}")
     if not address.done():
         address.cancel()
     return result
