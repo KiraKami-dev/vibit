@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01R46ixkLkR7bzzd6BtCUdoW",
+  "agent_id": "a61a1dc566d4dd696",
+  "subagent_type": "general-purpose",
+  "task_description": "Analyse all v2 sandbox runs",
+  "started_at": "2026-10-10T23:09:38.571572+02:00"
+}
