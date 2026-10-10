@@ -209,7 +209,7 @@ def run_fields(run: dict) -> dict:
         "platform": {
             "eligible": score.get("eligible"),
             "quality": score.get("quality"),
-            "breakdown": score.get("breakdown"),
+            "breakdown": points_only(score.get("breakdown")),
             "cost_usd": round(run["cost_micro_usd"] / 1e6, 6) if run.get("cost_micro_usd") is not None else None,
             "scored_duration_s": round(score["duration_ms"] / 1000, 1) if score.get("duration_ms") else None,
             "error": run.get("error"),
@@ -217,6 +217,16 @@ def run_fields(run: dict) -> dict:
             "scenario_id": run.get("scenario_id"),
         },
     }
+
+
+def points_only(breakdown):
+    """The score breakdown without the answer values it echoes ("got"), which are site data; points and position
+    numbers stay."""
+    if isinstance(breakdown, dict):
+        return {key: points_only(value) for key, value in breakdown.items() if key not in ("got", "expected")}
+    if isinstance(breakdown, list):
+        return [points_only(value) for value in breakdown]
+    return breakdown
 
 
 def platform_record(run_id: str) -> dict:

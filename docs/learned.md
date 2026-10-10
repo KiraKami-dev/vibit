@@ -15,3 +15,5 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   returns its result instead of noting it and searching on.
 - v1 first test run crashed at import: `llm.py` imported `httpx`, but openai 3.x depends on `httpx2`; the local venv
   still had a stale `httpx` from openai 2.x. Run `uv sync` after dependency changes so local matches the sandbox.
+- v1 first scored test run: quality 10 (decision 5 + reference 5), eligible, 3.4 min, $0.022. Discount, total and
+  total consistency score 0 even with every position omitted and total 0; positions need v2.
