@@ -203,7 +203,16 @@ class GapFiller:
         self.o.trace.event("gaps", kind, **data)
 
     async def run(self, first: Calculation, calculate) -> Calculation:
-        """Fill gaps in rounds until none is left to retry or the time is up; returns the best calculation."""
+        """Fill gaps in rounds until none is left to retry or the time is up; returns the best calculation. A
+        failure of the pass itself never costs the first answer."""
+        self.best = first
+        try:
+            return await self._rounds(first, calculate)
+        except Exception as error:
+            self.o.board.problem("gaps", f"second pass failed: {type(error).__name__}: {str(error)[:200]}")
+            return self.best
+
+    async def _rounds(self, first: Calculation, calculate) -> Calculation:
         best = first
         gaps = detect_gaps(self.o, first.problems)
         self._report(gaps, set())
@@ -230,7 +239,7 @@ class GapFiller:
                        retried=[g.ident for g in todo], filled=filled, open=sorted(open_now),
                        completeness=list(new.completeness()), kept="new" if kept else "earlier")
             if kept:
-                best = new
+                best = self.best = new
             gaps = after
         still = [g.ident for g in gaps if g.area != "doubt"]
         if still:

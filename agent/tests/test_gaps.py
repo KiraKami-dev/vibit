@@ -228,6 +228,18 @@ class Scheduling(unittest.TestCase):
         self.assertEqual(calls, ["A-1"] * gaps.GAP_TRIES)
         self.assertEqual(o.trace.kinds("gap_open")[0]["gaps"], ["erp/A-1"])
 
+    def test_a_failing_pass_keeps_the_first_answer(self):
+        o = runnable(GAP_TAIL + GAP_MIN_ROUND + 60)
+        filler = GapFiller(o)
+
+        async def broken(_):
+            raise RuntimeError("bug")
+
+        filler.fill = broken
+        first = calc_for(o)()
+        self.assertIs(asyncio.run(filler.run(first, calc_for(o))), first)
+        self.assertTrue(any("second pass failed" in p for p in o.board.problems))
+
     def test_a_slow_retry_is_cut_at_the_deadline(self):
         o = runnable(GAP_TAIL + 0.3)
         filler = GapFiller(o)
