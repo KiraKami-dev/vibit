@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4KWKTG1Y7S14S2PY8NFDM4B",
+  "strategy": "manual-commit",
+  "branch": "research/agent-architecture",
+  "checkpoints_count": 39,
+  "files_touched": [
+    "agent/agent.py",
+    "agent/browser_tools.py",
+    "agent/llm.py",
+    "agent/orchestrator.py",
+    "agent/research.py",
+    "agent/submit.py",
+    "agent/tests/test_v3.py",
+    "agent/worker.py",
+    "docs/changes-v3.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 620,
+    "cache_creation_tokens": 740715,
+    "cache_read_tokens": 53171325,
+    "output_tokens": 333914,
+    "api_call_count": 261
+  }
+}
