@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01E1bmoxVcyJ8S17sGrwzu52",
+  "agent_id": "a713df6b02283c882",
+  "subagent_type": "general-purpose",
+  "task_description": "Investigate isolated site state options",
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 68042,
+    "cache_read_tokens": 1220055,
+    "output_tokens": 11131,
+    "api_call_count": 20
+  },
+  "started_at": "2026-10-10T18:36:21.885683+02:00",
+  "completed_at": "2026-10-10T18:38:52.780025+02:00"
+}
