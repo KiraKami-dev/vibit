@@ -3,7 +3,7 @@
   "checkpoint_id": "01M4KBNM8XYM94C8Z4EDA19TZH",
   "session_id": "064ce75e-f288-40e2-8ed8-853ec224ce81",
   "strategy": "manual-commit",
-  "created_at": "2026-10-10T16:52:21.398174Z",
+  "created_at": "2026-10-10T16:52:27.924806Z",
   "branch": "worktree-agent-a0f71dbdbb8caf177",
   "checkpoints_count": 2,
   "save_step_count": 3,
@@ -61,14 +61,14 @@
     "turn_count": 50
   },
   "initial_attribution": {
-    "calculated_at": "2026-10-10T16:52:21.262042Z",
+    "calculated_at": "2026-10-10T16:52:27.786856Z",
     "agent_lines": 0,
     "agent_removed": 0,
     "human_added": 411,
-    "human_modified": 2,
+    "human_modified": 1,
     "human_removed": 0,
     "total_committed": 411,
-    "total_lines_changed": 413,
+    "total_lines_changed": 412,
     "agent_percentage": 0,
     "metric_version": 2
   },
