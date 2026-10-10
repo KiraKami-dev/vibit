@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01DLmaCAuN1EChkFx92xAH3f",
+  "agent_id": "aa46bfaaa6794cb3c",
+  "subagent_type": "general-purpose",
+  "task_description": "Evaluate agent framework choice",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 66004,
+    "cache_read_tokens": 930558,
+    "output_tokens": 9096,
+    "api_call_count": 15
+  },
+  "started_at": "2026-10-10T16:06:09.015138+02:00",
+  "completed_at": "2026-10-10T16:10:58.283765+02:00"
+}

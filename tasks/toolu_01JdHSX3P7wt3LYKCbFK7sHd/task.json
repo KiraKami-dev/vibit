@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01JdHSX3P7wt3LYKCbFK7sHd",
+  "agent_id": "a51af5aa57dcaf214",
+  "subagent_type": "general-purpose",
+  "task_description": "Scout supplier portal + ERP",
+  "token_usage": {
+    "input_tokens": 110,
+    "cache_creation_tokens": 278663,
+    "cache_read_tokens": 5162531,
+    "output_tokens": 24069,
+    "api_call_count": 55
+  },
+  "started_at": "2026-10-10T16:05:56.334516+02:00",
+  "completed_at": "2026-10-10T16:24:44.95189+02:00"
+}
