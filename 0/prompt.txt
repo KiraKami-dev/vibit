@@ -853,3 +853,70 @@ One design note for the caller: a naive `datetime` from a site is treated as UTC
 <usage><subagent_tokens>173053</subagent_tokens><tool_uses>67</tool_uses><duration_ms>3015418</duration_ms></usage>
 <worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a0f71dbdbb8caf177</worktreePath><worktreeBranch>worktree-agent-a0f71dbdbb8caf177</worktreeBranch></worktree>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a4138905529ccb8b3</task-id>
+<tool-use-id>toolu_01BaUK4AKhtPJLFqjKPhgtZ4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a4138905529ccb8b3.output</output-file>
+<status>completed</status>
+<summary>Agent "Robustness check with renamed sites" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The role mapping survives a mutated run: in all 4 runs, `briefing.py` mapped the bid and mail sites to the renamed ids. The worker checks are weaker: the tender read passed 3 of 3 final runs, but the mail lookup passed only 1 of 3, and both fail for reasons other than the mutation. The static audit of the committed `agent/` code found no site ids, URL paths or branching on siteId; the brief-specific wording sits mostly in the work-in-progress `research*.py`.
+
+## Robustness results
+Each run renames the site ids to site-a..d (shuffled) and replaces the product names. The model rewords the intro and submission paragraphs with every value kept, and the sections and bullets are reordered. A second variant also hides the URLs from the briefing step. Final script, seeds 2–4:
+
+| Check | Seed 2 | Seed 3 | Seed 4 |
+|---|---|---|---|
+| Briefing, renamed ids (roles, reference, company, VAT id) | PASS 27s | PASS 86s | PASS 79s |
+| Briefing, masked URLs (roles from the brief text alone) | PASS 17s | PASS 22s | PASS 51s |
+| Mail address (`Mailbox.address`) | PASS 4s | PASS 2s | PASS 4s |
+| Mail lookup, no TAN (director approval) | PASS 70s | FAIL 75s | FAIL 74s |
+| Tender positions (5, same each run) | PASS 89s | PASS 44s | PASS 77s |
+| Read-only guard | 0 blocked | 0 blocked | 0 blocked |
+
+Whole runs took 139–200s.
+
+- **Mail lookup failures:** both ran out of the 20-step budget. The mailbox needs a narrowed search behind gates that lock again on every page. Workers only see the siteId as a label, so this is a capability gap, not a mutation effect.
+- **Seed 1** ran with vaguer goals: both briefing variants passed, while the mail lookup and tender read ran out of steps.
+- **A hang:** in one attempt, starting the mail session hung for over 10 minutes after the cookie click timed out. `agent.solve()` starts the sessions with no time limit, so the same hang would block the real run.
+
+## Audit, highest risk first
+**HIGH**
+1. `research_mail.py:210, 377-382, 448, 525`: a sender counts only if it is exactly a role name from the brief at the bidder's own mail domain. A brief that names people or outside addresses rejects every record without saying so. Accept the sender identity the brief states.
+2. `research_mail.py:270-273`: the prompt states public-1's search behaviour as fact (AND search, nothing above 20 hits, separate archive search), which is close to a fixed click path. Say "search every folder; narrow the search if nothing shows".
+3. `research_tender.py:263-272` and `research_mail.py:181-224`: which facts live on which site is fixed in code. Map facts to sites from the brief through a model.
+4. `research_mail.py:283` and `research_tender.py:81-84`: the model converts numbers itself ("5,15 → 5.15"), so en-US "1,250" becomes 1.25. Keep the raw strings and parse them with `evidence.parse_number`.
+
+**MED**
+- The `research.py` goals describe public-1 traps: "Verbindliche Unterlagen", Originalwortlaut, one record per page, "search help".
+- `evidence.py` defaults to German formats: a lone comma is a decimal, slashed dates are day-first, and the "none" words are German.
+- `submit.py:52-53`: TAN messages assumed "newest first, highest request number".
+- `submit.py:86`: "German number format" is hardcoded. Use the format the brief's submission steps name.
+- `briefing.py` assumes exactly one bid site and one mail site, and ignores `submission.siteId` from the run contract.
+- `browser_tools.py:85-91, 173-194`: the sign-in, cookie and error-page helpers only know German and English wording and one-step password forms.
+- `calc.py:333-336`: the same sender-at-bidder-domain assumption as finding 1.
+
+**LOW:** the German hints in prompts (`worker.py:21` "German industrial company", USt-IdNr., Konditionsgruppe), rule numbers in comments, the `## Site access` split in `research.py:152`, and `dev/smoke.py` goals keyed on public-1 site ids.
+
+## Recommended fixes
+- Give `solve()` a time limit on session start, with one retry.
+- Use `task["submission"]["siteId"]` to confirm the bid site the briefing returns.
+- Make mail lookups take the search hints from the brief, and give them a budget that allows for gates locking again.
+- Parse every number through one locale-aware parser.
+- Treat sender rules and fact locations as data read from the brief, not code.
+
+## Branch and commit
+Branch `worktree-agent-a4138905529ccb8b3`, one commit `a4961c4` "Add robustness check against mutated runs". Not pushed, nothing under `agent/` changed. Run it from the repo root:
+
+`HEADLESS=1 uv run --project agent python dev/robustness.py --runs 3 [--seed N] [--json out.jsonl]`
+
+The script reads the scouting logins from `atira scout --env` itself, because this environment blocks `eval`. On the tender site it blocks submission, TAN and any other state-changing requests, and it never sends the logins to the model.
+
+Files are in /Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a4138905529ccb8b3:
+- dev/robustness.py</result>
+<usage><subagent_tokens>146146</subagent_tokens><tool_uses>49</tool_uses><duration_ms>1984683</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a4138905529ccb8b3</worktreePath><worktreeBranch>worktree-agent-a4138905529ccb8b3</worktreeBranch></worktree>
+</task-notification>
