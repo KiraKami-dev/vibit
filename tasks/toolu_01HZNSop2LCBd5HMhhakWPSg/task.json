@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01HZNSop2LCBd5HMhhakWPSg",
+  "agent_id": "a1d0cca4a7d0d81f7",
+  "subagent_type": "general-purpose",
+  "task_description": "Streaming watchdog for hung model calls",
+  "started_at": "2026-10-10T20:36:55.829858+02:00"
+}
