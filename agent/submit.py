@@ -528,7 +528,9 @@ Brief's submission steps:
     left = deadline - time.monotonic()
     # the form never eats the signing reserve; with little time left, half of it still goes to the form
     form_deadline = deadline - SIGNING_RESERVE if left > SIGNING_RESERVE + 90 else time.monotonic() + left / 2
-    ready, _ = await run_worker(bid_session, form_goal, FormReady, deadline=form_deadline,
+    # not grounded: the result is a status, and its notes quote our own figures ("5,00" refused four times, 30 s,
+    # after which the model went back a step looking for it)
+    ready, _ = await run_worker(bid_session, form_goal, FormReady, deadline=form_deadline, grounded=False,
                                 max_steps=45 + 3 * len(desk.entries), notes=False,
                                 thinking=llm.thinking("form", False), tools=tools)
 
@@ -546,8 +548,8 @@ Brief's submission steps:
         # The review is signed as it stands, whatever the check says: a false alarm sent signing back and forth
         # between steps until its step cap (run 0d2d, ~100 s), and going back clears the later steps anyway.
         task = ("The form was filled in up to the signing step by an earlier pass; the current view shows its "
-                "summary. Sign it as it stands: do not change, re-enter or re-check anything, and do not move to "
-                "other steps (going back clears them).")
+                "summary. Sign it as it stands: do not change, re-enter or re-check anything and never go back to "
+                "earlier steps (that clears them); if the signing step is not on screen, go forward to it.")
     else:
         task = ("An earlier pass started filling in the form but may not have finished; continue from the current "
                 "view, and check the summary against the requirements below." +
@@ -687,6 +689,7 @@ Brief's submission steps:
         tools = (bidder_contact_email, self.desk.map_position_form, fill_in)
         until = min(started + PREPARE_SECONDS, self.deadline - SIGNING_RESERVE - 240)
         result, _ = await run_worker(self.session, goal, PrepareResult, deadline=until, max_steps=20, notes=False,
+                                     grounded=False,
                                      thinking=llm.thinking("form", False), tools=tools)
         self.ready = bool(result and result.at_positions)
         self.preparing = False
