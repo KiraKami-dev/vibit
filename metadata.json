@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4N1M32K5896KPYP1ZQPWTEM",
+  "strategy": "manual-commit",
+  "branch": "research/coverage-and-hang-fixes",
+  "checkpoints_count": 10,
+  "files_touched": [
+    "agent/browser_tools.py",
+    "agent/llm.py",
+    "agent/orchestrator.py",
+    "agent/research_mail.py",
+    "agent/submit.py",
+    "agent/tests/test_complete.py",
+    "agent/tests/test_fast_start.py",
+    "agent/tests/test_hang.py",
+    "agent/tests/test_llm_watchdog.py",
+    "agent/tests/test_research_mail.py",
+    "agent/tracing.py",
+    "experiments/runs.jsonl"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 224,
+    "cache_creation_tokens": 153004,
+    "cache_read_tokens": 44814788,
+    "output_tokens": 89622,
+    "api_call_count": 102
+  }
+}

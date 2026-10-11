@@ -1,0 +1,162 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4N1M32K5896KPYP1ZQPWTEM",
+  "session_id": "ec841aba-eb0d-4032-9a46-de859b37e08c",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-11T08:35:14.347812Z",
+  "branch": "research/coverage-and-hang-fixes",
+  "checkpoints_count": 10,
+  "save_step_count": 8,
+  "files_touched": [
+    "agent/browser_tools.py",
+    "agent/llm.py",
+    "agent/orchestrator.py",
+    "agent/research_mail.py",
+    "agent/submit.py",
+    "agent/tests/test_complete.py",
+    "agent/tests/test_fast_start.py",
+    "agent/tests/test_hang.py",
+    "agent/tests/test_llm_watchdog.py",
+    "agent/tests/test_research_mail.py",
+    "agent/tracing.py",
+    "experiments/runs.jsonl"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "6f50e33d6b2e",
+  "checkpoint_transcript_start": 3234,
+  "transcript_lines_at_start": 3234,
+  "compact_transcript_start": 613,
+  "token_usage": {
+    "input_tokens": 224,
+    "cache_creation_tokens": 153004,
+    "cache_read_tokens": 44814788,
+    "output_tokens": 89622,
+    "api_call_count": 102
+  },
+  "session_metrics": {
+    "turn_count": 68
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-11T08:35:13.792853Z",
+    "agent_lines": 39,
+    "agent_removed": 9,
+    "human_added": 196,
+    "human_modified": 17,
+    "human_removed": 0,
+    "total_committed": 252,
+    "total_lines_changed": 261,
+    "agent_percentage": 18.39080459770115,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 3,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "agent/research_mail.py": 4,
+        "agent/tests/test_research_mail.py": 2,
+        "experiments/runs.jsonl": 1
+      },
+      "user_removed_per_file": {
+        "agent/research_mail.py": 2,
+        "agent/tests/test_research_mail.py": 1
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 28,
+      "agent_lines_removed": 4
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 16,
+      "user_lines_removed": 1,
+      "agent_lines_added": 28,
+      "agent_lines_removed": 4,
+      "user_added_per_file": {
+        "agent/orchestrator.py": 6,
+        "agent/tests/test_complete.py": 9,
+        "experiments/runs.jsonl": 1
+      },
+      "user_removed_per_file": {
+        "agent/orchestrator.py": 1
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 60,
+      "agent_lines_removed": 5,
+      "user_added_per_file": {
+        "experiments/runs.jsonl": 1
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 96,
+      "user_lines_removed": 10,
+      "agent_lines_added": 61,
+      "agent_lines_removed": 5,
+      "user_added_per_file": {
+        "agent/browser_tools.py": 54,
+        "agent/submit.py": 2,
+        "agent/tests/test_hang.py": 40
+      },
+      "user_removed_per_file": {
+        "agent/browser_tools.py": 8,
+        "agent/submit.py": 2
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 176,
+      "agent_lines_removed": 22,
+      "user_added_per_file": {
+        "experiments/runs.jsonl": 1
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 178,
+      "agent_lines_removed": 23
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 79,
+      "user_lines_removed": 3,
+      "agent_lines_added": 178,
+      "agent_lines_removed": 23,
+      "user_added_per_file": {
+        "agent/orchestrator.py": 21,
+        "agent/research_mail.py": 39,
+        "agent/tests/test_complete.py": 17,
+        "agent/tracing.py": 2
+      },
+      "user_removed_per_file": {
+        "agent/research_mail.py": 2,
+        "agent/tracing.py": 1
+      }
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 257,
+      "agent_lines_removed": 26,
+      "user_added_per_file": {
+        "experiments/runs.jsonl": 1
+      }
+    }
+  ]
+}
