@@ -84,7 +84,8 @@ def site(server, name="portal") -> dict:
 
 
 SCALED = dict(GOTO_SECONDS=2, SETTLE_SECONDS=3, LOOK_SECONDS=3, START_SECONDS=25, START_BACKOFF=(0.2,),
-              MIN_ATTEMPT=0.5, DEADLINE=None)
+              MIN_ATTEMPT=0.5, DEADLINE=None, RACE_AFTER=60, STUCK_SECONDS=3, PROBE_SECONDS=1, HELPER_SECONDS=2)
+# RACE_AFTER=60: these tests keep one tab per attempt; test_fast_start.py races a fresh context against it
 
 
 def scaled(**over):
@@ -189,7 +190,7 @@ class SlowStartTest(unittest.TestCase):
         self.assertEqual(counts["GET /"], 1)  # no second tab opened by revive
         self.assertIn("helper", session.trace.kinds())
 
-    def test_a_fresh_context_after_two_failed_attempts(self):
+    def test_retries_run_in_a_fresh_context(self):
         server, _ = serve(slow_home=False, slow_login=False)
         port = server.server_address[1]
         server.shutdown()
@@ -210,8 +211,8 @@ class SlowStartTest(unittest.TestCase):
         session, same = asyncio.run(run())
         actions = [f.get("action") for _, kind, f in session.trace.events if kind == "helper"]
         self.assertEqual(session.trace.kinds().count("start_failed"), 3)
-        self.assertIn("fresh_context", actions)
-        self.assertTrue(same)  # the fresh context did not help: back to the run's own
+        self.assertEqual(actions.count("fresh_context"), 2)  # attempts 2 and 3, each in a new context
+        self.assertTrue(same)  # the fresh contexts did not help: the run's own stays
         self.assertFalse(session.ok)
 
 
