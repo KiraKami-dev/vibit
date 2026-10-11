@@ -3,7 +3,7 @@
   "checkpoint_id": "01M4MHEE9CRD0DZ5MQJ2QGSD7K",
   "strategy": "manual-commit",
   "branch": "worktree-agent-aa1a525d61b295024",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "experiments/runs.jsonl"
   ],
@@ -14,21 +14,27 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 25912,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 871424,
-    "output_tokens": 5023,
-    "api_call_count": 17,
+    "input_tokens": 25932,
+    "cache_creation_tokens": 10853,
+    "cache_read_tokens": 4225102,
+    "output_tokens": 9986,
+    "api_call_count": 27,
     "subagent_tokens": {
-      "input_tokens": 0,
-      "cache_creation_tokens": 0,
-      "cache_read_tokens": 0,
-      "output_tokens": 0,
-      "api_call_count": 0
-    },
-    "subagent_tokens_complete": true
+      "input_tokens": 6,
+      "cache_creation_tokens": 356076,
+      "cache_read_tokens": 355757,
+      "output_tokens": 309,
+      "api_call_count": 2
+    }
   }
 }
