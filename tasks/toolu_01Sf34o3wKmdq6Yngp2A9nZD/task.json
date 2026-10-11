@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Sf34o3wKmdq6Yngp2A9nZD",
+  "agent_id": "a7d100a6cd4c6623d",
+  "subagent_type": "general-purpose",
+  "task_description": "Tender Q&A amendments reliability",
+  "token_usage": {
+    "input_tokens": 150,
+    "cache_creation_tokens": 204146,
+    "cache_read_tokens": 11330050,
+    "output_tokens": 55255,
+    "api_call_count": 75
+  },
+  "started_at": "2026-10-11T02:43:46.2975+02:00",
+  "completed_at": "2026-10-11T03:01:48.064251+02:00"
+}
