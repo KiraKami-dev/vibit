@@ -524,3 +524,7 @@ yes do that, but dont start a new run, i want you to research decision model lik
 ---
 
 tell me what exactly is my current situation with the llms, parallel agents and stuff like that, are things actually happening parallel? you know the logic by now, which other processes can take place parallely? look into that, what depends on what some other thing, what doesn't, and hence what could be done parallely
+
+---
+
+do everything and when done, do test run
