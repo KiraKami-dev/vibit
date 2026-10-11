@@ -932,3 +932,7 @@ do fast brother, what are you doing
 <status>completed</status>
 <summary>Background command "Start five confirmation test runs of the same commit, two at a time, and wait for all scores" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+go, do both
