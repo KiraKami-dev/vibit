@@ -488,8 +488,8 @@ def _positions(answer: dict | None, desk: PositionDesk, filled: bool, prepared: 
         return head + (f"- exactly {len(desk.entered)} position(s) entered, each with these values:\n"
                        f"{desk.expected()}\n"
                        "- every other position omitted, and no added or extra position;\n"
-                       f"- discount {discount} and net total {desk.fmt(desk.total())} ({desk.number_format}; never a "
-                       "gross amount);")
+                       f"- discount {discount} and net total {desk.fmt(desk.total())} (the same amount, though a "
+                       "review may show it with thousands separators; never a gross amount);")
     if not desk.entries:
         return head + ("- leave every position out with the form's option to omit a position (where the form shows "
                        "one position per step, omit each in turn); do not configure materials, prices or lead times, "
