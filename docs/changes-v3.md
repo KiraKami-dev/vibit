@@ -47,6 +47,21 @@ of the positions next to it), and the form worker clicked past one position's pa
 | `research.py` | `_extract_page`: each specification page is read twice at once; where the readings differ, a third reader that thinks and is told what differs decides (`AGENT_SPEC_READS`, 1 = as before). |
 | `submit.py`, `browser_tools.py` | `PositionDesk.premature` through `SiteSession.guard`: when the form worker is about to click or type on a page that shows exactly one position the bid has values for (not entered, not tried), it is told once to call `configure_position` first. Once per position, so it can never block the form; off in the signing pass. |
 
+## The bid form (not yet run in the sandbox)
+
+Measured before: the form pass took 167 to 352 s for five positions. Between every two positions the model was
+asked once (3 to 7 s, more when a call stalled), twice where a worded choice matched no option, and the pages
+after the positions took up to seven single steps.
+
+| File | Change |
+| --- | --- |
+| `submit.py` | `configure_position` goes on by itself: after saving a position it enters the next position of this bid that the form shows, with the same mapping and buttons, until a page needs the model (a position to omit, a problem, the step after the positions, or the signing reserve). It only continues on a page that has the save button and a mapped control (`_form_on`), so a page that merely names a position is left to the model. |
+| `submit.py` | A worded choice the model resolved for one position (control label and wanted value -> option) is reused for every position that wants the same value (`PositionDesk.worded`). |
+| `submit.py` | When the last position is entered, the tool's answer says to do each following page with one `fill_in()` call. |
+
+`AGENT_POSITION_BATCH=0` restores one position per call. The model still gives the mapping, names the buttons,
+resolves worded choices, omits positions and does every other page.
+
 ## Environment variables (all optional)
 
 | Variable | Default | What |
@@ -61,6 +76,7 @@ of the positions next to it), and the form worker clicked past one position's pa
 | `AGENT_REVISION_JUDGES` | 2 | 1 = a single revision judgement |
 | `MAIL_TABS` / `AGENT_FINDINGS_WAIT` | 6 / 0 | Mail tabs; seconds the mail planner waits for the tender's keys |
 | `AGENT_SPEC_READS` | 2 | Readings of each specification page; 1 = a single reading |
+| `AGENT_POSITION_BATCH` | 1 | 0 = `configure_position` enters one position per call |
 | `AGENT_STRONG_MODEL` | unset | Model name for the `explore` attempt, e.g. one your provider key allows |
 | `AGENT_STRONG_BASE_URL` / `AGENT_STRONG_API_KEY` | `OPENAI_BASE_URL` / `OPENAI_API_KEY` | Its endpoint and key (team secret) |
 
@@ -74,3 +90,4 @@ of the positions next to it), and the form worker clicked past one position's pa
 - `mails plan` within about 40 s of the start; `verify evidence_only` instead of `verify rework`; no second
   `verify done` unless a rework ran.
 - `spec_read_disputed` (a page read differently twice) and `guard` (the form worker was sent back to a position).
+- `configure_position` events with `after=1, 2, ...` (positions entered in one call) and fewer model calls between them.

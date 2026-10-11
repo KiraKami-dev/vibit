@@ -18,7 +18,16 @@ import llm
 from briefing import Briefing
 from browser_tools import Deps, SiteSession
 from calc import position_key
-from configurator import FillPlan, complete_positions, fill_position, find_control, german, position_on_page
+from configurator import (
+    FillPlan,
+    clean,
+    complete_positions,
+    fill_position,
+    find_control,
+    form_value,
+    german,
+    position_on_page,
+)
 from extract import locate
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
@@ -29,6 +38,11 @@ ADDRESS_WAIT = 15  # seconds the bid worker waits for the contact address before
 SIGNING_RESERVE = float(os.environ.get("AGENT_SIGNING_RESERVE", "180"))
 LAST_CHANCE = 45  # seconds a final sign-only pass needs at least
 # AGENT_FILL_IN=0 leaves out fill_in(), the several-actions-per-step form tool
+# One configure_position() call goes on with the bid's following positions as long as the form shows them, so the
+# model is asked once for the mapping and then only where a page needs it (measured before: a model call of 3 to
+# 7 s between every two positions, and one more for each position whose worded choice it had already made).
+# AGENT_POSITION_BATCH=0: one position per call, as before.
+POSITION_BATCH = os.environ.get("AGENT_POSITION_BATCH", "1") != "0"
 
 
 class MailboxAddress(BaseModel):
@@ -186,6 +200,8 @@ class PositionDesk:
         self.choices: dict[str, dict[str, str]] = {}
         self.next_button = ""
         self.nudged: set[str] = set()
+        self.worded: dict[tuple[str, str], str] = {}  # (control label, wanted value) -> the option the model chose
+        self.after_positions = ""  # said once every position is entered: how to do the pages that follow
 
     @property
     def tools(self) -> tuple:
@@ -196,11 +212,13 @@ class PositionDesk:
                                  choices: dict[str, str] | None = None) -> str:
         """
         Enter all values of the position the form shows now and, once all are in, save it and go on with the form's
-        next/continue button. `position`: its number as the page shows it. `fields`: control label (exactly as in
-        your view) -> value name; needed on the first call, later calls reuse it. `confirm_button`: label of the
-        button that applies a choice so the next choice opens. `next_button`: label of the button that saves the
-        position and goes on (never the one that omits or adds a position); needed once. `choices`: only when a
-        call reported that no option equals an attribute: control label -> the option that means the same.
+        next/continue button; then do the same for each following position of this bid the form shows, until a
+        page needs you (a position to omit, a problem, or the step after the positions). `position`: the number
+        of the position on the page now. `fields`: control label (exactly as in your view) -> value name; needed
+        on the first call, later calls reuse it. `confirm_button`: label of the button that applies a choice so
+        the next choice opens. `next_button`: label of the button that saves the position and goes on (never the
+        one that omits or adds a position); needed once. `choices`: only when a call reported that no option
+        equals an attribute: control label -> the option that means the same.
         """
         session, plan, position = ctx.deps.session, self.plan, position.strip()
         known = set().union(*self.entries.values()) - {"position"}
@@ -227,40 +245,82 @@ class PositionDesk:
         if time.monotonic() > self.deadline - SIGNING_RESERVE:
             return ("Time is short: leave this and every remaining position out and go on to signing. "
                     + self.so_far(session))
+        saved_now: list[str] = []  # the positions this call entered and saved before the one it ends on
         async with session.lock:
             if not position_on_page(await session.look(), position):
                 return (f"Position {position} is not on the page now. Configure the position the page shows, by "
                         "its own number.")
-            log: list[str] = []
-            try:
-                remembered = self.choices.setdefault(position, {})
-                remembered.update(choices or {})  # a revisit of the position needs the same picks
-                error = await fill_position(session, entry, plan, log, remembered)
-            except Exception as exc:  # a slow or changed page: the model decides to retry or omit
-                error = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
-            moved = ""
-            if not error and self.next_button:  # the model named the button; clicking it is the mechanical part
+            while True:
+                log: list[str] = []
+                error, moved, saved = await self._enter(session, position, choices, log)
+                session.trace.event(session.name, "configure_position", position=position, done=log, error=error,
+                                    moved=moved, after=len(saved_now))
                 view = await session.look()
-                ref, why = find_control(view, self.next_button, ("button",))
-                target = await locate(session.page, ref) if ref else None
-                if target is None:
-                    moved = f" Could not save it: {why}; click the form's next/continue button yourself."
-                else:
-                    await target.click(timeout=5000)
-                    await session.settle()
-                    moved = f" Saved with {self.next_button!r}; the page below is the form's next step."
-            session.trace.event(session.name, "configure_position", position=position, done=log, error=error,
-                                moved=moved)
-            view = await session.look()
+                if error:
+                    self.failures[position] = self.failures.get(position, 0) + 1
+                    self.entered.discard(position)
+                    break
+                self.entered.add(position)
+                following = self.pending_on(view) if saved and POSITION_BATCH and self._form_on(view) else None
+                if following is None or time.monotonic() > self.deadline - SIGNING_RESERVE:
+                    break
+                saved_now.append(f"{position} ({'; '.join(log)})")  # the form went on to another of this bid's
+                position, choices = following, None
+        before = f"Entered and saved: {'; then '.join(saved_now)}. " if saved_now else ""
         if error:
-            self.failures[position] = self.failures.get(position, 0) + 1
-            self.entered.discard(position)
-            return (f"Position {position} not fully entered: {error}. Entered so far: {'; '.join(log) or 'nothing'}. "
-                    "Fix the mapping and call again, or leave the position out with the form's option to omit "
-                    f"it. {self.so_far(session)}\n\n{view}")
-        self.entered.add(position)
+            return (f"{before}Position {position} not fully entered: {error}. Entered so far: "
+                    f"{'; '.join(log) or 'nothing'}. Fix the mapping and call again, or leave the position out with "
+                    f"the form's option to omit it. {self.so_far(session)}\n\n{view}")
         then = moved or " Check it, then save and continue with the form's next/continue button."
-        return f"Position {position} entered: {'; '.join(log)}.{then} {self.so_far(session)}\n\n{view}"
+        done = self.after_positions if set(self.entries) <= self.entered else ""
+        return f"{before}Position {position} entered: {'; '.join(log)}.{then} {self.so_far(session)}{done}\n\n{view}"
+
+    async def _enter(self, session: SiteSession, position: str, choices: dict[str, str] | None,
+                     log: list[str]) -> tuple[str | None, str, bool]:
+        """Enter one position on the page and save it with the named button: (error, what happened, saved)."""
+        entry = self.entries[position]
+        try:
+            remembered = self.choices.setdefault(position, {})
+            remembered.update(self._worded_for(entry))  # the same wording the model already resolved elsewhere
+            remembered.update(choices or {})  # a revisit of the position needs the same picks
+            self._learn(entry, choices or {})
+            error = await fill_position(session, entry, self.plan, log, remembered)
+        except Exception as exc:  # a slow or changed page: the model decides to retry or omit
+            error = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
+        if error or not self.next_button:
+            return error, "", False
+        # the model named the button; clicking it is the mechanical part
+        ref, why = find_control(await session.look(), self.next_button, ("button",))
+        target = await locate(session.page, ref) if ref else None
+        if target is None:
+            return None, f" Could not save it: {why}; click the form's next/continue button yourself.", False
+        await target.click(timeout=5000)
+        await session.settle()
+        return None, f" Saved with {self.next_button!r}; the page below is the form's next step.", True
+
+    def pending_on(self, view: str) -> str | None:
+        """The one position of this bid that the page shows and that is still to enter (not entered, not failed)."""
+        pending = [p for p in self.entries if p not in self.entered and not self.failures.get(p)
+                   and position_on_page(view, p)]
+        return pending[0] if len(pending) == 1 else None
+
+    def _form_on(self, view: str) -> bool:
+        """Whether the page is a position's input page as mapped: the save button and a mapped control are on it
+        (a page that merely names the next position is left to the model)."""
+        return (find_control(view, self.next_button, ("button",))[0] is not None
+                and any(find_control(view, label, ("select", "textbox", "textarea"))[0] for label in self.plan.fields))
+
+    def _learn(self, entry: dict, choices: dict[str, str]) -> None:
+        """Remember the option the model chose for a control's wanted value, for positions that want the same."""
+        for label, option in choices.items():
+            key = next((k for name, k in self.plan.fields.items() if clean(name) == clean(label)), None)
+            if key is not None and key in entry:
+                self.worded[(clean(label), form_value(key, entry[key]))] = option
+
+    def _worded_for(self, entry: dict) -> dict[str, str]:
+        return {label: self.worded[(clean(label), form_value(key, entry[key]))]
+                for label, key in self.plan.fields.items()
+                if key in entry and (clean(label), form_value(key, entry[key])) in self.worded}
 
     def premature(self, view: str) -> str | None:
         """
@@ -269,13 +329,12 @@ class PositionDesk:
         past a position's page and so left it out.) Said once per position, so a page that merely mentions the
         number can never hold the worker up.
         """
-        pending = [p for p in self.entries if p not in self.entered and p not in self.nudged
-                   and not self.failures.get(p) and position_on_page(view, p)]
-        if len(pending) != 1:
+        position = self.pending_on(view)
+        if position is None or position in self.nudged:
             return None
-        self.nudged.add(pending[0])
-        return (f"This page shows position {pending[0]}, which this bid enters: call configure_position("
-                f"'{pending[0]}', ...) now; it enters all its values and saves it. Do not omit it and do not move "
+        self.nudged.add(position)
+        return (f"This page shows position {position}, which this bid enters: call configure_position("
+                f"'{position}', ...) now; it enters all its values and saves it. Do not omit it and do not move "
                 "on without it. (If this is not that position's own input page, repeat your action.)")
 
     def so_far(self, session: SiteSession) -> str:
@@ -338,9 +397,11 @@ def _positions(answer: dict | None, desk: PositionDesk, filled: bool) -> str:
                        "number format);")
     names = sorted({key for entry in desk.entries.values() for key in entry} - {"position"})
     return head + f"""- enter exactly these positions: {', '.join(sorted(desk.entries))}. The form shows one position
-  at a time, in its own order. On every position page, first call configure_position() with the number the page
-  shows: it enters all values of a position of this bid and saves it with the next/continue button you name, or
-  tells you to omit it. Never pick options or type position values yourself;
+  at a time, in its own order. On a position page, call configure_position() with the number the page shows: it
+  enters all values of that position, saves it with the next/continue button you name, and goes on by itself
+  with the following positions of this bid; when it returns, the view below its answer is the page that needs
+  you (a position to omit, a problem it reports, or the step after the positions). Never pick options or type
+  position values yourself;
 - configure_position() needs, once, which control takes which value: map each control's label (as your view shows
   it) to one of these value names: {', '.join(names)}. Choices that open further choices (attributes of the
   material) map to the attribute with the same meaning; the material/catalogue number control to material_number;
@@ -432,6 +493,9 @@ async def submit_bid(bid_session: SiteSession, mailbox: Mailbox, briefing: Brief
         tools += (fill_in,)
     several = ("Enter everything a page asks for with one fill_in() call (all its fields, boxes and per-row "
                "buttons), then move on.\n" if batch else "")
+    if batch:
+        desk.after_positions = (" Every position of this bid is entered now. Do each page that follows with ONE "
+                                "fill_in() call: all its fields and boxes, and its continue button last.")
     form_goal = f"""Fill in the bid for tender {briefing.tender_reference} on this website, following the brief's
 submission steps below, up to the final review and signing step. Every value of this bid is already researched
 and calculated; you only enter it: do not open documents, questions or other pages to check or research anything.

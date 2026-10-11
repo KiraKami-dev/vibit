@@ -355,5 +355,121 @@ class NoWalkingPastAPosition(unittest.TestCase):
         self.assertEqual(acted, [])
 
 
+def position_page(number: str) -> str:
+    return (f"# Position {number}\nCylinder\n[e3 select \"Bore (mm)\"]\n[e4 select \"Certification\"]\n"
+            f"[e5 textbox \"Quantity\"]\n[e6 button \"Apply\"]\n[e7 button \"Omit position\"]\n[e8 button \"Save and next\"]")
+
+
+TOTALS_PAGE = "# Totals\n[e3 textbox \"Discount\"]\n[e4 button \"Continue\"]"
+PREVIEW_PAGE = "# Next up: position 01.03\n[e4 button \"Continue\"]"
+ENTRY = {"material_number": "M-1", "quantity": 2, "unit_price": 10, "lead_time_weeks": 3, "bore": "50",
+         "certification": "None"}
+FIELDS = {"Bore (mm)": "bore", "Certification": "certification", "Quantity": "quantity"}
+
+
+class FormPages:
+    """A bid form as a list of page views: the save button moves to the next one."""
+
+    def __init__(self, pages: list[str]):
+        self.pages, self.at = pages, 0
+        self.lock, self.page = asyncio.Lock(), SimpleNamespace(url="https://bid.test/form")
+        self.trace, self.name, self.seen = Trace(tempfile.mkdtemp()), "bid", ""
+
+    async def look(self, *a, **k) -> str:
+        return self.pages[min(self.at, len(self.pages) - 1)]
+
+    async def settle(self) -> None:
+        return None
+
+
+class PositionsInOneCall(unittest.TestCase):
+    def enter(self, pages: list[str], positions: list[str], errors: dict | None = None, calls=None, batch=True,
+              deadline: float = 900.0):
+        import submit
+        session = FormPages(pages)
+        desk = submit.PositionDesk({p: {"position": p, **ENTRY} for p in positions}, time.monotonic() + deadline)
+        desk.after_positions = " ALL DONE."
+        filled: list[tuple[str, dict]] = []
+        errors = dict(errors or {})
+
+        async def fill_position(sess, entry, plan, log, choices=None):
+            filled.append((entry["position"], dict(choices or {})))
+            problem = errors.get(entry["position"])
+            if problem and not (choices or {}).get("Certification"):
+                return problem
+            log.append("Bore (mm) = 50")
+            return None
+
+        async def locate(page, ref):
+            async def click(timeout=0):
+                session.at += 1
+            return SimpleNamespace(click=click)
+
+        ctx = SimpleNamespace(deps=SimpleNamespace(session=session))
+        shown = pages[0].splitlines()[0].split()[-1]  # the model names the position the page shows
+        calls = calls or [dict(position=shown, fields=FIELDS, confirm_button="Apply", next_button="Save and next")]
+
+        async def run():
+            return [await desk.configure_position(ctx, **call) for call in calls]
+
+        with patch.object(submit, "fill_position", fill_position), patch.object(submit, "locate", locate), \
+                patch.object(submit, "POSITION_BATCH", batch):
+            answers = asyncio.run(run())
+        return desk, filled, answers, session
+
+    def test_one_call_enters_every_position_the_form_shows_in_turn(self):
+        pages = [position_page("01.02"), position_page("01.01"), position_page("01.03"), TOTALS_PAGE]
+        desk, filled, answers, session = self.enter(pages, ["01.01", "01.02", "01.03"])
+        self.assertEqual([p for p, _ in filled], ["01.02", "01.01", "01.03"])
+        self.assertEqual(desk.entered, {"01.01", "01.02", "01.03"})
+        self.assertIn("Entered and saved: 01.02", answers[0])
+        self.assertIn("Position 01.03 entered", answers[0])
+        self.assertIn("ALL DONE.", answers[0])
+        self.assertTrue(answers[0].endswith(TOTALS_PAGE))  # the model sees the page that needs it
+
+    def test_it_stops_at_a_position_the_bid_has_no_values_for(self):
+        pages = [position_page("01.02"), position_page("01.09"), position_page("01.01"), TOTALS_PAGE]
+        desk, filled, answers, _ = self.enter(pages, ["01.01", "01.02"])
+        self.assertEqual([p for p, _ in filled], ["01.02"])
+        self.assertTrue(answers[0].endswith(position_page("01.09")))
+        self.assertNotIn("ALL DONE.", answers[0])
+
+    def test_a_problem_stops_it_and_the_model_resolves_it_once_for_all_such_positions(self):
+        pages = [position_page("01.01"), position_page("01.02"), position_page("01.03"), TOTALS_PAGE]
+        problem = "'Certification': no option means 'None'"
+        calls = [dict(position="01.01", fields=FIELDS, confirm_button="Apply", next_button="Save and next"),
+                 dict(position="01.02", choices={"Certification": "Without certification"})]
+        desk, filled, answers, _ = self.enter(pages, ["01.01", "01.02", "01.03"],
+                                              errors={"01.02": problem, "01.03": problem}, calls=calls)
+        self.assertIn("Entered and saved: 01.01", answers[0])
+        self.assertIn("Position 01.02 not fully entered: " + problem, answers[0])
+        # the second call resolves 01.02, and 01.03 (same wanted value) reuses the choice without another call
+        self.assertEqual(filled[-1], ("01.03", {"Certification": "Without certification"}))
+        self.assertEqual(desk.entered, {"01.01", "01.02", "01.03"})
+        self.assertEqual(desk.failures, {"01.02": 1})
+
+    def test_a_page_that_only_names_the_next_position_is_left_to_the_model(self):
+        pages = [position_page("01.02"), PREVIEW_PAGE, position_page("01.03")]
+        desk, filled, answers, _ = self.enter(pages, ["01.02", "01.03"])
+        self.assertEqual(([p for p, _ in filled], desk.failures), (["01.02"], {}))
+        self.assertTrue(answers[0].endswith(PREVIEW_PAGE))
+
+    def test_time_running_short_ends_the_batch(self):
+        import submit
+        pages = [position_page("01.01"), position_page("01.02"), TOTALS_PAGE]
+        desk, filled, _, _ = self.enter(pages, ["01.01", "01.02"], deadline=submit.SIGNING_RESERVE + 0.3,
+                                        errors=None)
+        self.assertGreaterEqual(len(filled), 1)  # never more work once the signing reserve is reached
+        desk2, filled2, answers2, _ = self.enter(pages, ["01.01", "01.02"], deadline=submit.SIGNING_RESERVE - 1)
+        self.assertEqual(filled2, [])
+        self.assertIn("Time is short", answers2[0])
+
+    def test_switched_off_it_is_one_position_per_call(self):
+        pages = [position_page("01.01"), position_page("01.02"), TOTALS_PAGE]
+        desk, filled, answers, _ = self.enter(pages, ["01.01", "01.02"], batch=False)
+        self.assertEqual([p for p, _ in filled], ["01.01"])
+        self.assertTrue(answers[0].endswith(position_page("01.02")))
+
+
 if __name__ == "__main__":
     unittest.main()
