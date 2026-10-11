@@ -162,6 +162,53 @@ def amendment(number: str, value: str, day: int = 1) -> rt.QaAmendment:
                           requirement="A-1", attribute="stroke", attribute_label="Stroke", value=value, unit="mm")
 
 
+class ReaderCompleteness(unittest.TestCase):
+    def setUp(self):
+        self.saved = rt._read
+
+    def tearDown(self):
+        rt._read = self.saved
+
+    def test_answers_without_records_are_read_again(self):
+        calls = []
+
+        async def read(output_type, instructions, text, prompt, thinking=True):
+            calls.append(prompt)
+            if len(calls) == 1:  # the first reading skips answer 3
+                return rt.QaPage(answers=["1", "2", "3"], withdrawals=[
+                    rt.QaWithdrawal(answer_number="1", date=WHEN, withdrawn_number="2")],
+                    packaging_tariffs=[rt.QaKey(answer_number="2", date=WHEN, position="1", key="P-1")])
+            return rt.QaPage(answers=["1", "2", "3"], packaging_tariffs=[
+                rt.QaKey(answer_number="3", date=WHEN, position="2", key="P-2")])
+
+        rt._read = read
+        qa = run(rt.read_qa(["view"], "T-1"))
+        self.assertEqual(len(calls), 2)
+        self.assertIn("3", calls[1])
+        self.assertEqual(sorted(r.key for r in qa.packaging_tariffs), ["P-1", "P-2"])
+        self.assertEqual(len(qa.withdrawals), 1)
+
+    def test_a_complete_reading_is_not_repeated(self):
+        calls = []
+
+        async def read(output_type, instructions, text, prompt, thinking=True):
+            calls.append(prompt)
+            return rt.QaPage(answers=["2"], packaging_tariffs=[
+                rt.QaKey(answer_number="Nr. 2", date=WHEN, position="1", key="P-1")])
+
+        rt._read = read
+        run(rt.read_qa(["view"], "T-1"))
+        self.assertEqual(len(calls), 1)
+
+    def test_a_load_more_view_replaces_the_shorter_one_although_its_button_moved(self):
+        collected = rt.Collected()
+        collected.add("[img: 1] text one\n[e5 button \"Load more\"]")
+        collected.add("[img: 1] text one\n[img: 2] text two\n[e7 button \"Load more\"]")
+        collected.add("[img: 1] text one\n[img: 2] text two\n[img: 3] text three")
+        self.assertEqual(len(collected.pages), 1)
+        self.assertIn("text three", collected.pages[0])
+
+
 class Combine(unittest.TestCase):
     def test_positions_from_one_website_and_q_and_a_from_another(self):
         positions = rt.resolve_tender([raw("1", "A-1"), raw("2", "A-2")], rt.QaRecords(), SCENARIO)
@@ -176,11 +223,30 @@ class Combine(unittest.TestCase):
         self.assertEqual(rt.combine([qa_only, positions], SCENARIO).positions, both.positions)
 
     def test_an_answer_read_before_keeps_its_reading_and_new_answers_join(self):
-        first = rt.resolve_tender([raw("1", "A-1")], rt.QaRecords(amendments=[amendment("8", "90")]), SCENARIO)
+        first = rt.resolve_tender([raw("1", "A-1")], rt.QaRecords(amendments=[amendment("8", "90"),
+                                                                              amendment("7", "80")]), SCENARIO)
         second = rt.resolve_tender([], rt.QaRecords(amendments=[amendment("8", "95"), amendment("9", "85", 2)]),
                                    SCENARIO)
         merged = rt.combine([first, second], SCENARIO)
-        self.assertEqual(sorted(str(a.attributes["stroke"]) for a in merged.amendments), ["85", "90"])
+        self.assertEqual(sorted(str(a.attributes["stroke"]) for a in merged.amendments), ["80", "85", "90"])
+
+    def test_a_complete_read_wins_over_an_incomplete_earlier_one(self):
+        partial = rt.resolve_tender([raw("1", "A-1")], rt.QaRecords(amendments=[amendment("8", "95")]), SCENARIO)
+        partial.qa_complete = False
+        complete = rt.resolve_tender([], rt.QaRecords(amendments=[amendment("8", "90")]), SCENARIO)
+        merged = rt.combine([partial, complete], SCENARIO)
+        self.assertEqual([str(a.attributes["stroke"]) for a in merged.amendments], ["90"])
+        self.assertEqual([p.position for p in merged.positions], ["1"])
+
+    def test_the_later_dated_answer_wins_per_key_across_reads(self):
+        first = rt.resolve_tender([raw("1", "A-1")], rt.QaRecords(packaging_tariffs=[
+            rt.QaKey(answer_number="5", date=datetime(2030, 2, 1, tzinfo=UTC), position="1", key="P-OLD")]),
+            SCENARIO)
+        second = rt.resolve_tender([], rt.QaRecords(packaging_tariffs=[
+            rt.QaKey(answer_number="6", date=datetime(2030, 2, 3, tzinfo=UTC), position="1", key="P-NEW")]),
+            SCENARIO)
+        self.assertEqual(rt.combine([first, second], SCENARIO).positions[0].packaging_key, "P-NEW")
+        self.assertEqual(rt.combine([second, first], SCENARIO).positions[0].packaging_key, "P-NEW")
 
     def test_q_and_a_counts_as_complete_when_one_read_finished_it(self):
         early = rt.resolve_tender([raw("1", "A-1")], rt.QaRecords(), SCENARIO)

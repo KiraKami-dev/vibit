@@ -121,6 +121,20 @@ class QaRecords(BaseModel):
                                           description="Technical amendments, one record per changed attribute")
 
 
+class QaPage(QaRecords):
+    """What a reader returns for one page view: the records, and every answer number the view shows."""
+    answers: list[str] = Field(default_factory=list, description="The number (Nr.) of EVERY answer shown on the "
+                                                                  "page, in page order, also answers that state no "
+                                                                  "fact, exactly as shown")
+
+
+def unrecorded(page: QaPage) -> list[str]:
+    """Answer numbers the reader listed but recorded no fact for (a reader can skip answers of a long view)."""
+    recorded = {norm_id(r.answer_number) for name in QaRecords.model_fields if name != "number_format"
+                for r in getattr(page, name)}
+    return list(dict.fromkeys(a for a in page.answers if norm_id(a) not in recorded))
+
+
 class PositionFacts(BaseModel):
     """One position after the Q&A rules, ready to map onto calc.PositionInput."""
     position: str
@@ -170,6 +184,14 @@ def _normal(view: str) -> str:
     return REFS.sub("", view)
 
 
+CONTROL_LINE = re.compile(r'^\[ (?:button|link) "[^"]*"[^\]]*\]$')  # also "disabled" or "-> target"
+
+
+def _content(normal: str) -> set[str]:
+    """A normalised view's lines without those that are a lone control (a "load more" button moves or goes)."""
+    return {line.strip() for line in normal.splitlines() if not CONTROL_LINE.match(line.strip())}
+
+
 @dataclass
 class Collected:
     pages: list[str] = field(default_factory=list)
@@ -182,7 +204,7 @@ class Collected:
         earlier = [_normal(p) for p in self.pages]
         if new in earlier:
             return False
-        if earlier and set(earlier[-1].splitlines()) <= set(new.splitlines()):  # "load more" grew the list
+        if earlier and _content(earlier[-1]) <= _content(new):  # "load more" grew the list (its control moved)
             self.pages[-1] = view
             return True
         self.pages.append(view)
@@ -481,7 +503,8 @@ each of them, with that answer's number and date. Record what the answers say; d
 skip older or superseded answers, and do not invent facts for positions an answer does not name. Statements that
 a position is NOT a member of a pool or plan mean no membership: record nothing for them. An answer that withdraws
 (zieht zurück) an earlier answer is a withdrawal of that earlier answer's number. Technical amendments name a
-specification revision and a requirement: record one amendment per changed attribute. Copy numbers exactly as
+specification revision and a requirement: record one amendment per changed attribute. List the number of every
+answer the page shows in `answers`, then make sure each of them has its facts recorded. Copy numbers exactly as
 written; do not convert them. The same answer can appear on two page views; record it once. Ignore page furniture (navigation, notices, buttons)."""
 
 
@@ -568,10 +591,37 @@ async def read_positions(text: str, reference: str) -> TenderPositions:
                                   POSITIONS_FALLBACK_SECONDS)
 
 
+async def read_qa_page(page: str, reference: str) -> QaPage:
+    """
+    One page view, checked for completeness: answers the reader lists but records no fact for are read once
+    more (in one sandbox run the three newest answers of a long view, a withdrawal and two positions' keys, were
+    missing from the records although every kept view showed them).
+    """
+    prompt = f"Tender {reference}. Bidder Q&A page:"
+    part = await _read(QaPage, QA_INSTRUCTIONS, page, prompt)
+    missing = unrecorded(part)
+    if not missing:
+        return part
+    print(f"[tender] Q&A reader recorded no fact for answers {missing}; reading the page again", flush=True)
+    try:
+        again = await _read(QaPage, QA_INSTRUCTIONS, page,
+                            f"Tender {reference}. A first reading of this page recorded no fact for answers "
+                            f"{', '.join(missing)}: record every fact of every answer, those included. Bidder Q&A "
+                            f"page:")
+    except Exception as error:  # the first reading stands
+        print(f"[tender] second Q&A reading failed: {type(error).__name__}", flush=True)
+        return part
+    for name in QaRecords.model_fields:
+        if name != "number_format":
+            mine = getattr(part, name)
+            known = {r.model_dump_json() for r in mine}
+            setattr(part, name, mine + [r for r in getattr(again, name) if r.model_dump_json() not in known])
+    return part
+
+
 async def read_qa(pages: list[str], reference: str) -> QaRecords:
     """Each page view read on its own, in parallel (short answers, fast), then merged without duplicates."""
-    parts = await asyncio.gather(*(_read(QaRecords, QA_INSTRUCTIONS, page, f"Tender {reference}. Bidder Q&A page:")
-                                   for page in pages))
+    parts = await asyncio.gather(*(read_qa_page(page, reference) for page in pages))
     merged = QaRecords(number_format=next((p.number_format for p in parts if p.number_format), ""))
     for name in QaRecords.model_fields:
         if name == "number_format":
@@ -729,6 +779,10 @@ def merge_qa(base: QaRecords, extra: QaRecords) -> QaRecords:
     return merged
 
 
+def _record_count(qa: QaRecords) -> int:
+    return sum(len(getattr(qa, name)) for name in QaRecords.model_fields if name != "number_format")
+
+
 def combine(reads: list[TenderFacts], scenario: datetime) -> TenderFacts | None:
     """
     Several tender reads as one (positions on one website and Q&A on another, a retry, a targeted re-check):
@@ -741,7 +795,9 @@ def combine(reads: list[TenderFacts], scenario: datetime) -> TenderFacts | None:
         return reads[0]
     source = max(reads, key=lambda r: len(r.raw_positions))  # the first of equals
     qa = QaRecords()
-    for read in reads:
+    # the most complete read first: its reading of an answer wins over a partial read's; answers only another
+    # read holds are added (rule 21's latest-per-key is applied by resolve_tender over the merged answers)
+    for read in sorted(reads, key=lambda r: (not r.qa_complete, -_record_count(r.qa))):
         qa = merge_qa(qa, read.qa)
     facts = resolve_tender(source.raw_positions, qa, scenario, source.positions_format or None)
     facts.qa_complete = any(r.qa_complete for r in reads)
