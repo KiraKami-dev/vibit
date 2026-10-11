@@ -260,3 +260,10 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   fixing tagged "de" whose rate was written with a decimal point, parsed it as ten thousand times the rate and bid
   three USD positions at millions of EUR. A separator that cannot group thousands is now the decimal mark, and a
   base price more than 100x (or under 1/1000) its ERP per-piece price is blanked and sends FX to the gap pass.
+- Cheaper own-key models on OpenRouter (model-qwen3.7-flash, model-gpt-oss-120b): neither keeps quality. Qwen3.7
+  Flash (only Alibaba serves it; not Fireworks) scored 21.7, 59.9 and 72 in 10-16 min for $0.039-0.051; its
+  thinking-off tender worker re-requested the TAN instead of submitting, so two runs looped through TAN requests
+  until the deadline, and research missed the discount, total and metal index window. GPT-OSS-120B (DeepInfra)
+  scored 10: no positions by the answer deadline, thinking-on calls hit the 180 s timeout. Hosted Qwen stays.
+- OpenRouter reasoning for Qwen: {"effort": "low", "exclude": true} still bills 2,000-4,000 hidden reasoning tokens
+  per call (23-43 s); {"enabled": false} gives 0. Qwen3.7 Flash prices triple above 32k prompt tokens.

@@ -22,7 +22,7 @@ import llm  # noqa: E402
 
 VARS = ("LLM_BACKEND", "LLM_MODEL", "AGENT_MODEL", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "LLM_PROXY_URL",
         "LLM_PROVIDER", "LLM_EFFORT", "LLM_EFFORT_OFF", "LLM_TIMEOUT", "LLM_TIMEOUT_THINKING", "LLM_RETRIES",
-        "LLM_STREAM_WATCHDOG")
+        "LLM_STREAM_WATCHDOG", "QWEN_BASE_URL", "QWEN_API_KEY", "LLM_HOSTED_FALLBACK")
 
 
 class env:
@@ -104,6 +104,19 @@ class Thinking(unittest.TestCase):
         self.assertFalse(llm.settings_thinking(off))
         self.assertTrue(llm.settings_thinking(on))
 
+    def test_reasoning_off_is_model_aware(self):
+        with env(**KEYED, LLM_MODEL="qwen/qwen3.7-flash"):
+            self.assertEqual(llm.openrouter_reasoning(False), {"enabled": False})
+            self.assertEqual(llm.openrouter_reasoning(True), {"effort": "medium"})
+            off = llm.settings()
+            self.assertEqual(off["extra_body"]["reasoning"], {"enabled": False})
+            self.assertFalse(llm.settings_thinking(off))
+            self.assertTrue(llm.settings_thinking(llm.settings(thinking=True)))
+        with env(**KEYED):  # GLM cannot switch reasoning off: lowest effort, text excluded
+            self.assertEqual(llm.openrouter_reasoning(False), {"effort": "low", "exclude": True})
+        self.assertEqual(llm.openrouter_reasoning(False, "Qwen/Other-Model"), {"enabled": False})
+        self.assertEqual(llm.openrouter_reasoning(False, "openai/gpt-oss-120b"), {"effort": "low", "exclude": True})
+
     def test_any_provider_sends_no_routing(self):
         with env(**KEYED, LLM_PROVIDER="any"):
             self.assertNotIn("provider", llm.settings()["extra_body"])
@@ -115,6 +128,7 @@ class Thinking(unittest.TestCase):
 
         self.assertEqual(mode({"effort": "medium"}), "on")
         self.assertEqual(mode({"effort": "low", "exclude": True}), "off")
+        self.assertEqual(mode({"enabled": False}), "off")
 
 
 class Answer(BaseModel):
@@ -165,6 +179,71 @@ class Request(unittest.TestCase):
             self.assertNotIn("temperature", body)
             self.assertEqual(body.get("max_completion_tokens", body.get("max_tokens")), llm.DEFAULT_MAX_TOKENS)
             self.assertTrue(body["tools"])
+
+
+def completion(body: dict, model: str) -> dict:
+    tool = body["tools"][0]["function"]["name"]
+    return {"id": "gen-1", "object": "chat.completion", "created": 1, "model": model,
+            "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+                "role": "assistant", "content": None, "tool_calls": [{
+                    "id": "call_1", "type": "function",
+                    "function": {"name": tool, "arguments": json.dumps({"city": "Hosted", "count": 1})}}]}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+
+
+class HostedFallback(unittest.TestCase):
+    """An OpenRouter call that fails for good is made once more on the hosted Qwen."""
+
+    HOSTED = {"QWEN_BASE_URL": "http://qwen.example/v1", "QWEN_API_KEY": "qwen-test"}
+
+    def run_agent(self, status: int, **extra: str) -> tuple[object, list[str], dict]:
+        hits: list[str] = []
+        hosted: dict = {}
+
+        def handler(request: httpx2.Request) -> httpx2.Response:
+            body = json.loads(request.content)
+            if request.url.host == "qwen.example":
+                hits.append("hosted")
+                hosted.update(body)
+                return httpx2.Response(200, json=completion(body, body["model"]))
+            hits.append("openrouter")
+            return httpx2.Response(status, json={"error": {"message": "upstream failed", "code": status}})
+
+        with env(**KEYED, **self.HOSTED, LLM_MODEL="qwen/qwen3.7-flash", LLM_RETRIES="6", **extra), \
+                patch.object(llm, "_DeadlineClient",
+                             lambda **kw: httpx2.AsyncClient(transport=httpx2.MockTransport(handler))), \
+                patch.object(llm, "_backoff", lambda attempt: 0.0):
+            model = llm.model()
+            agent = Agent(model, output_type=Answer, model_settings=llm.settings(False))
+            llm.FALLBACKS.clear()
+            with redirect_stdout(io.StringIO()):
+                try:
+                    result = asyncio.run(agent.run("Which city?")).output
+                except Exception as error:  # noqa: BLE001
+                    result = error
+        return result, hits, hosted
+
+    def test_server_error_goes_to_hosted_qwen(self):
+        output, hits, hosted = self.run_agent(503)
+        self.assertEqual(output, Answer(city="Hosted", count=1))
+        self.assertEqual(hits, ["openrouter"] * (llm.OPENROUTER_RETRIES_BEFORE_FALLBACK + 1) + ["hosted"])
+        self.assertEqual(hosted["model"], llm.QWEN_MODEL)
+        self.assertEqual(hosted["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertNotIn("reasoning", hosted)
+        self.assertEqual(sum(llm.FALLBACKS.values()), 1)
+
+    def test_client_error_is_not_masked(self):
+        output, hits, _ = self.run_agent(400)
+        self.assertIsInstance(output, Exception)
+        self.assertNotIn("hosted", hits)
+
+    def test_switched_off_or_unconfigured(self):
+        output, hits, _ = self.run_agent(503, LLM_HOSTED_FALLBACK="0")
+        self.assertIsInstance(output, Exception)
+        self.assertEqual(hits, ["openrouter"] * 7)
+        with env(**KEYED):
+            self.assertFalse(llm.hosted_fallback())
+            self.assertIsNone(llm.model().fallback)
 
 
 if __name__ == "__main__":

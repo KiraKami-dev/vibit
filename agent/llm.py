@@ -36,8 +36,8 @@ OPENROUTER_API_KEY), on the same OpenAI client path as Qwen: deadlines, watchdog
 OPENROUTER_BASE_URL, else the run's proxy ($LLM_PROXY_URL/openrouter/v1), else (locally) OpenRouter itself.
 LLM_PROVIDER pins the serving provider (default fireworks, no fallbacks; "any" lets OpenRouter choose). Thinking maps
 to OpenRouter's `reasoning`: GLM 5.3 Flash cannot turn reasoning off (400 "Reasoning is mandatory"), so off is
-{"effort": LLM_EFFORT_OFF (low), "exclude": true}, which measured 0 reasoning tokens on short answers; on is
-{"effort": LLM_EFFORT}.
+{"effort": LLM_EFFORT_OFF (low), "exclude": true}, which measured 0 reasoning tokens on short answers; Qwen models
+can, so off is {"enabled": false} there (see `openrouter_reasoning`); on is {"effort": LLM_EFFORT}.
 """
 import asyncio
 import contextvars
@@ -64,6 +64,7 @@ QWEN_MODEL = "qwen3.8-flash-next"
 ANTHROPIC_MODEL = "claude-haiku-5-5"
 OPENROUTER_MODEL = "z-ai/glm-5.3-flash"
 OPENROUTER_PROVIDER = "fireworks"
+OPENROUTER_RETRIES_BEFORE_FALLBACK = 2
 USER_AGENT = "error404ai-rfq-agent"
 DEFAULT_TIMEOUT = 45.0  # thinking off: steps answer in seconds, so a hang shows early
 DEFAULT_TIMEOUT_THINKING = 90.0  # thinking on: a call reading a whole page may take 25 to 45 s
@@ -181,7 +182,18 @@ def usage_table() -> str:
     for label, row in sorted(USAGE.items(), key=lambda item: -cost(item[1])):
         lines.append(f"{row[0]:5.0f} {row[5]:6.0f} {row[1]:6.0f} {row[2]:7.0f} {row[3]:7.0f} {row[4]:8.1f} "
                      f"{100 * cost(row) / total:5.1f}  {label}")
+    if FALLBACKS:
+        lines.append("hosted fallbacks: " + ", ".join(f"{label} {n}" for label, n in sorted(FALLBACKS.items())))
     return "\n".join(lines)
+
+
+FALLBACKS: dict[str, int] = {}  # label -> OpenRouter calls that the hosted Qwen answered instead
+
+
+def _transient(error: ModelAPIError) -> bool:
+    """A failure worth another model: no HTTP status (timeout, connection, stall), a 5xx or a 429."""
+    status = error.status_code if isinstance(error, ModelHTTPError) else None
+    return status is None or status >= 500 or status == 429
 
 
 class Stalled(Exception):
@@ -269,10 +281,23 @@ class _WatchdogModel(OpenAIChatModel):
             return _WatchedStream(response, limits)
         return response
 
+    fallback: "_WatchdogModel | None" = None  # the hosted Qwen behind an OpenRouter model (see `hosted_fallback`)
+
     async def request(self, messages: list[ModelMessage], model_settings: ModelSettings | None,
                       model_request_parameters: ModelRequestParameters) -> ModelResponse:
         label, started = LABEL.get() or "other", time.monotonic()
-        response = await self._request(messages, model_settings, model_request_parameters)
+        try:
+            response = await self._request(messages, model_settings, model_request_parameters)
+        except ModelAPIError as error:
+            if self.fallback is None or not _transient(error):
+                raise
+            thinking = settings_thinking(model_settings)
+            seconds = float((model_settings or {}).get("timeout") or timeout_seconds(thinking))
+            print(f"[model] {self.model_name} failed ({str(error)[:160]}): this call goes to the hosted "
+                  f"{self.fallback.model_name}", flush=True)
+            FALLBACKS[label] = FALLBACKS.get(label, 0) + 1
+            response = await self.fallback._request(messages, qwen_settings(thinking, seconds),
+                                                    model_request_parameters)
         record(label, response, time.monotonic() - started, settings_thinking(model_settings))
         return response
 
@@ -517,10 +542,20 @@ def openrouter_provider() -> dict | None:
     return {"order": order, "allow_fallbacks": False}
 
 
-def openrouter_reasoning(thinking: bool) -> dict:
-    """Our thinking on/off as OpenRouter's `reasoning` object. Off keeps the lowest effort the model accepts and
-    leaves the reasoning text out of the answer (reasoning cannot be disabled on GLM 5.3 Flash)."""
-    return {"effort": effort(True)} if thinking else {"effort": effort(False), "exclude": True}
+# OpenRouter models whose reasoning can be switched off. Off on any other model (GLM 5.3 Flash: 400 "Reasoning is
+# mandatory") keeps the lowest effort with the text excluded, which still bills the hidden reasoning tokens.
+_REASONING_OPTIONAL = ("qwen/",)
+
+
+def openrouter_reasoning(thinking: bool, name: str | None = None) -> dict:
+    """Our thinking on/off as OpenRouter's `reasoning` object for model `name` (default: the run's model). Off is
+    {"enabled": false} where the model allows it (Qwen: measured 0 reasoning tokens, where low effort with exclude
+    billed 2,000 to 4,000 hidden ones per call); elsewhere the lowest effort, its text left out of the answer."""
+    if thinking:
+        return {"effort": effort(True)}
+    if (name or model_name()).lower().startswith(_REASONING_OPTIONAL):
+        return {"enabled": False}
+    return {"effort": effort(False), "exclude": True}
 
 
 def settings_thinking(settings) -> bool:
@@ -549,13 +584,31 @@ def model() -> Model:
     http_client = _DeadlineClient(event_hooks={"request": [_sent], "response": [_answered]})
     if backend() == "anthropic":
         return _anthropic_model(http_client)
-    if backend() == "openrouter":
-        base_url, key, headers = openrouter_base_url(), os.environ["OPENROUTER_API_KEY"], {"User-Agent": USER_AGENT}
-    else:
-        base_url, key, headers = os.environ["QWEN_BASE_URL"], os.environ["QWEN_API_KEY"], None
-    client = AsyncOpenAI(base_url=base_url, api_key=key, timeout=timeout_seconds(thinking=False),
-                         max_retries=retries(), default_headers=headers, http_client=http_client)
-    return _WatchdogModel(model_name(), provider=OpenAIProvider(openai_client=client))
+    if backend() != "openrouter":
+        return _qwen_model(http_client, model_name())
+    fallback = _qwen_model(http_client, QWEN_MODEL) if hosted_fallback() else None
+    # With a fallback, a failing OpenRouter call gets fewer retries of its own: the hosted Qwen takes over sooner.
+    attempts = min(retries(), OPENROUTER_RETRIES_BEFORE_FALLBACK) if fallback else retries()
+    client = AsyncOpenAI(base_url=openrouter_base_url(), api_key=os.environ["OPENROUTER_API_KEY"],
+                         timeout=timeout_seconds(thinking=False), max_retries=attempts,
+                         default_headers={"User-Agent": USER_AGENT}, http_client=http_client)
+    primary = _WatchdogModel(model_name(), provider=OpenAIProvider(openai_client=client))
+    primary.fallback = fallback
+    return primary
+
+
+def _qwen_model(http_client: httpx2.AsyncClient, name: str) -> "_WatchdogModel":
+    client = AsyncOpenAI(base_url=os.environ["QWEN_BASE_URL"], api_key=os.environ["QWEN_API_KEY"],
+                         timeout=timeout_seconds(thinking=False), max_retries=retries(), http_client=http_client)
+    return _WatchdogModel(name, provider=OpenAIProvider(openai_client=client))
+
+
+def hosted_fallback() -> bool:
+    """Whether an OpenRouter call that fails for good (5xx, 429, timeout or stall after its retries) is made once
+    more on the hosted Qwen: on unless LLM_HOSTED_FALLBACK=0, and only when the hosted endpoint is configured."""
+    if os.environ.get("LLM_HOSTED_FALLBACK", "").strip().lower() in ("0", "false", "no", "off"):
+        return False
+    return bool(os.environ.get("QWEN_BASE_URL", "").strip() and os.environ.get("QWEN_API_KEY", "").strip())
 
 
 def _anthropic_model(http_client: httpx2.AsyncClient) -> Model:
@@ -702,6 +755,11 @@ def settings(thinking: bool = False, *, timeout: float | None = None) -> ModelSe
         # call that ran away repeat it. max_tokens bounds a runaway answer: the sandbox showed the same requests
         # hanging until the proxy's 5-minute cut, retry after retry.
         return ModelSettings(parallel_tool_calls=False, timeout=seconds, max_tokens=max_tokens(), extra_body=body)
+    return qwen_settings(thinking, seconds)
+
+
+def qwen_settings(thinking: bool, seconds: float) -> ModelSettings:
+    """Model settings for the hosted Qwen (also used for a hosted fallback call, see `hosted_fallback`)."""
     return ModelSettings(
         temperature=0.2,
         parallel_tool_calls=False,  # one tab per worker: actions must run in order
