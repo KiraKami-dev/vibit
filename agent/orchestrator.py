@@ -68,6 +68,7 @@ PLAN_PATIENT_TIMEOUT = 90.0  # per call when the quick mail plan failed: a loade
 GAP_REWORK = os.environ.get("AGENT_GAP_REWORK", "1") == "1"
 REWORK_SECONDS = 150.0
 TENDER_WATCH_SECONDS = float(os.environ.get("AGENT_TENDER_WATCH_SECONDS", "240"))  # no positions by then: retry
+RECHECK_SECONDS = float(os.environ.get("AGENT_RECHECK_SECONDS", "150"))  # the Q&A re-check before a no_bid
 TENDER_RETRY_SECONDS = 150.0  # research time a second tender attempt needs  # a doubtful fact goes back to its worker only with at least this much research time left
 
 
@@ -310,6 +311,8 @@ class Orchestrator:
         self.rules = rules_text(task["brief"])
         self.plan: Plan | None = None
         self.tender_facts = None
+        self.tender_reads: dict[str, object] = {}  # one entry per tender read (website, retry, re-check): combined
+        self.tender_calls = 0
         self.mail_facts = None
         self.spec: SpecResult | None = None
         self.erp: ErpResearch | None = None
@@ -417,18 +420,22 @@ class Orchestrator:
                 board.problem("tender", f"no second tab ({type(qa_session).__name__}); one worker reads all")
                 qa_session = None
 
+            self.tender_calls += 1
+            read = f"{site}#{self.tender_calls}{attempt}"
+
             def on_facts(facts) -> None:
-                self.tender_facts = facts
-                self._post_tender(facts, site, session)
+                self._tender_read(read, facts, site, session)
 
             facts = await research_tender.research_tender(session, self.reference, self.scenario,
                                                           deadline=self.research_deadline, qa_session=qa_session,
                                                           on_facts=on_facts)
             if facts is None:
-                board.problem("tender", "no positions found")
+                board.problem("tender", f"{site}: neither positions nor Q&A found")
                 return
-            if self.tender_facts is not facts:  # in case the module did not report it
+            if self.tender_reads.get(read) is not facts:  # in case the module did not report it
                 on_facts(facts)
+            if not facts.positions:
+                board.problem("tender", f"{site}: no positions found (its Q&A is kept)")
         except asyncio.CancelledError:
             if self.tender_facts is not None:
                 board.problem("tender", "stopped at the deadline: positions without the full Q&A are used")
@@ -438,6 +445,18 @@ class Orchestrator:
         finally:
             for kind in ("position", "amendment", "withdrawn"):
                 board.finish(kind)
+
+    def _tender_read(self, read: str, facts, site: str, session: SiteSession) -> None:
+        """
+        One tender read (a website's positions and Q&A, a retry, a re-check) joins the others: positions from the
+        read that has them, Q&A answers from all (research_tender.combine). Two websites' reads used to overwrite
+        each other, so Q&A on another website than the bill of quantities was lost.
+        """
+        self.tender_reads[read] = facts
+        reads = list(self.tender_reads.values())
+        combine = getattr(research_tender, "combine", None)
+        self.tender_facts = combine(reads, self.scenario) if combine is not None and len(reads) > 1 else facts
+        self._post_tender(self.tender_facts, site, session)
 
     def _post_tender(self, facts, site: str, session: SiteSession) -> None:
         board = self.board
@@ -460,11 +479,21 @@ class Orchestrator:
         return list(getattr(self.tender_facts, "amendments", []) or [])
 
     def _reserves(self, revision: str) -> dict[str, Decimal]:
-        """Per-end reserves by key, only from records for the requirement's own spec revision (they are
-        revision-specific); a record that names no revision counts for any."""
+        """Per-end reserves by reserve key, only from records for the requirement's own spec revision (they are
+        revision-specific); a record that names no revision counts for any, after one for this revision. The mail
+        facts hold one entry per key and revision (entry.key is the reserve key)."""
         reserves = getattr(self.mail_facts, "end_reserves", None) or {}
-        return {key: Decimal(str(getattr(entry, "reserve_per_end_mm", entry))) for key, entry in reserves.items()
-                if not getattr(entry, "revision", "") or _same_id(getattr(entry, "revision", ""), revision)}
+        own: dict[str, Decimal] = {}
+        unnamed: dict[str, Decimal] = {}
+        for name, entry in reserves.items():
+            key = getattr(entry, "key", "") or name
+            value = Decimal(str(getattr(entry, "reserve_per_end_mm", entry)))
+            rev = getattr(entry, "revision", "")
+            if not rev:
+                unnamed[key] = value
+            elif calc.same_label(rev, revision) or _same_id(rev, revision):
+                own[key] = value
+        return {**unnamed, **own}
 
     def effective(self, req: Requirement) -> EffectiveRequirement:
         return effective_requirement(req, amendments=self._amendments(), reserves=self._reserves(req.revision),
@@ -1030,6 +1059,102 @@ class Orchestrator:
             blank.setdefault(position, set()).update(fields)
         return result, blank, problems + calc_problems
 
+    def _tender_sites(self) -> list[str]:
+        return list(dict.fromkeys(n.site for n in getattr(self.plan, "needs", []) if n.kind == "tender"))
+
+    async def recheck_qa(self, hint: str, until: float) -> list[str]:
+        """
+        One more read of the bidder Q&A, on a fresh tab of each tender website, told what to look for; answers the
+        earlier reads lack are merged in (research_tender.combine). Returns the amendments that are new.
+        """
+        if research_tender is None or not hasattr(research_tender, "research_qa"):
+            return []
+        before = {research_tender._amendment_text(a) for a in self._amendments()}
+
+        async def one(site: str) -> None:
+            self.tender_calls += 1
+            tag = f"recheck{self.tender_calls}"
+            session = await self.session(site, tag)
+            try:
+                facts = await research_tender.research_qa(session, self.reference, self.scenario, deadline=until,
+                                                          hint=hint)
+                self._tender_read(f"{site}#{self.tender_calls}{tag}", facts, site, session)
+            finally:
+                for page in list(getattr(session, "pages", [])):
+                    try:
+                        await page.close()
+                    except Exception:  # already gone
+                        continue
+
+        results = await asyncio.gather(*(one(site) for site in self._tender_sites()), return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                self.board.problem("tender", f"Q&A re-check: {type(result).__name__}: {str(result)[:160]}")
+        return [text for text in (research_tender._amendment_text(a) for a in self._amendments())
+                if text not in before]
+
+    def _mismatch_focus(self, missing: list[str]) -> tuple[list[str], str]:
+        """The requirements of the positions without material and the attributes their inspected materials miss
+        them by, as a hint for the Q&A re-check."""
+        positions = {p.position: p for p in getattr(self.tender_facts, "positions", []) or []}
+        rids, parts = [], []
+        for position in missing:
+            p = positions.get(position)
+            rid = next((r for r in self.requirements if _same_id(r, p.requirement)), None) if p else None
+            if rid is None or rid in rids:
+                continue
+            rids.append(rid)
+            research = next((r for r in getattr(self.erp, "requirements", []) or [] if r.requirement_id == rid), None)
+            keys: list[str] = []
+            for number in getattr(research, "inspected", []) or []:
+                record = (getattr(self.erp, "materials", {}) or {}).get(number)
+                if record is None or not record.active:
+                    continue
+                for diff in mismatches(self.effective(self.requirements[rid]), merged_attributes(record, research)):
+                    key = diff.split()[0]
+                    if key not in keys and not diff.endswith("not shown"):
+                        keys.append(key)
+            parts.append(f"{rid}" + (f" ({', '.join(keys)})" if keys else ""))
+        hint = ("Read every answer, on every page of the list. Look in particular for technical amendments "
+                f"(changed attribute values) of requirement {'; '.join(parts)} of the specification.") if parts else ""
+        return rids, hint
+
+    async def recheck_no_bid(self, missing: list[str]):
+        """
+        Before a no_bid for positions without a matching material stands: one targeted re-read of the tender Q&A
+        for amendments to the mismatching requirements (in one sandbox run the Q&A paging stopped at a page that
+        had not rendered and an amendment on it was missed, so the unamended stroke rejected the matching
+        material). New amendments lead to a new choice for those requirements and a new calculation, which is
+        returned; None when nothing new was found (the no_bid stands on complete evidence).
+        """
+        rids, hint = self._mismatch_focus(missing)
+        budget = min(RECHECK_SECONDS, self.form_left() - 40)
+        if not rids or not hint or budget < 45 or not self._tender_sites():
+            return None
+        started = time.monotonic()
+        self.trace.event("verify", "no_bid_recheck", requirements=rids, seconds_left=round(budget))
+        try:
+            new = await asyncio.wait_for(self.recheck_qa(hint, started + budget - 5), budget)
+        except Exception as error:
+            self.board.problem("verify", f"Q&A re-check: {type(error).__name__}: {str(error)[:160]}")
+            return None
+        self.trace.event("verify", "no_bid_recheck_done", new_amendments=new,
+                         seconds=round(time.monotonic() - started, 1))
+        if not new:
+            return None
+        tasks = {rid: asyncio.create_task(reselect([self.effective(self.requirements[rid])], self.erp, self.trace))
+                 for rid in rids}
+        _, late = await asyncio.wait(tasks.values(), timeout=max(10.0, min(SELECT_SECONDS, self.form_left() - 30)))
+        for task in late:
+            task.cancel()
+        if late:
+            await asyncio.gather(*late, return_exceptions=True)
+        for task in tasks.values():
+            if task.done() and not task.cancelled() and task.exception() is None:
+                self.chosen.update(task.result())
+        self.trace.event("select", "recheck", chosen={rid: self.chosen.get(rid) for rid in rids})
+        return self._calculate()
+
     async def wording_matches(self, missing: list[str]) -> dict[str, str]:
         """
         For the positions calc found without material: an active inspected material whose numbers all equal the
@@ -1087,6 +1212,14 @@ class Orchestrator:
         # The second pass: what the first answer lacks is retried while research time is left (gaps.py).
         best = await GapFiller(self).run(self.calculate(), self.calculate)
         result, blank, problems, self.attributes = best.result, best.blank, best.problems, best.attributes
+        if result is not None and result.decision == "no_bid" and result.missing_materials and self.form_left() > 90:
+            # A no_bid stands only on complete evidence: the Q&A is read once more for amendments to the
+            # requirements that found no material.
+            again = await self.recheck_no_bid(result.missing_materials)
+            if again is not None and again[0] is not None:
+                if again[0].decision != result.decision:
+                    self.trace.event("verify", "no_bid_overturned", by="Q&A re-check")
+                result, blank, problems = again
         if result is not None and result.decision == "no_bid" and result.missing_materials and self.form_left() > 45:
             # Before a no_bid is accepted: are the mismatches that leave positions without material only wording?
             try:

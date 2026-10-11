@@ -36,6 +36,7 @@ from calc import (
     ProjectBonus,
     SetupPool,
     TieOrder,
+    label_key,
 )
 from evidence import ParseError, parse_date, parse_int, parse_number
 from research_tender import (
@@ -732,6 +733,7 @@ def latest_per_key(records: list[MailRecord], entries: str) -> dict[str, tuple[B
 class Reserve(BaseModel):
     revision: str
     reserve_per_end_mm: Decimal
+    key: str = Field(default="", description="The reserve key (MailFacts.end_reserves is keyed by key and revision)")
 
 
 class PoolTerms(BaseModel):
@@ -815,14 +817,23 @@ def _apply(facts: "MailFacts", kind: Kind, valid: list[MailRecord]) -> set[int]:
                 for r in rec.content.rates if r.code.strip() == code]  # type: ignore[union-attr]
             used.add(id(rec))
         return used
+    if name == "end_reserves":
+        # Rule 21 per key AND revision: a later release of the same key for another revision must not replace
+        # this revision's reserve (the orchestrator picks the requirement's own revision).
+        found: dict[tuple[str, str], tuple[BaseModel, MailRecord]] = {}
+        for record in valid:
+            for e in record.content.entries:  # type: ignore[union-attr]
+                found[(e.key.strip(), label_key(e.revision))] = (e, record)
+        for (key, revision), (e, rec) in found.items():
+            used.add(id(rec))
+            facts.end_reserves[f"{key}@{revision}" if revision else key] = Reserve(
+                key=key, revision=e.revision, reserve_per_end_mm=_num(e.reserve_per_end, rec))  # type: ignore
+        return used
     entries = "groups" if name == "condition_rules" else "entries"
     for key, (e, rec) in latest_per_key(valid, entries).items():
         used.add(id(rec))
         if name == "condition_rules":
             facts.discount_scopes[key] = e.discount_scope  # type: ignore[attr-defined]
-        elif name == "end_reserves":
-            facts.end_reserves[key] = Reserve(revision=e.revision,  # type: ignore[attr-defined]
-                                              reserve_per_end_mm=_num(e.reserve_per_end, rec))  # type: ignore
         elif name == "packaging":
             facts.packaging[key] = PackagingTariff(price_per_carton=_num(e.price_per_carton, rec))  # type: ignore
         elif name == "commitments":

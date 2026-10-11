@@ -214,3 +214,11 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   type in 5 s, declaration on the review 17 s later. After the bid is in, the platform revokes the model token (401)
   at once; the repeating sign passes treat that as done (sandbox 85ea looped on it). The mail tab once needed 150 s
   to revive before the TAN lookup (run bb71, settle timeouts). Test runs: 100, 10 (research: no positions), 100, 100.
+- False no_bid (run_db71f7f475cb738b, quality 5): the Q&A paging stopped at a page whose list frame was still
+  loading (the view showed the frame as separate, without the next control), so the remaining pages, one of them
+  holding the scoped stroke amendment, were not collected. The worker then opened them itself until its step limit,
+  but only the collected pages were read. The unamended stroke plus the reserve rejected the matching material.
+  Seen locally too (5 of 6 pages collected). Fixed: the Q&A paging waits for a loading frame and opens the clicked
+  link's target on its own when the tab shows no next control (a test run showed followed=1); later views are read
+  too; an unfinished Q&A is a gap; and before a no_bid for unmatched requirements the Q&A is re-read once for their
+  amendments. Test runs of 2e0ef68: 100 (7:17), 100 (7:14), 100 (9:16).

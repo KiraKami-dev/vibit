@@ -147,6 +147,11 @@ class TenderFacts(BaseModel):
     qa: QaRecords
     seconds: float = 0.0
     problems: list[str] = Field(default_factory=list, description="Records that could not be read (left out)")
+    # what combine() needs to resolve several reads (other websites, retries) again as one
+    raw_positions: list[TenderPosition] = Field(default_factory=list)
+    positions_format: str = ""
+    qa_complete: bool = Field(default=True, description="False when the Q&A worker stopped before the whole list "
+                                                        "was collected (the answers may be incomplete)")
 
 
 # ---------------------------------------------------------------- the paging helper
@@ -157,6 +162,8 @@ REFS = re.compile(r"\be\d+\b")
 REF = re.compile(r"e\d+")
 LINK = re.compile(r'\[(e\d+) link "([^"]*)" -> ([^\]\s]+)\]')
 EMPTY_FRAME = re.compile(r"\[frame ([^\]\s]+)\]\n\[/frame\]")
+SEPARATE = re.compile(r"\[frame [^\]]* \(separate\)\]")
+PAGE_WAITS = 8  # polls (0.7 s apart) for a list page that has not changed or not rendered after the click
 
 
 def _normal(view: str) -> str:
@@ -166,6 +173,8 @@ def _normal(view: str) -> str:
 @dataclass
 class Collected:
     pages: list[str] = field(default_factory=list)
+    finished: bool = False  # collect_pages ran to the list's end
+    mark: int | None = None  # len(session.seen) when collect_pages ended: later views are the worker's own
 
     def add(self, view: str) -> bool:
         """Keep a page view; False when it adds nothing new (past the end a list repeats a page it showed)."""
@@ -179,6 +188,31 @@ class Collected:
         self.pages.append(view)
         return True
 
+    def novel(self, text: str) -> list[str]:
+        """Content lines of `text` that no kept page holds (refs ignored): what a view would add to the reading."""
+        known = {line.strip() for p in self.pages for line in _normal(p).splitlines()}
+        out = []
+        for line in _normal(text).splitlines():
+            line = line.strip()
+            if line and line not in known and (any(c.isdigit() for c in line) or len(line) > 20):
+                known.add(line)
+                out.append(line)
+        return out
+
+    def reading(self, seen: str) -> list[str]:
+        """
+        The page views to read: the collected list, plus what the worker viewed itself after collect_pages (in
+        one sandbox run the paging stopped at a page that had not rendered, the worker opened the remaining pages
+        on its own, and only the collected ones were read: an amendment on the missed page was lost).
+        """
+        if not self.pages:
+            return [seen]
+        tail = seen[self.mark:] if self.mark is not None else ""
+        extra = self.novel(tail)
+        if extra:
+            return [*self.pages, "=== further views the worker opened\n" + "\n".join(extra)]
+        return list(self.pages)
+
     @property
     def text(self) -> str:
         return "\n\n".join(f"=== page view {i + 1}\n{p}" for i, p in enumerate(self.pages))
@@ -191,8 +225,67 @@ def _control(view: str, ref: str) -> tuple[str, str] | None:
     return None
 
 
-def paging_tool(collected: Collected):
-    """A tool that pages through the result set the model is looking at, by repeating the control it names."""
+def _target(view: str, ref: str) -> str | None:
+    """The link target of control `ref`, when it is a link."""
+    return next((href for r, _, href in LINK.findall(view) if r == ref), None)
+
+
+def _loading(view: str, before: str) -> bool:
+    """An embedded frame that has not rendered yet: the view shows it as separate where the earlier one did not."""
+    return len(SEPARATE.findall(view)) > len(SEPARATE.findall(before))
+
+
+EXPAND = ("() => { let n = 0; for (const d of document.querySelectorAll('details:not([open])')) "
+          "{ d.open = true; n++; } return n; }")
+
+
+async def expand_collapsed(page) -> int:
+    """Open every collapsed <details> block in the page and its frames (answers shown only on demand); the
+    number opened. Nothing else is clicked: a toggle that is a button may do anything."""
+    opened = 0
+    for frame in list(getattr(page, "frames", []) or []):
+        try:
+            opened += int(await asyncio.wait_for(frame.evaluate(EXPAND), 3.0) or 0)
+        except Exception:  # a detached or busy frame
+            continue
+    return opened
+
+
+async def _view_of(session: SiteSession, url: str) -> str | None:
+    views = await open_and_keep(session, [url], [])
+    return views[0] if views else None
+
+
+async def follow_targets(session: SiteSession, collected: Collected, name: str, href: str | None) -> int:
+    """
+    The list's remaining pages by their link targets, each opened on its own in a temporary tab: for a list whose
+    in-place page did not render after the click (an embedded frame still loading). A page is kept only when it
+    shows answers no kept page holds; the next target is the link of the same name on the opened page.
+    """
+    pages, tried, base = 0, set(), session.page.url
+    host = urlparse(base).netloc
+    while href and pages < MAX_PAGES:
+        url = urljoin(base, href)
+        if url in tried or urlparse(url).netloc != host:
+            break
+        tried.add(url)
+        view = await _view_of(session, url)
+        if view is None or not collected.novel(view):
+            break
+        collected.pages.append(view)
+        pages += 1
+        base = url  # a page's own links are relative to it
+        href = next((h for _, n, h in LINK.findall(view) if n == name), None)
+    return pages
+
+
+def paging_tool(collected: Collected, thorough: bool = False):
+    """
+    A tool that pages through the result set the model is looking at, by repeating the control it names. With
+    `thorough` (the bidder Q&A, where one missed page can change the decision) collapsed <details> blocks are
+    opened, a page whose embedded frame is still loading is waited for, and where the tab shows no further control
+    the clicked link's target is opened on its own to tell the list's end from a page that did not render.
+    """
 
     async def collect_pages(ctx: RunContext[Deps], next_ref: str) -> str:
         """Collect the whole list you are looking at: give the ref of its "next page" or "load more" control. The
@@ -203,24 +296,43 @@ def paging_tool(collected: Collected):
         if control is None:
             return f"No control {next_ref} in the latest view; use a ref from the latest view."
         kind, name = control
+        if thorough and await expand_collapsed(session.page):
+            await session.look()
+            same = [r for r, k, n in REF_LINE.findall(session.view) if k == kind and n == name]
+            next_ref = same[0] if same else next_ref
         collected.add(session.view)
-        ref, pages = next_ref, 1
+        ref, pages, followed = next_ref, 1, 0
         for _ in range(MAX_PAGES):
-            before = _normal(session.view)
+            before_view = session.view
+            before = _normal(before_view)
+            href = _target(before_view, ref)
             await session.act("click", ref, _click)
-            for _ in range(4):  # a list inside a frame can update a moment after the click settled
-                if _normal(session.view) != before:
+            # a list inside a frame can update a moment after the click settled, or show the frame still loading
+            for _ in range(PAGE_WAITS if thorough else 4):
+                if _normal(session.view) != before and not (thorough and _loading(session.view, before_view)):
                     break
                 await asyncio.sleep(0.7)
                 await session.look()
-            if not collected.add(session.view):
-                break
-            pages += 1
+            if thorough and await expand_collapsed(session.page):
+                await session.look()
+            added = collected.add(session.view)
             same = [r for r, k, n in REF_LINE.findall(session.view) if k == kind and n == name]
-            if not same:
-                break
-            ref = same[0]
-        session.trace.event(session.name, "collect_pages", control=name, pages=len(collected.pages))
+            if added and same:
+                pages += 1
+                ref = same[0]
+                continue
+            if added:
+                pages += 1
+            # The tab shows no further control (or nothing new): the end of the list, or a page that did not
+            # render. A link's target opened on its own tells which; its own next links carry on.
+            if href and thorough:
+                followed = await follow_targets(session, collected, name, href)
+                pages += followed
+            break
+        collected.finished = True
+        collected.mark = len(session.seen)
+        session.trace.event(session.name, "collect_pages", control=name, pages=len(collected.pages),
+                            followed=followed)
         session.trace.event(session.name, "collected", quiet=True, pages=collected.pages)
         text = collected.text
         if len(text) > MAX_RETURN:
@@ -239,6 +351,7 @@ async def open_and_keep(session: SiteSession, urls: list[str], kept: list[str]) 
         tab._watch(page)
         try:
             await tab._goto(url)
+            await expand_collapsed(page)
             view = await tab.look()
             # An embedded document that did not render in place (e.g. a lazy reading pane) is part of the chosen
             # page: open it on its own and add its text.
@@ -345,10 +458,12 @@ between pages follow links or goto a link target; do not use back()."""
 
 def _qa_goal(reference: str) -> str:
     return f"""For tender {reference} (exactly this reference; similar references are other tenders): open this
-tender's bidder questions and answers (Q&A). When the list of answers shows, call collect_pages with the ref of
-the list's control for the next page (or for loading more); do not page through it yourself. Do not open the
-tender's documents or the bid submission: another worker reads those. Then return a short summary. To move between
-pages follow links or goto a link target; do not use back()."""
+tender's bidder questions and answers (Q&A). If the answers are collapsed (only the questions show), first use the
+list's control that shows or expands all answers. When the list of answers shows, call collect_pages with the ref
+of the list's control for the next page (or for loading more); do not page through it yourself. A list without
+such a control is complete as it shows. Do not open the tender's documents or the bid submission: another worker
+reads those. Then return a short summary. To move between pages follow links or goto a link target; do not use
+back()."""
 
 
 POSITIONS_INSTRUCTIONS = """\
@@ -469,11 +584,52 @@ async def read_qa(pages: list[str], reference: str) -> QaRecords:
     return merged
 
 
+async def read_qa_site(session: SiteSession, reference: str, *, deadline: float | None = None,
+                       hint: str = "") -> tuple[QaRecords, bool]:
+    """
+    The bidder Q&A on one tab: a worker opens it and pages through it with collect_pages, then the readers read
+    every page view (the collected ones and those the worker opened itself afterwards). Returns the records and
+    whether the list was read to its end (False: the worker stopped before collecting the whole list).
+    """
+    collected = Collected()
+    goal = _qa_goal(reference) + (f"\n{hint}" if hint else "")
+    output, _ = await run_worker(session, goal, Summary, deadline=deadline, max_steps=steps_for(14, deadline),
+                                 thinking=False, grounded=False, tools=(paging_tool(collected, thorough=True),))
+    complete = collected.finished or (output is not None and not collected.pages)
+    if not complete:
+        session.trace.event(session.name, "qa_incomplete", collected=len(collected.pages),
+                            stopped=output is None)
+    return await read_qa(collected.reading(session.seen), reference), complete
+
+
+async def research_qa(session: SiteSession, reference: str, scenario: datetime, *, deadline: float | None = None,
+                      hint: str = "") -> TenderFacts:
+    """The Q&A alone (no positions), resolved: a second read to merge with combine(), e.g. a targeted re-check."""
+    started = time.monotonic()
+    qa, complete = await read_qa_site(session, reference, deadline=deadline, hint=hint)
+    facts = resolve_tender([], qa, scenario)
+    facts.qa_complete = complete
+    facts.seconds = round(time.monotonic() - started, 1)
+    session.trace.event(session.name, "tender_qa", seconds=facts.seconds, complete=complete,
+                        amendments=[_amendment_text(a) for a in facts.amendments], withdrawn=facts.withdrawn)
+    return facts
+
+
+def _amendment_text(a: Amendment) -> str:
+    return f"{a.revision}/{a.requirement}: {', '.join(f'{k}={v}' for k, v in a.attributes.items())}"
+
+
+def _has_records(qa: QaRecords) -> bool:
+    return any(getattr(qa, name) for name in QaRecords.model_fields if name != "number_format")
+
+
 async def research_tender(session: SiteSession, reference: str, scenario: datetime, *,
                           deadline: float | None = None, qa_session: SiteSession | None = None,
                           on_facts=None) -> TenderFacts | None:
     """
-    Positions and Q&A of the tender, resolved per position. None when no positions were found.
+    Positions and Q&A of the tender, resolved per position. None when neither positions nor Q&A records were
+    found; Q&A without positions comes back with no positions (another website may hold the bill of quantities:
+    the orchestrator merges the reads with combine()).
 
     With `qa_session` (a second tab of the website) the documents and the Q&A are worked side by side, each by its
     own worker. `on_facts(facts)` gets the positions with their original quantities as soon as they are read, so a
@@ -482,7 +638,6 @@ async def research_tender(session: SiteSession, reference: str, scenario: dateti
     started = time.monotonic()
     if qa_session is None:
         return await _research_tender_one(session, reference, scenario, deadline=deadline, on_facts=on_facts)
-    collected = Collected()
     documents: list[str] = []
 
     async def positions_part() -> TenderPositions:
@@ -491,13 +646,7 @@ async def research_tender(session: SiteSession, reference: str, scenario: dateti
                          tools=(keep_tool(documents),))
         return await read_positions("\n\n".join(documents or [session.seen]), reference)
 
-    async def qa_part() -> QaRecords:
-        await run_worker(qa_session, _qa_goal(reference), Summary, deadline=deadline,
-                         max_steps=steps_for(14, deadline), thinking=False, grounded=False,
-                         tools=(paging_tool(collected),))
-        return await read_qa(collected.pages or [qa_session.seen], reference)
-
-    qa_task = asyncio.create_task(qa_part())
+    qa_task = asyncio.create_task(read_qa_site(qa_session, reference, deadline=deadline))
     try:
         try:
             positions = await positions_part()
@@ -510,26 +659,36 @@ async def research_tender(session: SiteSession, reference: str, scenario: dateti
                 positions = await read_positions(qa_session.seen, reference)
             except Exception:
                 positions = TenderPositions(positions=[])
-        if not positions.positions:
-            session.trace.event(session.name, "tender_failed")
-            return None
         fmt = positions.number_format or None
-        if on_facts is not None and not qa_task.done():
+        if positions.positions and on_facts is not None and not qa_task.done():
             early = resolve_tender(positions.positions, QaRecords(), scenario, fmt)
+            early.qa_complete = False
             session.trace.event(session.name, "tender_positions", seconds=round(time.monotonic() - started, 1),
                                 positions=[p.position for p in early.positions])
             on_facts(early)
         try:
-            qa = await qa_task
+            qa, complete = await qa_task
         except Exception as error:
             session.trace.event(session.name, "tender_qa_failed", error=f"{type(error).__name__}: {error}"[:200])
-            qa = QaRecords()
+            qa, complete = QaRecords(), False
     finally:
         if not qa_task.done():
             qa_task.cancel()
-    facts = resolve_tender(positions.positions, qa, scenario, fmt)
+    return _finish(session, positions, qa, complete, scenario, started, on_facts)
+
+
+def _finish(session: SiteSession, positions: TenderPositions, qa: QaRecords, complete: bool, scenario: datetime,
+            started: float, on_facts) -> TenderFacts | None:
+    if not positions.positions and not _has_records(qa):
+        session.trace.event(session.name, "tender_failed")
+        return None
+    if not positions.positions:
+        session.trace.event(session.name, "tender_qa_only", note="no positions on this website; its Q&A is kept")
+    facts = resolve_tender(positions.positions, qa, scenario, positions.number_format or None)
+    facts.qa_complete = complete
     facts.seconds = round(time.monotonic() - started, 1)
-    session.trace.event(session.name, "tender_facts", seconds=facts.seconds,
+    session.trace.event(session.name, "tender_facts", seconds=facts.seconds, qa_complete=complete,
+                        amendments=[_amendment_text(a) for a in facts.amendments],
                         positions=[p.model_dump(mode="json") for p in facts.positions], problems=facts.problems)
     if on_facts is not None:
         on_facts(facts)
@@ -542,23 +701,52 @@ async def _research_tender_one(session: SiteSession, reference: str, scenario: d
     started = time.monotonic()
     collected = Collected()
     documents: list[str] = []
-    _, notes = await run_worker(session, _goal(reference), Summary, deadline=deadline,
-                                max_steps=steps_for(20, deadline), thinking=False, grounded=False,
-                                tools=(paging_tool(collected), keep_tool(documents)))
+    output, _ = await run_worker(session, _goal(reference), Summary, deadline=deadline,
+                                 max_steps=steps_for(20, deadline), thinking=False, grounded=False,
+                                 tools=(paging_tool(collected, thorough=True), keep_tool(documents)))
     if not documents:  # the worker read the documents in its own tab instead
         documents = [session.seen]
-    qa_pages = collected.pages or [session.seen]  # without collect_pages: the answers it saw itself
+    complete = collected.finished or (output is not None and not collected.pages)
     positions, qa = await asyncio.gather(read_positions("\n\n".join(documents), reference),
-                                         read_qa(qa_pages, reference))
-    if not positions.positions:
-        session.trace.event(session.name, "tender_failed", notes=notes)
+                                         read_qa(collected.reading(session.seen), reference))
+    return _finish(session, positions, qa, complete, scenario, started, on_facts)
+
+
+def merge_qa(base: QaRecords, extra: QaRecords) -> QaRecords:
+    """
+    `base` plus the records of `extra` whose answers base does not hold yet, per record kind: another website's
+    answers, or answers a first read missed. An answer base already read keeps base's reading.
+    """
+    merged = base.model_copy(deep=True)
+    merged.number_format = base.number_format or extra.number_format
+    for name in QaRecords.model_fields:
+        if name == "number_format":
+            continue
+        mine = list(getattr(merged, name))
+        known = {norm_id(r.answer_number) for r in mine}
+        mine += [r for r in getattr(extra, name) if norm_id(r.answer_number) not in known]
+        setattr(merged, name, mine)
+    return merged
+
+
+def combine(reads: list[TenderFacts], scenario: datetime) -> TenderFacts | None:
+    """
+    Several tender reads as one (positions on one website and Q&A on another, a retry, a targeted re-check):
+    the positions of the read with the most of them, the Q&A answers of all reads (merge_qa, earlier reads
+    first), resolved again by the same rules. None without reads.
+    """
+    if not reads:
         return None
-    facts = resolve_tender(positions.positions, qa, scenario, positions.number_format or None)
-    facts.seconds = round(time.monotonic() - started, 1)
-    session.trace.event(session.name, "tender_facts", seconds=facts.seconds,
-                        positions=[p.model_dump(mode="json") for p in facts.positions], problems=facts.problems)
-    if on_facts is not None:
-        on_facts(facts)
+    if len(reads) == 1:
+        return reads[0]
+    source = max(reads, key=lambda r: len(r.raw_positions))  # the first of equals
+    qa = QaRecords()
+    for read in reads:
+        qa = merge_qa(qa, read.qa)
+    facts = resolve_tender(source.raw_positions, qa, scenario, source.positions_format or None)
+    facts.qa_complete = any(r.qa_complete for r in reads)
+    facts.seconds = max(r.seconds for r in reads)
+    facts.problems = list(dict.fromkeys([*facts.problems, *(p for r in reads for p in r.problems)]))
     return facts
 
 
@@ -639,4 +827,5 @@ def resolve_tender(positions: list[TenderPosition], qa: QaRecords, scenario: dat
     units = {a.attribute: a.unit for a in qa.amendments if a.unit}
     shown = sorted({w.withdrawn_number for w in qa.withdrawals if _aware(w.date) <= scenario})  # as written
     return TenderFacts(positions=facts, amendments=amendments, amendment_units=units, withdrawn=shown,
-                       qa=qa, problems=problems)
+                       qa=qa, problems=problems, raw_positions=list(positions),
+                       positions_format=positions_format or "")
