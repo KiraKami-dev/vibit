@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01TeiQjNdrXApTxjTh4Md5ny",
+  "agent_id": "adcffa74ad0d0b028",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix A-2 ERP search loop",
+  "token_usage": {
+    "input_tokens": 172,
+    "cache_creation_tokens": 536425,
+    "cache_read_tokens": 11856921,
+    "output_tokens": 55627,
+    "api_call_count": 86
+  },
+  "started_at": "2026-10-11T01:47:50.596014+02:00",
+  "completed_at": "2026-10-11T02:37:07.483695+02:00"
+}
