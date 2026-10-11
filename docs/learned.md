@@ -199,3 +199,8 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   20 s, retry at once in a fresh context with 45/60/90/120 s budgets, and accept a rendered page whose settle never
   ends. Test runs of 86b4f27: 100 (7:33) and 100 (11:33), all starts in 2.4 to 4.6 s; the second still had three
   mail gotos mid-research that never committed, now bounded (30 s goto + about 22 s settle) and traced as slow_page.
+- Bid form generalized (form-generalize): table rows/cards, ARIA choices, the brief's decimal mark, model hand-over
+  after two form failures, a no-bid rewind pass. Live no-bid probe after a prepared main offer: back to the offer
+  type in 5 s, declaration on the review 17 s later. After the bid is in, the platform revokes the model token (401)
+  at once; the repeating sign passes treat that as done (sandbox 85ea looped on it). The mail tab once needed 150 s
+  to revive before the TAN lookup (run bb71, settle timeouts). Test runs: 100, 10 (research: no positions), 100, 100.
