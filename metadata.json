@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4M7CT41N0E4AN2AFAE7GT1K",
+  "strategy": "manual-commit",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "CLAUDE.md",
+    "agent/evidence.py",
+    "agent/orchestrator.py",
+    "agent/research.py",
+    "docs/learned.md",
+    "experiments/runs.jsonl"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 988,
+    "cache_creation_tokens": 1141509,
+    "cache_read_tokens": 104293103,
+    "output_tokens": 546559,
+    "api_call_count": 428
+  }
+}
