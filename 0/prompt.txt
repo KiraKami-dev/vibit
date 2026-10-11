@@ -1,1 +1,9 @@
 What do you let the agent do in a kernel now? And could we expand it (if successful)?
+
+---
+
+So how much tokens and time do you think we can save? Should we tackle it now? Improve current failures modes, then expand access?
+
+---
+
+I guess everyt text that does not end up in llms as tokens (or also caching) is good for us
