@@ -1,0 +1,56 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4MMQXC0F2C86G1AZGBGG6C5",
+  "session_id": "01a128bc-5ae3-7c50-a7e3-606359b5b93f",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-11T04:50:07.849563Z",
+  "branch": "worktree-agent-ad4c3b5da34ed2e0c",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "evals/err404-layout/.atira/eval.json",
+    "evals/err404-layout/.gitignore",
+    "evals/err404-layout/BRIEF.md",
+    "evals/err404-layout/DERIVATION.md",
+    "evals/err404-layout/README.md",
+    "evals/err404-layout/atira-eval.json",
+    "evals/err404-layout/atira-kit.js",
+    "evals/err404-layout/derive.py",
+    "evals/err404-layout/expected.json",
+    "evals/err404-layout/package.json",
+    "evals/err404-layout/server.js",
+    "evals/err404-layout/sites/buyer-extranet.js",
+    "evals/err404-layout/sites/html.js",
+    "evals/err404-layout/sites/inbox.js",
+    "evals/err404-layout/sites/ops-suite.js",
+    "evals/err404-layout/sites/sourcing-hub.js",
+    "evals/err404-layout/world.js"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6.1-sol",
+  "turn_id": "0b780b088200",
+  "checkpoint_transcript_start": 4990,
+  "transcript_lines_at_start": 4990,
+  "compact_transcript_start": 622,
+  "token_usage": {
+    "input_tokens": 7592,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 526976,
+    "output_tokens": 3965,
+    "api_call_count": 5
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-11T04:50:07.717929Z",
+    "agent_lines": 2230,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2230,
+    "total_lines_changed": 2230,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
