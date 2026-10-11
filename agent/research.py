@@ -713,6 +713,8 @@ class MaterialSeen(BaseModel):
     status_code: str = Field(description="The material status as shown")
     status_meaning: str = Field(description="What that status means per the page's legend or text")
     active: bool = Field(description="True if the status means released/usable, False if blocked or similar")
+    status_known: bool = Field(default=True, description="False only if no view says what this status code means "
+                                                         "(no legend, tooltip or text): `active` is then a guess")
     bore: str = ""
     stroke: str = ""
     pressure: str = ""
@@ -779,6 +781,9 @@ def _num(text: str) -> Decimal | None:
         return None
 
 
+STATUS_UNREAD = "status meaning not read"  # no view said what the status code means: active is a guess
+
+
 def _material_record(seen: MaterialSeen) -> MaterialRecord:
     problems: list[str] = []
 
@@ -806,6 +811,8 @@ def _material_record(seen: MaterialSeen) -> MaterialRecord:
                 price_unit=parse_int(c.price_unit), scales=scales))
         except (ParseError, ValueError) as error:
             problems.append(f"condition {c.valid_from}..{c.valid_to}: {error}")
+    if not seen.status_known:
+        problems.append(STATUS_UNREAD)
     return MaterialRecord(
         material_number=seen.material_number.strip(), active=seen.active,
         status=f"{seen.status_code} ({seen.status_meaning})", bore=_num(seen.bore), stroke=_num(seen.stroke),
@@ -882,7 +889,9 @@ Open nothing else."""
 
 def incomplete(record: MaterialRecord) -> list[str]:
     """Facts every bid needs from a material that its record still lacks."""
-    checks = {"status": bool(record.status.strip(" ()")), "free stock": record.free_stock is not None,
+    checks = {"status and what it means (a legend may sit in a tooltip or on another view)":
+              bool(record.status.strip(" ()")) and STATUS_UNREAD not in record.problems,
+              "free stock": record.free_stock is not None,
               "lead time from stock": record.stock_lead_time_weeks is not None,
               "production lead time": record.production_lead_time_weeks is not None,
               "price conditions with their quantity scales": bool(record.conditions)
@@ -951,6 +960,7 @@ class Erp:
         self.active_at = 0.0  # last time a worker used it
         self.idle_limit = float(os.environ.get("ERP_IDLE_SECONDS", "120"))  # the ERP drops idle sessions
         self.partial: dict[str, RequirementResearch] = {}  # requirement -> research whose search has finished
+        self.corpora: dict[str, str] = {}  # material -> the views kept for it, for a second reading
         self.started_at: float | None = None
 
     def left(self) -> float:
@@ -1252,6 +1262,7 @@ class Erp:
                 finally:
                     await self._close(session)
             corpus = _corpus(views)
+            self.corpora[number] = corpus
             self.trace.event(name, "material_read", views=len(views), chars=len(corpus),
                              not_found=coverage.not_found if coverage else "worker stopped")
             try:
@@ -1269,6 +1280,22 @@ class Erp:
         if record is not None and record.material_number != number:
             record.problems.append(f"reader reported material {record.material_number} for {number}")
         return record
+
+    async def reread(self, number: str) -> MaterialRecord | None:
+        """A second reading of a material from the views kept for it, by a reader that thinks; no browsing. None
+        when no views were kept or the reading failed."""
+        corpus = self.corpora.get(number)
+        if not corpus:
+            return None
+        try:
+            seen = await asyncio.wait_for(
+                _grounded_read(MaterialSeen, MATERIAL_INSTRUCTIONS, f"Material {number}. Its ERP views:\n\n{corpus}",
+                               corpus, trace=self.trace, name=f"{self.site['siteId']}:{number}",
+                               what="material views, second reading", thinking=True), 2 * READ_SECONDS)
+        except Exception as error:
+            self.trace.event("erp", "reread_failed", material=number, error=f"{type(error).__name__}: {str(error)[:160]}")
+            return None
+        return _material_record(seen)
 
     def start(self, req: EffectiveRequirement) -> asyncio.Task:
         """Research one requirement in the background (e.g. as soon as the specification yields it)."""

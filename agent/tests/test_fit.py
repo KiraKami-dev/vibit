@@ -163,7 +163,8 @@ class PictureReadTwice(unittest.TestCase):
 
 
 def material(number, **values):
-    base = dict(material_number=number, bore=D("50"), stroke=D("100"), pressure=D("160"), mounting="Flange")
+    base = dict(material_number=number, bore=D("50"), stroke=D("100"), pressure=D("160"), mounting="Flange",
+                active=True, problems=[])
     base.update(values)
     return SimpleNamespace(**base)
 
@@ -228,6 +229,63 @@ class FormTheMappingDoesNotFit(unittest.TestCase):
         self.assertEqual(desk.entered, {"01.02"})
         self.assertIn("14814,00", answer)
         self.assertIn("is not one of", asyncio.run(desk.position_entered(ctx, "09.99")))
+
+
+class StatusWithoutALegend(unittest.TestCase):
+    def seen(self, **changes):
+        values = dict(material_number="M-1", status_code="PRD", status_meaning="", active=False,
+                      free_stock="5", stock_lead_time="2 weeks", production_lead_time="6 weeks", conditions=[])
+        values.update(changes)
+        return research.MaterialSeen(**values)
+
+    def test_a_status_nobody_explained_is_a_fact_still_to_find(self):
+        record = research._material_record(self.seen(status_known=False))
+        self.assertIn(research.STATUS_UNREAD, record.problems)
+        self.assertTrue(any(name.startswith("status") for name in research.incomplete(record)))
+        known = research._material_record(self.seen(status_meaning="blocked", status_known=True))
+        self.assertFalse(any(name.startswith("status") for name in research.incomplete(known)))
+
+    def test_an_inactive_guess_does_not_establish_no_material(self):
+        research_ = SimpleNamespace(inspected=["M-1"], candidates=[])
+        guessed = material("M-1", active=False, problems=[research.STATUS_UNREAD])
+        blocked = material("M-1", active=False, problems=[])
+        self.assertEqual(orchestrator.unread_attributes(research_, {"M-1": guessed}), ["M-1: status meaning not read"])
+        self.assertEqual(orchestrator.unread_attributes(research_, {"M-1": blocked}), [])
+
+
+class SecondReadingBeforeNoBid(unittest.TestCase):
+    def settle(self, first_active: bool, rereads: list):
+        o = object.__new__(orchestrator.Orchestrator)
+        o.trace = Trace(tempfile.mkdtemp())
+        want = SimpleNamespace(attributes=lambda: {"bore": D("50")}, pending=[])
+        o.requirements = {"A-1": object()}
+        o.effective = lambda req: want
+        o.tender_facts = SimpleNamespace(positions=[SimpleNamespace(position="01.01", requirement="A-1")])
+        research_ = SimpleNamespace(requirement_id="A-1", inspected=["M-1"], candidates=[])
+        o.erp = SimpleNamespace(requirements=[research_], materials={"M-1": material("M-1", active=first_active)})
+        calls = []
+
+        async def reread(number):
+            calls.append(number)
+            answer = rereads[len(calls) - 1]
+            return None if answer is None else material(number, active=answer)
+        o._erp = SimpleNamespace(reread=reread)
+        with patch.object(orchestrator, "mismatches", lambda want, attrs: []), \
+                patch.object(orchestrator, "merged_attributes", lambda record, research: {}):
+            found = asyncio.run(o.second_reading(["01.01"]))
+        return found, len(calls), o.erp.materials["M-1"].active
+
+    def test_two_careful_readings_overturn_a_misread_status(self):
+        self.assertEqual(self.settle(False, [True, True]), ({"A-1": "M-1"}, 2, True))
+
+    def test_readings_that_agree_leave_the_no_bid(self):
+        self.assertEqual(self.settle(False, [False]), ({}, 1, False))
+
+    def test_one_differing_reading_is_not_enough(self):
+        self.assertEqual(self.settle(False, [True, False]), ({}, 2, False))
+
+    def test_a_failed_second_reading_changes_nothing(self):
+        self.assertEqual(self.settle(False, [None]), ({}, 1, False))
 
 
 if __name__ == "__main__":

@@ -32,8 +32,8 @@ import llm
 from board import Board, Source
 from briefing import Briefing
 from browser_tools import SiteSession
-from evidence import (EffectiveRequirement, Requirement, effective_requirement, merged_attributes, parse_date,
-                      to_position_input, wording_differences)
+from evidence import (EffectiveRequirement, Requirement, effective_requirement, merged_attributes, mismatches,
+                      parse_date, to_position_input, wording_differences)
 from research import Erp, ErpResearch, SpecResult, research_spec, reselect, same_revision
 from tracing import Trace
 from verify import VERIFY_SECONDS, confirm_decision, verify_board, wording_check
@@ -217,6 +217,8 @@ def unread_attributes(research, materials: dict) -> list[str]:
                    if getattr(record, key, None) is None and getattr(cand, key, None) is None]
         if not getattr(record, "mounting", "") and not getattr(cand, "mounting", ""):
             missing.append("mounting")
+        if not getattr(record, "active", True) and "status meaning not read" in (getattr(record, "problems", None) or []):
+            missing.append("status meaning")  # called inactive without a legend: a guess, not a blocked material
         if missing:
             out.append(f"{number}: {', '.join(missing)} not read")
     return out
@@ -978,6 +980,50 @@ class Orchestrator:
             blank.setdefault(position, set()).update(fields)
         return result, blank, problems + calc_problems
 
+    async def second_reading(self, missing: list[str]) -> dict[str, str]:
+        """
+        Before a no bid is accepted: every candidate of the positions without material is read a second time from
+        the views kept for it, by a reader that thinks. Where the two readings differ on whether the material
+        qualifies (active, every attribute equal), a third decides. Returns requirement -> material for those that
+        qualify after all. A whole bid must not fall to one misread status code or one misread number: in the
+        sandbox that happened once in five runs.
+        """
+        erp = self._erp
+        if self.erp is None or erp is None or not hasattr(erp, "reread"):
+            return {}
+        positions = {p.position: p for p in getattr(self.tender_facts, "positions", []) or []}
+        found: dict[str, str] = {}
+
+        async def settle(req_id: str, research, number: str) -> None:
+            want = self.effective(self.requirements[req_id])
+
+            def fits(record) -> bool:
+                return bool(record is not None and record.active
+                            and not mismatches(want, merged_attributes(record, research)))
+
+            first = self.erp.materials.get(number)
+            second = await erp.reread(number)
+            if second is None or fits(first) == fits(second):
+                return
+            third = await erp.reread(number)
+            self.trace.event("verify", "second_reading", requirement=req_id, material=number, first=fits(first),
+                             second=fits(second), third=fits(third) if third is not None else None)
+            if third is not None and fits(third) and fits(second):  # two careful readings against the first
+                self.erp.materials[number] = second
+                found.setdefault(req_id, number)
+
+        jobs = []
+        for position in missing:
+            p = positions.get(position)
+            req_id = next((rid for rid in self.requirements if _same_id(rid, p.requirement)), None) if p else None
+            research = next((r for r in self.erp.requirements if r.requirement_id == req_id), None)
+            if req_id is None or research is None or req_id in {job[0] for job in jobs}:
+                continue
+            jobs += [(req_id, research, number) for number in research.inspected]
+        if jobs:
+            await asyncio.gather(*(settle(*job) for job in jobs), return_exceptions=True)
+        return found
+
     async def wording_matches(self, missing: list[str]) -> dict[str, str]:
         """
         For the positions calc found without material: an active inspected material whose numbers all equal the
@@ -1036,7 +1082,23 @@ class Orchestrator:
         await self._bounded(self.select_materials(), "select")
         result, blank, problems = self._calculate()
         if result is not None and result.decision == "no_bid" and result.missing_materials and self.form_left() > 45:
-            # Before a no_bid is accepted: are the mismatches that leave positions without material only wording?
+            # Before a no_bid is accepted: a second reading of the candidates (one misread status or number must
+            # not cost the whole bid) ...
+            try:
+                reread = await asyncio.wait_for(self.second_reading(result.missing_materials),
+                                                max(1.0, min(VERIFY_SECONDS, self.form_left() - 30)))
+            except Exception as error:
+                reread = {}
+                self.board.problem("verify", f"second reading: {type(error).__name__}: {str(error)[:160]}")
+            if reread:
+                self.chosen = {**self.chosen, **reread}
+                again = self._calculate()
+                self.trace.event("verify", "reread_changed", chosen=reread,
+                                 decision=again[0].decision if again[0] is not None else None)
+                if again[0] is not None:
+                    result, blank, problems = again
+        if result is not None and result.decision == "no_bid" and result.missing_materials and self.form_left() > 45:
+            # ... and are the mismatches that leave positions without material only wording?
             try:
                 rescued = await asyncio.wait_for(self.wording_matches(result.missing_materials),
                                                  max(1.0, min(VERIFY_SECONDS, self.form_left() - 30)))
