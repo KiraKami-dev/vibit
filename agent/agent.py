@@ -15,6 +15,7 @@ from pathlib import Path
 import localenv  # noqa: F401  (first: local runs read agent/.env before any module reads its settings)
 import browser_tools
 import browsers
+import llm
 import loopwatch
 import run as contract
 from briefing import read_brief
@@ -129,6 +130,7 @@ async def main() -> int:
             answer = await solve(task, page)
         finally:  # the platform keeps only the last lines of a run's output: repeat the phases there
             tracing.print_summary()
+            print("===== model calls by caller =====\n" + llm.usage_table(), flush=True)
     if answer is None:
         print("No answer to submit through the API: the bid is entered on the website", flush=True)
         return 0

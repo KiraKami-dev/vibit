@@ -153,6 +153,7 @@ async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, c
     started = time.monotonic()
     timeout = None if deadline is None else max(1.0, deadline - started)
     session.trace.event(session.name, "start", goal=goal)
+    label = llm.LABEL.set(f"worker {session.name.split(':')[0]} {output_type.__name__}")  # see llm.caller()
     output = None
     usage = RunUsage()  # filled as the run goes, so a stopped run still reports what it used
     try:
@@ -168,6 +169,8 @@ async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, c
                             seconds=round(time.monotonic() - started, 1), requests=usage.requests,
                             input_tokens=usage.input_tokens, cached_tokens=usage.cache_read_tokens,
                             output_tokens=usage.output_tokens)
+    finally:
+        llm.LABEL.reset(label)
     if usage.requests:
         PACE.append((time.monotonic() - started, usage.requests))
     return output, deps.notes
