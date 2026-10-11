@@ -950,3 +950,7 @@ Do not run 5. These two are more than enough. They have done enough damage so I 
 <status>failed</status>
 <summary>Background command "Start five confirmation test runs of the latest commit, two at a time, and wait for all scores" failed with exit code 144</summary>
 </task-notification>
+
+---
+
+dont ask me such stuff, it all will again lead to overfitting, think from first principles, how to use clef, how to cleverly use qwen, paralellism, think from here and then try to solve problem from there, i dont want any kind of over or underfitting
