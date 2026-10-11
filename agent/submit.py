@@ -115,19 +115,21 @@ class Mailbox:
         return found
 
 
-TAN_STEPS = 16
+TAN_STEPS = 24  # 16 ran out on a mailbox that lists the oldest message first, six per page
 TAN_RETRY_SECONDS = 60  # a second TAN lookup only with at least this much time left
 
 
 def tan_goal(reference: str, said: str = "", older: str = "") -> str:
     """The TAN lookup's goal: what to find, not where a mailbox shows it."""
-    return (f"A new signing TAN for tender {reference} was just requested.{said} Find the message with that TAN: "
-            "a signing TAN for exactly this tender reference, and when the bid website or the messages show a "
+    return (f"A new signing TAN (a one-time signing or confirmation code; the mail may call it a TAN, signing "
+            f"code or confirmation code) for tender {reference} was just requested.{said} Find the message with "
+            "that code: one for exactly this tender reference, and when the bid website or the messages show a "
             "request number or reference, the one for this request. Among several candidates take the newest "
-            "request (its number or the mailbox's own order tells; never compare dates with today's clock). Use "
-            "the mailbox's search or folders if it is not in view, and reload once if it has not arrived yet. If a "
-            "preview stays empty, open the message's own page. Copy the TAN exactly from its text and return it "
-            f"at once.{older}")
+            "request (its number or the mailbox's own order tells; never compare dates with today's clock). A "
+            "list may show the oldest messages first: then the newest is on its last page, or search for the "
+            "tender reference. Use the mailbox's search or folders if it is not in view, and reload once if it "
+            "has not arrived yet. If a preview stays empty, open the message's own page. Copy the code exactly "
+            f"from its text and return it at once.{older}")
 
 
 class FormAction(BaseModel):
@@ -674,9 +676,10 @@ async def submit_bid(bid_session: SiteSession, mailbox: Mailbox, briefing: Brief
         view = await browser_tools.click(ctx, ref)
         answer = " ".join(line.strip() for line in bid_session.view.splitlines()
                           if line.strip() and line not in before and "[e" not in line)[:400]
-        found = await mailbox.tan(answer)
+        found = await mailbox.tan(answer)  # two lookups for this request's code before a new one is asked for
         if not found:
-            return f"{view}\n\nNo TAN found in the webmail. Request a new TAN with this tool again."
+            return (f"{view}\n\nNo TAN found in the webmail for this request, after two lookups. Request a new TAN "
+                    "with this tool again.")
         bid_session.seen += "\n" + found.tan
         return f"{view}\n\nTAN from the webmail: {found.tan} (message {found.subject!r}, received {found.received})."
 

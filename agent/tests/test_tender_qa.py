@@ -188,6 +188,37 @@ class ReaderCompleteness(unittest.TestCase):
         self.assertEqual(sorted(r.key for r in qa.packaging_tariffs), ["P-1", "P-2"])
         self.assertEqual(len(qa.withdrawals), 1)
 
+    def test_a_skipped_key_of_a_multi_fact_answer_is_read_again(self):
+        view = ("Nr. 4 Position 3: Verpackungstarif PK-120; Bonusplan BP-77.\n"
+                "Nr. 5 Position 4: Verpackungstarif PK-120. Gilt nicht für T-4400-B.\n"
+                "Nr. 6 Für Revision C der DOC-12, Anforderung S-3: Druck 280 bar. Tender T-4400.")
+        calls = []
+
+        async def read(output_type, instructions, text, prompt, thinking=True):
+            calls.append(prompt)
+            page = rt.QaPage(answers=["4", "5", "6"], packaging_tariffs=[
+                rt.QaKey(answer_number="4", date=WHEN, position="3", key="PK-120"),
+                rt.QaKey(answer_number="5", date=WHEN, position="4", key="PK-120")],
+                amendments=[rt.QaAmendment(answer_number="6", date=WHEN, revision="Revision C der DOC-12",
+                                           requirement="S-3", attribute="pressure", attribute_label="Druck",
+                                           value="280", unit="bar")])
+            if len(calls) > 1:
+                page.project_bonuses = [rt.QaKey(answer_number="4", date=WHEN, position="3", key="BP-77")]
+            return page
+
+        rt._read = read
+        qa = run(rt.read_qa([view], "T-4400"))
+        self.assertEqual(len(calls), 2)
+        self.assertIn("BP-77", calls[1])
+        self.assertNotIn("T-4400", calls[1].split(".", 1)[1])  # the reference and its look-alike are no keys
+        self.assertEqual([r.key for r in qa.project_bonuses], ["BP-77"])
+
+    def test_unrecorded_ids_ignores_held_keys_and_short_labels(self):
+        page = rt.QaPage(answers=["1"], condition_groups=[rt.QaKey(answer_number="1", date=WHEN, position="2",
+                                                                   key="KG-0042")])
+        self.assertEqual(rt.unrecorded_ids(page, "Nr. 1 Position 2: Konditionsgruppe KG-42, Anforderung S-3",
+                                           "T-1"), [])
+
     def test_a_complete_reading_is_not_repeated(self):
         calls = []
 

@@ -40,6 +40,7 @@ from calc import (  # noqa: E402
     parse_unit,
     position_key,
     reached_scale,
+    same_label,
     resolve_quantity,
     to_pieces,
     valid_condition,
@@ -169,6 +170,35 @@ class Requirement(unittest.TestCase):
         got = apply_amendments(base, amendments, "B", "R1", DAY)
         # only revision B / R1, not future: stroke 220, rest inherited
         self.assertEqual(got, {"bore": D(50), "stroke": D(220), "mounting": "Flansch"})
+
+    def test_revision_label_with_document_number(self):
+        # a reader may keep the spec's document number in front of the revision
+        self.assertTrue(same_label("DOC-77 Revision C", "C"))
+        self.assertTrue(same_label("Spec DOC-77, Rev. C", "Revision C"))
+        self.assertTrue(same_label("DOC-77 Rev C-1", "C-1"))
+        self.assertFalse(same_label("DOC-77 Revision C", "B"))
+        self.assertFalse(same_label("DOC-77 Revision C-1", "C"))
+        self.assertFalse(same_label("B-1", "B"))
+        self.assertFalse(same_label("AB", "B"))
+        self.assertFalse(same_label("Rev. AB", "Rev. B"))
+        self.assertFalse(same_label("DOC-77", "C"))
+        self.assertTrue(same_label("REQ-01", "Req 1"))
+        self.assertTrue(same_label("Revision C der DOC-77", "C"))
+        self.assertTrue(same_label("Revision C (12.3.2030)", "DOC-77 Rev. C"))
+        self.assertTrue(same_label("C (12.3.2030)", "C"))
+        self.assertFalse(same_label("Revision C (12.3.2030)", "Revision B (1.2.2030)"))
+        self.assertFalse(same_label("Reverse C", "C"))
+
+    def test_amendment_revision_with_document_number(self):
+        base = {"bore": D(50), "stroke": D(200), "pressure": D(160)}
+        amendments = [
+            Amendment(date=datetime(2026, 3, 1), revision="DOC-77 Revision C", requirement="R-3",
+                      attributes={"pressure": D(210)}),
+            Amendment(date=datetime(2026, 4, 1), revision="DOC-77 Revision B", requirement="R-3",
+                      attributes={"pressure": D(160)}),
+        ]
+        self.assertEqual(apply_amendments(base, amendments, "C", "R-3", DAY),
+                         {"bore": D(50), "stroke": D(200), "pressure": D(210)})
 
     def test_amendment_after_scenario_time_ignored(self):
         base = {"bore": D(50), "stroke": D(200)}

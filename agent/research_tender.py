@@ -27,6 +27,7 @@ from calc import (
     CalcError,
     QuantityChange,
     Unit,
+    norm_code,
     norm_id,
     parse_unit,
     position_key,
@@ -135,6 +136,31 @@ def unrecorded(page: QaPage) -> list[str]:
     recorded = {norm_id(r.answer_number) for name in QaRecords.model_fields if name != "number_format"
                 for r in getattr(page, name)}
     return list(dict.fromkeys(a for a in page.answers if norm_id(a) not in recorded))
+
+
+# A key-like identifier: letters, then dash-separated parts with a run of at least two digits ("PB-12", "K-0042",
+# "AB-12-X"); one-digit labels ("S-3", "A-2") and plain numbers are not keys.
+IDENTIFIER = re.compile(r"(?<![\w-])[A-ZÄÖÜ][A-Za-zÄÖÜäöü]{0,5}(?:-[A-Za-z0-9]+)*-\d{2,}(?:-[A-Za-z0-9]+)*(?![\w-])")
+
+
+def unrecorded_ids(page: QaPage, text: str, reference: str) -> list[str]:
+    """
+    Key-like identifiers the page shows that no record holds: a reader can record some facts of an answer and
+    skip another (soak run 828b243f: three answers each named a packaging tariff, a commitment key, a setup pool
+    and a bonus plan; the bonus plan was recorded for none of them). The tender's own reference (and look-alikes
+    that contain it) do not count.
+    """
+    held = " ".join(norm_code(v) for name in QaRecords.model_fields if name != "number_format"
+                    for r in getattr(page, name) for v in r.model_dump(mode="json").values() if isinstance(v, str))
+    ref = norm_code(reference)
+    out = []
+    for token in dict.fromkeys(IDENTIFIER.findall(text)):
+        code = norm_code(token)
+        if ref and (code in ref or ref in code):
+            continue
+        if code not in held:
+            out.append(token)
+    return out
 
 
 class PositionFacts(BaseModel):
@@ -606,15 +632,20 @@ async def read_qa_page(page: str, reference: str) -> QaPage:
     """
     prompt = f"Tender {reference}. Bidder Q&A page:"
     part = await _read(QaPage, QA_INSTRUCTIONS, page, prompt)
-    missing = unrecorded(part)
-    if not missing:
+    missing, ids = unrecorded(part), unrecorded_ids(part, page, reference)
+    if not missing and not ids:
         return part
-    print(f"[tender] Q&A reader recorded no fact for answers {missing}; reading the page again", flush=True)
+    gaps = []
+    if missing:
+        gaps.append(f"no fact for answers {', '.join(missing)}")
+    if ids:
+        gaps.append(f"no fact naming {', '.join(ids[:12])}")
+    print(f"[tender] Q&A reader recorded {'; '.join(gaps)}; reading the page again", flush=True)
     try:
         again = await _read(QaPage, QA_INSTRUCTIONS, page,
-                            f"Tender {reference}. A first reading of this page recorded no fact for answers "
-                            f"{', '.join(missing)}: record every fact of every answer, those included. Bidder Q&A "
-                            f"page:")
+                            f"Tender {reference}. A first reading of this page recorded {'; '.join(gaps)}: record "
+                            f"every fact of every answer (an answer can state several keys), those included. "
+                            f"Bidder Q&A page:")
     except Exception as error:  # the first reading stands
         print(f"[tender] second Q&A reading failed: {type(error).__name__}", flush=True)
         return part
@@ -688,7 +719,7 @@ def _has_records(qa: QaRecords) -> bool:
 
 async def research_tender(session: SiteSession, reference: str, scenario: datetime, *,
                           deadline: float | None = None, qa_session: SiteSession | None = None,
-                          on_facts=None) -> TenderFacts | None:
+                          on_facts=None, with_qa: bool = True) -> TenderFacts | None:
     """
     Positions and Q&A of the tender, resolved per position. None when neither positions nor Q&A records were
     found; Q&A without positions comes back with no positions (another website may hold the bill of quantities:
@@ -696,9 +727,17 @@ async def research_tender(session: SiteSession, reference: str, scenario: dateti
 
     With `qa_session` (a second tab of the website) the documents and the Q&A are worked side by side, each by its
     own worker. `on_facts(facts)` gets the positions with their original quantities as soon as they are read, so a
-    deadline that comes before the Q&A still leaves them; the returned facts include the Q&A.
+    deadline that comes before the Q&A still leaves them; the returned facts include the Q&A. Without `with_qa`
+    (another website holds the Q&A) only the positions are read; their Q&A counts as not read (qa_complete False).
     """
     started = time.monotonic()
+    if not with_qa:
+        documents: list[str] = []
+        await run_worker(session, _positions_goal(reference), Summary, deadline=deadline,
+                         max_steps=steps_for(14, deadline), thinking=False, grounded=False,
+                         tools=(keep_tool(documents),))
+        positions = await read_positions("\n\n".join(documents or [session.seen]), reference)
+        return _finish(session, positions, QaRecords(), False, scenario, started, on_facts)
     if qa_session is None:
         return await _research_tender_one(session, reference, scenario, deadline=deadline, on_facts=on_facts)
     documents: list[str] = []

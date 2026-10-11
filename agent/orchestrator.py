@@ -77,6 +77,12 @@ VERIFY_ALONGSIDE = os.environ.get("AGENT_VERIFY_ALONGSIDE", "1") == "1"  # see r
 REWORK_SECONDS = 150.0
 TENDER_WATCH_SECONDS = float(os.environ.get("AGENT_TENDER_WATCH_SECONDS", "240"))  # no positions by then: retry
 RECHECK_SECONDS = float(os.environ.get("AGENT_RECHECK_SECONDS", "150"))  # the Q&A re-check before a no_bid
+# A no_bid settled while the mail searches still run (see _early_no_bid) ends the searches that only price
+# positions: a no_bid answer then waited for every mail kind (up to MAIL_SECONDS) and the gap rounds after it.
+EARLY_NO_BID = os.environ.get("AGENT_EARLY_NO_BID", "1") == "1"
+NO_BID_POLL = 5.0  # seconds between the research loop's checks for a settled no_bid
+NO_BID_MAIL_WAIT = 120.0  # how long a settled no_bid waits for the discount approval's search to finish
+NO_BID_KEEP = ("approval",)  # the mail kinds a no_bid answer still uses (rule 16: discount_percent)
 TENDER_RETRY_SECONDS = 150.0  # research time a second tender attempt needs  # a doubtful fact goes back to its worker only with at least this much research time left
 
 
@@ -88,9 +94,12 @@ async def start_session(session: SiteSession, until: float | None = None) -> Sit
 # ---------------------------------------------------------------- the planner
 
 FACT_KINDS = {
-    "tender": "the tender itself: its positions with quantities and units, and the bidder questions and answers "
-              "(quantity changes, withdrawn answers, scoped technical amendments, and per-position keys for "
-              "condition groups, packaging, delivery commitments, setup pools and bonus plans)",
+    "tender": "the tender itself: its notice and documents with the positions (bill of quantities: quantities, "
+              "units, requirement ids)",
+    # its own kind: the bidder Q&A can live on another website than the tender (e.g. the buyer's portal)
+    "qa": "the bidder questions and answers / clarifications of the tender (quantity changes, withdrawn answers, "
+          "scoped technical amendments, and per-position keys for condition groups, packaging, delivery "
+          "commitments, setup pools and bonus plans), on whichever website publishes them",
     "specification": "the buyer's technical specification: which revision is current and the technical "
                      "requirement (attributes, catalogue group, pieces per set) per requirement id",
     "materials": "the bidder's own ERP: the materials of a catalogue group with status, stock, lead times, "
@@ -124,7 +133,8 @@ def complete_plan(plan: Plan, briefing: Briefing, ids: set[str]) -> tuple[Plan, 
     for kind in FACT_KINDS:
         if kind in have:
             continue
-        for site in [briefing.bid_site] if kind == "tender" else [briefing.mail_site] if kind == "mails" else free:
+        for site in ([briefing.bid_site] if kind in ("tender", "qa") else [briefing.mail_site] if kind == "mails"
+                     else free):
             if site in ids:
                 needs.append(Need(kind=kind, site=site, why="missing from the model's plan; filled in"))
                 filled.append(f"{kind}@{site}")
@@ -361,6 +371,13 @@ class Orchestrator:
         # The mail side is the slowest (a planner and about nine record kinds): it gets its own deadline, and
         # calc runs with whatever records exist by then.
         self.mail_deadline = min(self.research_deadline, time.monotonic() + MAIL_SECONDS)
+        self._mail_tabs: list[asyncio.Task] = []  # the mail tabs' search loops, while they run
+        # what a no_bid settled during research already did (_early_no_bid): _answer does not repeat it
+        self.no_bid_checked = False
+        self.qa_planned: list[str] = []  # the websites the plan put the bidder Q&A on
+        self.qa_found: list[str] = []  # the websites a Q&A read found answers on (when not the tender's)
+        self.qa_tried: set[str] = set()  # the websites _qa_elsewhere read (two callers share them)
+        self.no_bid_settled: list[str] | None = None  # the positions without material it settled on
 
     def left(self) -> float:
         return self.research_deadline - time.monotonic()
@@ -458,16 +475,22 @@ class Orchestrator:
             def on_facts(facts) -> None:
                 self._tender_read(read, facts, site, session)
 
+            with_qa = site in self._qa_sites()
+            options = {} if with_qa else {"with_qa": False}
             facts = await research_tender.research_tender(session, self.reference, self.scenario,
                                                           deadline=self.research_deadline, qa_session=qa_session,
-                                                          on_facts=on_facts)
+                                                          on_facts=on_facts, **options)
             if facts is None:
                 board.problem("tender", f"{site}: neither positions nor Q&A found")
+                if with_qa:
+                    await self._qa_elsewhere({site, *self.qa_planned})
                 return
             if self.tender_reads.get(read) is not facts:  # in case the module did not report it
                 on_facts(facts)
             if not facts.positions:
                 board.problem("tender", f"{site}: no positions found (its Q&A is kept)")
+            if with_qa and not research_tender._has_records(facts.qa):
+                await self._qa_elsewhere({site, *self.qa_planned})
         except asyncio.CancelledError:
             if self.tender_facts is not None:
                 board.problem("tender", "stopped at the deadline: positions without the full Q&A are used")
@@ -477,6 +500,62 @@ class Orchestrator:
         finally:
             for kind in ("position", "amendment", "withdrawn"):
                 board.finish(kind)
+
+    async def qa(self, site: str, tag: str = "qa") -> bool:
+        """
+        The bidder Q&A on a website that does not hold the tender's positions; its answers join the tender reads
+        (combine). Without any answer read there the other websites are tried (_qa_elsewhere). True when this
+        website had answers.
+        """
+        try:
+            found = await self._qa_read(site, tag)
+        except Exception as error:
+            self.board.problem("tender", f"Q&A on {site}: {type(error).__name__}: {str(error)[:160]}")
+            found = False
+        if not found:
+            await self._qa_elsewhere({site, *self.qa_planned})
+        return found
+
+    async def _qa_read(self, site: str, tag: str) -> bool:
+        self.tender_calls += 1
+        session = await self.session(site, f"{tag}{self.tender_calls}")
+        facts = await research_tender.research_qa(session, self.reference, self.scenario,
+                                                  deadline=self.research_deadline)
+        if not research_tender._has_records(facts.qa):
+            self.board.problem("tender", f"{site}: no bidder Q&A answers read")
+            return False
+        self._tender_read(f"{site}#{self.tender_calls}{tag}", facts, site, session)
+        if site not in self.qa_found:
+            self.qa_found.append(site)
+        return True
+
+    async def _qa_elsewhere(self, tried: set[str]) -> None:
+        """
+        No Q&A answer where the plan put the Q&A (in one eval the planner put it with the tender, but the buyer's
+        website held it and the bid lost every Q&A fact): the other websites except the mailbox are read for it
+        one after the other, the specification's first, until one has answers.
+        """
+        if self.qa_found or self.left() < TENDER_RETRY_SECONDS:
+            return
+        needs = getattr(self.plan, "needs", []) or []
+        mail = {n.site for n in needs if n.kind == "mails"} | {self.briefing.mail_site}
+        order = [n.site for n in needs if n.kind == "specification"] + [s["siteId"] for s in self.task["access"]]
+        for site in dict.fromkeys(order):
+            if (site in tried or site in self.qa_tried or site in mail or self.qa_found
+                    or self.left() < TENDER_RETRY_SECONDS):
+                continue
+            self.qa_tried.add(site)
+            self.trace.event("tender", "qa_elsewhere", site=site)
+            try:
+                if await self._qa_read(site, "qa-alt"):
+                    return
+            except Exception as error:
+                self.board.problem("tender", f"Q&A on {site}: {type(error).__name__}: {str(error)[:160]}")
+
+    def _qa_sites(self) -> list[str]:
+        """The websites the Q&A was read on, else where the plan put it."""
+        return (list(getattr(self, "qa_found", [])) or list(getattr(self, "qa_planned", []))
+                or self._tender_sites())
 
     def _tender_read(self, read: str, facts, site: str, session: SiteSession) -> None:
         """
@@ -796,6 +875,7 @@ class Orchestrator:
                     queue.put_nowait((kind, 1))
 
         tabs = [asyncio.create_task(tab(s)) for s in (starts or list(self.mail_sessions))]
+        self._mail_tabs = tabs
         _, late = await asyncio.wait(tabs, timeout=max(1.0, deadline - time.monotonic()))
         for job in late:
             job.cancel()
@@ -853,9 +933,13 @@ class Orchestrator:
                 sites[n.kind].append(n.site)
         jobs = []
         if "tender" in sites and research_tender is not None:
+            self.qa_planned = list(sites.get("qa") or sites["tender"])
             for site in sites["tender"]:
                 first = asyncio.create_task(self.tender(site), name=f"tender@{site}")
                 jobs += [first, asyncio.create_task(self._tender_watch(site, first), name=f"tender-watch@{site}")]
+            for site in self.qa_planned:  # the Q&A on a website of its own
+                if site not in sites["tender"]:
+                    jobs.append(asyncio.create_task(self.qa(site), name=f"qa@{site}"))
         elif "tender" in sites:
             self.board.problem("plan", "tender research module not available")
         erp_sites = sites.get("materials", [])
@@ -870,7 +954,21 @@ class Orchestrator:
             self.board.problem("plan", "mail research module not available")
         if not jobs:
             return
-        done, pending = await asyncio.wait(jobs, timeout=max(1.0, self.left()))
+        mail_jobs = {job for job in jobs if job.get_name().startswith("mails@")}
+        pending = set(jobs)
+        while pending:
+            early = EARLY_NO_BID and not self.no_bid_checked and bool(mail_jobs)
+            _, pending = await asyncio.wait(pending, timeout=max(1.0, min(self.left(), NO_BID_POLL) if early
+                                                                  else self.left()))
+            if self.left() <= 0:
+                break
+            if early and pending and pending <= mail_jobs:  # only the mail searches still run
+                self.no_bid_checked = True
+                try:
+                    await asyncio.wait_for(self._early_no_bid(lambda: any(not j.done() for j in mail_jobs)),
+                                           max(1.0, self.left()))
+                except Exception as error:
+                    self.board.problem("verify", f"early no_bid check: {type(error).__name__}: {str(error)[:160]}")
         for job in pending:  # the deadline guard: whatever is complete goes on
             job.cancel()
             self.board.problem("deadline", f"{job.get_name()} stopped at the research deadline")
@@ -884,6 +982,66 @@ class Orchestrator:
                 so_far = getattr(self._erp, "so_far", None)
                 self.erp = so_far() if so_far is not None else self._finished_erp()
         self.rework = {"mails": self._rework_mail}
+
+    async def _early_no_bid(self, mail_running=lambda: True) -> None:
+        """
+        Tender, specification and ERP research are done while the mail searches still run. When the answer is a
+        no_bid on established evidence (a position has no matching active material after the final choice, the
+        Q&A re-check and the wording check, all run here as _answer would run them), the mail searches that only
+        price positions are ended: a no_bid answer needs none of them, only the discount approval (rule 16). In the
+        err404-nobid eval a no_bid waited about nine minutes for mail kinds it never used. Anything that turns the
+        decision back into a bid leaves the mail searches running.
+        """
+        result = self._calculate()[0]
+        if result is None or result.decision != "no_bid" or not result.missing_materials:
+            return
+        self.trace.event("verify", "no_bid_early", missing=result.missing_materials, seconds_left=round(self.left()))
+        await self._bounded(self.select_materials(), "select")
+        result = self._calculate()[0]
+        if result is None or result.decision != "no_bid" or not result.missing_materials:
+            return
+        again = await self.recheck_no_bid(result.missing_materials)
+        if again is not None and again[0] is not None:
+            result = again[0]
+            if result.decision != "no_bid" or not result.missing_materials:
+                self.trace.event("verify", "no_bid_overturned", by="Q&A re-check", early=True)
+                return
+        try:
+            rescued = await asyncio.wait_for(self.wording_matches(result.missing_materials),
+                                             max(1.0, min(VERIFY_SECONDS, self.form_left() - 30)))
+        except Exception as error:
+            rescued = {}
+            self.board.problem("verify", f"wording check: {type(error).__name__}: {str(error)[:160]}")
+        if rescued:
+            self.chosen = {**self.chosen, **rescued}
+            again = self._calculate()
+            if again[0] is not None and again[0].decision == "bid":
+                self.trace.event("verify", "no_bid_overturned", chosen=rescued, early=True)
+                return
+        self.no_bid_settled = list(result.missing_materials)
+        await self._cut_mail(NO_BID_KEEP, mail_running)
+
+    async def _cut_mail(self, keep: tuple[str, ...], mail_running=lambda: True) -> None:
+        """End the mail searches once the kinds in `keep` have been searched (or NO_BID_MAIL_WAIT has passed);
+        what was read so far is resolved as at the mail deadline."""
+        until = min(self.mail_deadline, time.monotonic() + NO_BID_MAIL_WAIT)
+
+        def waiting() -> bool:
+            if not self.mail_kinds or not self._mail_tabs:  # not planned yet, or the tabs not started
+                return True
+            wanted = {k.name for k in self.mail_kinds if k.name in keep}
+            return bool(wanted - set(self.mail_results)) and any(not t.done() for t in self._mail_tabs)
+
+        while waiting() and mail_running() and time.monotonic() < until:
+            await asyncio.sleep(1.0)
+        if not self.mail_kinds or not self._mail_tabs:  # nothing known to cut
+            return
+        cut = [t for t in self._mail_tabs if not t.done()]
+        for task in cut:
+            task.cancel()
+        self.trace.event("mails", "cut", reason="no_bid settled", tabs=len(cut),
+                         read=sorted(self.mail_results), dropped=sorted({k.name for k in self.mail_kinds}
+                                                                        - set(self.mail_results)))
 
     def _finished_erp(self) -> ErpResearch:
         def finished(tasks):
@@ -1155,7 +1313,7 @@ class Orchestrator:
                     except Exception:  # already gone
                         continue
 
-        results = await asyncio.gather(*(one(site) for site in self._tender_sites()), return_exceptions=True)
+        results = await asyncio.gather(*(one(site) for site in self._qa_sites()), return_exceptions=True)
         for result in results:
             if isinstance(result, BaseException):
                 self.board.problem("tender", f"Q&A re-check: {type(result).__name__}: {str(result)[:160]}")
@@ -1198,7 +1356,7 @@ class Orchestrator:
         """
         rids, hint = self._mismatch_focus(missing)
         budget = min(RECHECK_SECONDS, self.form_left() - 40)
-        if not rids or not hint or budget < 45 or not self._tender_sites():
+        if not rids or not hint or budget < 45 or not self._qa_sites():
             return None
         started = time.monotonic()
         self.trace.event("verify", "no_bid_recheck", requirements=rids, seconds_left=round(budget))
@@ -1290,11 +1448,18 @@ class Orchestrator:
                 await asyncio.gather(self.verifying, return_exceptions=True)
 
     async def _answer(self) -> tuple[dict | None, calc.BidResult | None]:
-        await self._bounded(self.select_materials(), "select")
+        if self.no_bid_settled is None:  # a no_bid settled during research made the final choice already
+            await self._bounded(self.select_materials(), "select")
         # The second pass: what the first answer lacks is retried while research time is left (gaps.py).
         best = await GapFiller(self).run(self.calculate(), self.calculate)
         result, blank, problems, self.attributes = best.result, best.blank, best.problems, best.attributes
-        if result is not None and result.decision == "no_bid" and result.missing_materials and self.form_left() > 90:
+        # The same no_bid as settled during research (same positions without material) was re-checked there.
+        settled = (self.no_bid_settled is not None and result is not None and result.decision == "no_bid"
+                   and sorted(result.missing_materials) == sorted(self.no_bid_settled))
+        if settled:
+            self.trace.event("verify", "no_bid_settled", missing=self.no_bid_settled)
+        if (not settled and result is not None and result.decision == "no_bid" and result.missing_materials
+                and self.form_left() > 90):
             # A no_bid stands only on complete evidence: the Q&A is read once more for amendments to the
             # requirements that found no material.
             again = await self.recheck_no_bid(result.missing_materials)
@@ -1302,7 +1467,8 @@ class Orchestrator:
                 if again[0].decision != result.decision:
                     self.trace.event("verify", "no_bid_overturned", by="Q&A re-check")
                 result, blank, problems = again
-        if result is not None and result.decision == "no_bid" and result.missing_materials and self.form_left() > 45:
+        if (not settled and result is not None and result.decision == "no_bid" and result.missing_materials
+                and self.form_left() > 45):
             # Before a no_bid is accepted: are the mismatches that leave positions without material only wording?
             try:
                 rescued = await asyncio.wait_for(self.wording_matches(result.missing_materials),
@@ -1316,20 +1482,26 @@ class Orchestrator:
                 if again[0] is not None and again[0].decision == "bid":
                     self.trace.event("verify", "no_bid_overturned", chosen=rescued)
                     result, blank, problems = again
-        if result is None:  # still a bid: reference, decision and discount score without positions
-            answer = self.fallback_answer()
-            self.trace.event("calc", "answer", answer=answer, problems=problems, fallback=True)
-            return answer, None
-        # The check can only turn a bid with missing materials into no_bid; calc never returns such a bid today,
-        # so it is asked only then and costs the bid form no time otherwise.
-        disputable = result.decision == "bid" and bool(result.missing_materials)
-        check = None if self.form_left() < 30 or not disputable else await confirm_decision(
-            result.decision, self.board.summary() + "\n\nProblems:\n" + "\n".join(self.board.problems + problems),
+        # The check can only turn a bid into no_bid: a bid with missing materials (calc never returns one today), or
+        # a bid whose every position is omitted (rule 9: omitting is no replacement for a no_bid, and such a bid
+        # scores almost nothing anyway). It is asked only then and costs the bid form no time otherwise.
+        disputable = result is not None and result.decision == "bid" and bool(result.missing_materials)
+        omitted_all = bool(getattr(self.tender_facts, "positions", None)) and (
+            result is None or (result.decision == "bid" and not result.positions))
+        check = None if self.form_left() < 30 or not (disputable or omitted_all) else await confirm_decision(
+            "bid", self.board.summary() + "\n\nProblems:\n" + "\n".join(self.board.problems + problems),
             self.rules)
         if check is not None and not check.agrees:
-            self.trace.event("verify", "decision_disputed", proposed=result.decision, wanted=check.decision,
-                             reason=check.reason)
-        if check is not None and check.decision == "no_bid" and result.decision == "bid" and result.missing_materials:
+            self.trace.event("verify", "decision_disputed", proposed="bid", wanted=check.decision,
+                             reason=check.reason, omitted_all=omitted_all)
+        follow = check is not None and check.decision == "no_bid" and (disputable or omitted_all)
+        if result is None:  # still a bid: reference, decision and discount score without positions
+            answer = self.fallback_answer()
+            if follow:
+                answer.update(decision="no_bid", positions=[], total_net=0.0)
+            self.trace.event("calc", "answer", answer=answer, problems=problems, fallback=True)
+            return answer, None
+        if follow:
             result = result.model_copy(update={"decision": "no_bid", "positions": [], "total_net": Decimal("0.00")})
         answer = answer_from(result, blank)
         self.trace.event("calc", "answer", answer=answer, problems=problems, blank={k: sorted(v) for k, v in blank.items()})
