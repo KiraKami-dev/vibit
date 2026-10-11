@@ -224,6 +224,19 @@ class PositionDesk:
         self.form_failures: dict[str, int] = {}  # failures of the form (not of a value) per position
         self.reserve = SIGNING_RESERVE  # seconds kept for signing (submit_bid sets it from the model pace)
         self.handed: set[str] = set()  # positions handed to the model to enter itself with fill_in()
+        self.restarts = 0  # the bid website's restarts known here (SiteSession.restarts)
+
+    def sync(self, session) -> None:
+        """A website started again from scratch (a dead page, SiteSession.reopen) lost every position entered."""
+        restarts = getattr(session, "restarts", 0)
+        if restarts != self.restarts:
+            self.restarts = restarts
+            if self.entered or self.handed:
+                session.trace.event(session.name, "positions_lost", entered=sorted(self.entered))
+            self.entered.clear()
+            self.handed.clear()
+            self.form_failures.clear()
+            self.failures.clear()
 
     @property
     def mark(self) -> str:
@@ -302,6 +315,7 @@ class PositionDesk:
         a position yourself because this tool handed it to you.
         """
         session, plan, asked = ctx.deps.session, self.plan, position.strip()
+        self.sync(session)
 
         def refuse(reason: str, text: str) -> str:  # every early return is traced: the run logs show why
             session.trace.event(session.name, "configure_refused", position=asked, reason=reason,
@@ -634,6 +648,7 @@ Brief's submission steps:
                                 max_steps=45 + 3 * len(desk.entries), notes=False,
                                 thinking=llm.thinking("form", False), tools=tools)
 
+    desk.sync(bid_session)  # a restart during the form: what the review shows is what was entered since
     requirements = _requirements(briefing, email, answer, desk, filled=True)
     at_review = bool(ready and ready.at_signing_step)
 
@@ -862,6 +877,12 @@ Brief's submission steps:
                 url, body = await asyncio.wait_for(self.session.page.evaluate(KEEPALIVE_JS), 20)
             except Exception as error:  # a slow website: try again next time
                 self._event("keepalive_failed", error=f"{type(error).__name__}: {str(error)[:160]}")
+                if hasattr(self.session, "reopen") and await self.session._answers() == "hung":
+                    async with self.session.lock:  # a dead tab: open it again now, not when the bid is due
+                        await self.session.reopen("the bid form's tab answers no script call")
+                    self.ready = False
+                    self._event("session_lost", url="(tab did not answer)")
+                    return
                 continue
             if SIGNED_OUT.search(body):
                 self.ready = False
