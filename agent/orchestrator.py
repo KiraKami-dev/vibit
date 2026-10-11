@@ -903,6 +903,10 @@ class Orchestrator:
                 pending = self.effective(self.requirements[req_id]).pending
                 estimate = self._estimate(req_id, research) if pending else None
                 if estimate:
+                    # Only here: no material was chosen (never replaces a choice) and the reserve is still unknown.
+                    # The position was omitted before, not a no_bid, so the decision does not change either.
+                    self.trace.event("calc", "stroke_estimate", position=p.position, requirement=req_id,
+                                     material=estimate, pending="; ".join(pending)[:160])
                     problems.append(f"position {p.position}: {'; '.join(pending)[:120]}; material {estimate} "
                                     f"estimated (the closest stroke above the usable travel)")
                     number = estimate

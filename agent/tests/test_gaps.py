@@ -411,5 +411,27 @@ class DoubtsYield(unittest.TestCase):
         self.assertEqual(filler.round, 0)
 
 
+class PositionsReadBound(unittest.TestCase):
+    def test_a_hung_thinking_read_falls_back_to_one_quick_read(self):
+        import research_tender
+        calls = []
+
+        async def read(output_type, instructions, text, prompt, thinking=True):
+            calls.append(thinking)
+            if thinking:
+                await asyncio.sleep(30)
+            return "positions"
+
+        saved = research_tender._read, research_tender.POSITIONS_READ_SECONDS
+        research_tender._read, research_tender.POSITIONS_READ_SECONDS = read, 0.05
+        try:
+            started = time.monotonic()
+            self.assertEqual(asyncio.run(research_tender.read_positions("text", "T-1")), "positions")
+            self.assertLess(time.monotonic() - started, 2)
+        finally:
+            research_tender._read, research_tender.POSITIONS_READ_SECONDS = saved
+        self.assertEqual(calls, [True, False])
+
+
 if __name__ == "__main__":
     unittest.main()
