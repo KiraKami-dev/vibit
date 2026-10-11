@@ -75,13 +75,20 @@ def same_label(a: str | None, b: str | None) -> bool:
     "REQ-01" and "Req 1" too; label words (rev, revision, anforderung, ...) and separators do not count, every
     other letter and number does ("Rev. B" is not "C", "C-1" is not "C").
     """
-    def tokens(text: str | None) -> list[str]:
-        raw = re.findall(r"[^\W\d_]+|\d+", _ZERO_WIDTH.sub("", str(text or "")).casefold())
-        raw = [str(int(t)) if t.isdigit() else t for t in raw]
-        kept = [t for t in raw if t not in _LABEL_WORDS]
-        return kept or raw
-    ta, tb = tokens(a), tokens(b)
+    ta, tb = _label_tokens(a), _label_tokens(b)
     return bool(ta) and ta == tb
+
+
+def _label_tokens(text: str | None) -> list[str]:
+    raw = re.findall(r"[^\W\d_]+|\d+", _ZERO_WIDTH.sub("", str(text or "")).casefold())
+    raw = [str(int(t)) if t.isdigit() else t for t in raw]
+    kept = [t for t in raw if t not in _LABEL_WORDS]
+    return kept or raw
+
+
+def label_key(text: str | None) -> str:
+    """same_label's comparable form as one string ("Rev. C" and "C" give "c"; "" for no label), e.g. a dict key."""
+    return "-".join(_label_tokens(text))
 
 
 # ---------------------------------------------------------------- dates and timestamps

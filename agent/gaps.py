@@ -94,8 +94,13 @@ def detect_gaps(o, calc_problems: list[str] = (), doubts: bool = False) -> list[
     needs = {n.kind for n in getattr(getattr(o, "plan", None), "needs", [])}
     mail = getattr(o, "mail_facts", None)
     positions = list(getattr(getattr(o, "tender_facts", None), "positions", None) or [])
+    tender = getattr(o, "tender_facts", None)
     if not positions and (not needs or "tender" in needs):
         add("tender", "positions", "no tender positions read")
+    elif tender is not None and getattr(tender, "qa_complete", True) is False:
+        # the Q&A worker stopped before the whole list was collected: answers (amendments, quantity changes,
+        # keys) may be missing without any field showing it
+        add("tender", "qa", "bidder Q&A not read to its end")
     if getattr(mail, "approval", None) is None and (not needs or "mails" in needs):
         add("mail", "approval", "no discount approval read")
     erp = getattr(o, "erp", None)
@@ -288,8 +293,11 @@ class GapFiller:
         areas = {}
         for gap in todo:
             areas.setdefault(gap.area, []).append(gap)
-        if "tender" in areas:
+        if any(g.key == "positions" for g in areas.get("tender", [])):
             job(self.tender(), "tender")
+        elif "tender" in areas:
+            touched |= set(getattr(o, "requirements", {}) or {})  # an amendment can move any requirement
+            job(self.tender_qa(), "tender Q&A")
         if "requirement" in areas:
             job(self.specification([g.key for g in areas["requirement"]], touched), "specification")
         for gap in areas.get("erp", []):
@@ -366,6 +374,13 @@ class GapFiller:
             await self.o.tender(site)
             if getattr(self.o.tender_facts, "positions", None):
                 return
+
+    async def tender_qa(self) -> None:
+        """The bidder Q&A read once more on fresh tabs; new answers join the earlier reads."""
+        recheck = getattr(self.o, "recheck_qa", None)
+        if recheck is not None:
+            new = await recheck("Read every answer, on every page of the list.", self.until())
+            self.trace("qa_reread", new_amendments=new)
 
     async def specification(self, missing: list[str], touched: set[str]) -> None:
         """A careful spec navigator told which requirement ids are still missing; what it streams goes to the board
