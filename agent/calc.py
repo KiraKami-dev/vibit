@@ -232,6 +232,7 @@ class TieOrder(StrEnum):
 
 class SetupPool(BaseModel):
     """Shared setup (Ruestpool): one fee split over members by final pieces x allocation mass."""
+    key: str | None = Field(default=None, description="The pool key the tender Q&A names, if any")
     fee: Decimal
     members: list[str]
     allocation: CentAllocation = CentAllocation.LARGEST_REMAINDER
@@ -247,6 +248,7 @@ class BonusBand(BaseModel):
 
 
 class ProjectBonus(BaseModel):
+    key: str | None = Field(default=None, description="The bonus plan key the tender Q&A names, if any")
     bands: list[BonusBand]
     members: list[str]
     include_surcharge: bool = Field(default=False, description="Assumption: goods value = pieces x EUR base price; "
@@ -278,9 +280,20 @@ class BidInput(BaseModel):
     positions: list[PositionInput]
     approval: Approval | None = None
     fx_rates: dict[str, Decimal] = Field(default_factory=dict, description="FX key (or currency) -> EUR per unit")
+    fx_per_eur: dict[str, Decimal] = Field(
+        default_factory=dict, description="FX key (or currency) -> currency units per EUR, for fixings quoted that "
+                                          "way; the price is divided by it (exact, no reciprocal rounding)")
     metal_indices: dict[str, list[MetalIndexRate]] = Field(default_factory=dict)
-    setup_pool: SetupPool | None = None
-    project_bonus: ProjectBonus | None = None
+    setup_pool: SetupPool | None = Field(default=None, description="One pool; kept for callers that know one")
+    project_bonus: ProjectBonus | None = Field(default=None, description="One plan; kept for callers that know one")
+    setup_pools: list[SetupPool] = Field(default_factory=list, description="Every pool, one per key")
+    project_bonuses: list[ProjectBonus] = Field(default_factory=list, description="Every plan, one per key")
+
+    def all_setup_pools(self) -> list[SetupPool]:
+        return [*self.setup_pools, *([self.setup_pool] if self.setup_pool is not None else [])]
+
+    def all_project_bonuses(self) -> list[ProjectBonus]:
+        return [*self.project_bonuses, *([self.project_bonus] if self.project_bonus is not None else [])]
 
 
 # ---------------------------------------------------------------- output models
@@ -551,14 +564,20 @@ def _base_eur(pos: PositionInput, pieces: int, bid: BidInput) -> tuple[Decimal, 
     """Rule 22: price unit normalised, per-position scale, EUR per currency unit, HALF_UP to cents."""
     cond = valid_condition(pos.conditions, bid.scenario_date)
     scale = reached_scale(cond.scales, pieces)
+    per_piece = scale.price / Decimal(cond.price_unit)
     if cond.currency.upper() == "EUR":
-        fx = Decimal(1)
-    else:
-        key = cond.fx_key or cond.currency
-        if key not in bid.fx_rates and cond.currency not in bid.fx_rates:
-            raise CalcError(f"no FX rate for {key}")
-        fx = bid.fx_rates.get(key, bid.fx_rates.get(cond.currency))
-    return money(scale.price / Decimal(cond.price_unit) * fx), scale, cond, fx
+        return money(per_piece), scale, cond, Decimal(1)
+    key = cond.fx_key or cond.currency
+    for name in (key, cond.currency):  # the FX key first, then the currency
+        if name in bid.fx_rates:
+            fx = bid.fx_rates[name]
+            return money(per_piece * fx), scale, cond, fx
+        if name in bid.fx_per_eur:  # "1 EUR = x units": divide, so a half cent stays a half cent
+            units = bid.fx_per_eur[name]
+            if units <= 0:
+                raise CalcError(f"FX rate {key} is not positive")
+            return money(per_piece / units), scale, cond, Decimal(1) / units
+    raise CalcError(f"no FX rate for {key}")
 
 
 def _metal_rate(material: Material, bid: BidInput) -> Decimal:
@@ -630,27 +649,31 @@ def calculate(bid: BidInput) -> BidResult:
     discount = effective_discount(bid.approval, order_value)
     factor = 1 - discount / HUNDRED
 
-    pool: dict[str, Decimal] = {}
-    if bid.setup_pool is not None:
-        by_pos = {p.position: p for p in bid.positions}
+    # Rule 25, per pool key: each pool's fee over its own members, with that pool's cent rule.
+    pool: dict[str, Decimal] = defaultdict(Decimal)
+    by_pos = {p.position: p for p in bid.positions}
+    for setup_pool in bid.all_setup_pools():
         weights = {m: pieces[m] * by_pos[m].material.allocation_mass  # type: ignore[union-attr]
-                   for m in _members(bid.setup_pool.members, by_pos)}
+                   for m in _members(setup_pool.members, by_pos)}
         if weights:
-            pool = allocate_cents(bid.setup_pool.fee, weights, bid.setup_pool.allocation, bid.setup_pool.tie_order,
-                                  bid.setup_pool.rest_base)
+            for k, share in allocate_cents(setup_pool.fee, weights, setup_pool.allocation, setup_pool.tie_order,
+                                           setup_pool.rest_base).items():
+                pool[k] += share
 
-    bonus: dict[str, Decimal] = {}
+    # Rule 26, per plan key: bands on the plan's own eligible total, largest remainders over its members.
+    bonus: dict[str, Decimal] = defaultdict(Decimal)
     bonus_total = None
-    if bid.project_bonus is not None:
+    for plan in bid.all_project_bonuses():
         goods = {}
-        bonus_members = {norm_id(m) for m in bid.project_bonus.members}
         for p in bid.positions:
-            if norm_id(p.position) in bonus_members:
-                unit = base[p.position][0] + (surcharge[p.position] if bid.project_bonus.include_surcharge else 0)
+            if p.position in _members(plan.members, [p.position]):
+                unit = base[p.position][0] + (surcharge[p.position] if plan.include_surcharge else 0)
                 goods[p.position] = pieces[p.position] * unit
-        bonus_total = bonus_credit(money(sum(goods.values(), Decimal(0))), bid.project_bonus.bands)
-        if goods and bonus_total > 0:
-            bonus = allocate_cents(bonus_total, goods)
+        credit = bonus_credit(money(sum(goods.values(), Decimal(0))), plan.bands)
+        bonus_total = credit if bonus_total is None else bonus_total + credit
+        if goods and credit > 0:
+            for k, share in allocate_cents(credit, goods).items():
+                bonus[k] += share
 
     positions, debug = [], []
     for p in bid.positions:

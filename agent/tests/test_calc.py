@@ -540,5 +540,71 @@ class Bonus(unittest.TestCase):
         self.assertEqual((lines["1"].unit_price, lines["4"].unit_price), (D("9.63"), D("10.00")))
 
 
+class SeveralPoolsAndPlans(unittest.TestCase):
+    """Rules 25 and 26 per key: each pool and each bonus plan over its own members, with its own cent rule."""
+
+    POOL_A = SetupPool(key="P-A", fee=D("10.00"), members=["1", "2"])
+    # 3 cents over two equal weights, 1.5 each: round_each gives 0.02 twice (largest remainders would give 2 + 1)
+    POOL_B = SetupPool(key="P-B", fee=D("0.03"), members=["3", "4"], allocation=CentAllocation.ROUND_EACH)
+
+    def positions(self, quantity=10):
+        m = mat(alloc="1")
+        return [pos(k, quantity, material=m) for k in "1234"]
+
+    def test_two_pools(self):
+        # A: 10.00 over 1, 2 -> 5.00 each; pos 1: 10.00 + 5.00 / 10 = 10.50, surcharge 0.50
+        # B: 0.02 each; pos 3: 10.00 + 0.002 = 10.002 -> 10.00, surcharge 0.00
+        out = calculate(bid(*self.positions(), setup_pools=[self.POOL_A, self.POOL_B]))
+        self.assertEqual({d.position: d.pool_allocation for d in out.debug},
+                         {"1": D("5.00"), "2": D("5.00"), "3": D("0.02"), "4": D("0.02")})
+        lines = by_pos(out)
+        self.assertEqual((lines["1"].unit_price, lines["1"].surcharge_per_unit), (D("10.50"), D("0.50")))
+        self.assertEqual((lines["3"].unit_price, lines["3"].surcharge_per_unit), (D("10.00"), D("0.00")))
+
+    def test_single_pool_field_still_works_beside_the_list(self):
+        both = calculate(bid(*self.positions(), setup_pools=[self.POOL_A, self.POOL_B]))
+        mixed = calculate(bid(*self.positions(), setup_pool=self.POOL_A, setup_pools=[self.POOL_B]))
+        self.assertEqual(both.positions, mixed.positions)
+        single = calculate(bid(*self.positions(), setup_pool=self.POOL_A))
+        self.assertEqual(single.positions, calculate(bid(*self.positions(), setup_pools=[self.POOL_A])).positions)
+
+    def test_two_bonus_plans(self):
+        # goods 100 x 10.00 = 1000.00 per position
+        # X (1, 2): 2000.00 x 1 % = 20.00 -> 10.00 each; Y (3): 1000.00, 500 at 0 % + 500 at 10 % = 50.00
+        # one plan over 1-3 with Y's bands would give 250.00: the totals must stay per plan
+        x = ProjectBonus(key="B-X", bands=[BonusBand(lower=D(0), percent=D(1))], members=["1", "2"])
+        y = ProjectBonus(key="B-Y", bands=[BonusBand(lower=D(0), upper=D(500), percent=D(0)),
+                                           BonusBand(lower=D(500), percent=D(10))], members=["3"])
+        out = calculate(bid(*self.positions(100), project_bonuses=[x, y]))
+        lines = by_pos(out)
+        self.assertEqual(out.bonus_total, D("70.00"))
+        self.assertEqual([lines[k].rebate_total for k in "1234"], [D("10.00"), D("10.00"), D("50.00"), D("0.00")])
+        # pos 1: 10.00 - 10.00 / 100 = 9.90; pos 3: 10.00 - 0.50 = 9.50; pos 4: 10.00
+        self.assertEqual([lines[k].unit_price for k in "134"], [D("9.90"), D("9.50"), D("10.00")])
+        legacy = calculate(bid(*self.positions(100), project_bonus=x, project_bonuses=[y]))
+        self.assertEqual(legacy.positions, out.positions)
+
+
+class FxDirection(unittest.TestCase):
+    """Rule 22 with a fixing quoted as foreign units per EUR."""
+
+    def test_units_per_eur_divides_exactly(self):
+        # 5.85 per 100 pieces = 0.0585 / 0.9 per EUR = 0.065 exactly -> 0.07
+        # (times a rounded reciprocal 1/0.9 it would be 0.06499... -> 0.06)
+        c = cond((1, "5.85"), currency="CHF", fx_key="FX-9", price_unit=100)
+        out = calculate(bid(pos("1", 10, conditions=[c]), fx_per_eur={"FX-9": D("0.9")}))
+        self.assertEqual(by_pos(out)["1"].base_unit_price, D("0.07"))
+
+    def test_key_before_currency_and_price_unit(self):
+        # 216.00 per 100 pieces = 2.16 per piece / 1.08 = 2.00; the currency entry (2.00 per EUR) is not used
+        c = cond((1, "216.00"), currency="USD", fx_key="FX-9", price_unit=100)
+        out = calculate(bid(pos("1", 10, conditions=[c]), fx_per_eur={"FX-9": D("1.08"), "USD": D("2.00")}))
+        self.assertEqual(by_pos(out)["1"].base_unit_price, D("2.00"))
+        # by currency when the key is not given: 2.16 / 2.00 = 1.08
+        c = cond((1, "216.00"), currency="USD", fx_key="FX-0", price_unit=100)
+        out = calculate(bid(pos("1", 10, conditions=[c]), fx_per_eur={"USD": D("2.00")}))
+        self.assertEqual(by_pos(out)["1"].base_unit_price, D("1.08"))
+
+
 if __name__ == "__main__":
     unittest.main()

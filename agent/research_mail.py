@@ -88,7 +88,11 @@ class ConditionRulesContent(BaseModel):
 
 class IndexRate(BaseModel):
     code: str = Field(description="Metal index code exactly as written")
-    rate: str = Field(description=f"Rate per kg, {AS_WRITTEN}")
+    rate: str = Field(description=f"Rate, {AS_WRITTEN}")
+    per: Literal["kilogram", "hundred_kilograms", "tonne", "gram"] = Field(
+        default="kilogram", description="The mass the rate is stated per, as the message writes it: kilogram "
+                                        "(EUR/kg), hundred_kilograms (EUR per 100 kg), tonne (EUR/t, per 1000 kg), "
+                                        "gram (EUR/g)")
     valid_from: str | None = Field(default=None, description="First day of the stated validity window as written")
     valid_to: str | None = Field(default=None, description="Last day of the stated validity window as written")
 
@@ -130,7 +134,15 @@ class CommitmentContent(BaseModel):
 class FxRate(BaseModel):
     key: str = Field(description="FX key exactly as written")
     currency: str = Field(description="Foreign currency code, e.g. USD")
-    eur_per_unit: str = Field(description=f"EUR for one unit of the currency, {AS_WRITTEN}")
+    rate: str = Field(description=f"The exchange rate, {AS_WRITTEN}")
+    direction: Literal["eur_per_currency", "currency_per_eur"] = Field(
+        description="Which way the message quotes the rate: eur_per_currency if it states EUR for the foreign "
+                    "currency (e.g. '1 USD = 0.93 EUR', 'EUR per USD'), currency_per_eur if it states foreign "
+                    "currency units for EUR (e.g. '1 EUR = 1.08 USD', 'USD per EUR'). Report it as written; do "
+                    "not invert the rate yourself")
+    amount: str | None = Field(default=None, description="The amount the rate is quoted for, only if not 1 (e.g. "
+                                                         "100 for '100 JPY = 0.62 EUR' or '100 EUR = 108 USD'), "
+                                                         "as written")
 
 
 class FxContent(BaseModel):
@@ -218,12 +230,13 @@ SCHEMAS = {s.name: s for s in (
     Schema("approval", "an approved order discount percentage, possibly with a minimum order value",
            ApprovalContent, keyed=False),
     Schema("condition_rules", "per condition group: what the order discount applies to", ConditionRulesContent),
-    Schema("metal_indices", "metal index rates in EUR/kg, possibly with validity windows", MetalIndexContent),
+    Schema("metal_indices", "metal index rates in EUR per mass unit, possibly with validity windows",
+           MetalIndexContent),
     Schema("end_reserves", "per-end stroke reserves per specification revision", ReserveContent),
     Schema("packaging", "packaging tariffs in EUR per carton", PackagingContent),
     Schema("commitments", "delivery commitments: material, inclusive quantity ceiling, lead time in weeks",
            CommitmentContent),
-    Schema("fx", "exchange rates: EUR per unit of a foreign currency, per FX key", FxContent),
+    Schema("fx", "exchange rates between EUR and a foreign currency (either direction), per FX key", FxContent),
     Schema("setup_pools", "a shared setup pool fee and its cent-allocation rule", PoolContent),
     Schema("project_bonus", "marginal project bonus bands", BonusContent),
 )}
@@ -652,14 +665,40 @@ def _aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
+def _words(text: str) -> list[str]:
+    return [w for w in re.split(r"[^\w]+|_", _norm(text)) if w]
+
+
+def sender_address(record: MailRecord) -> str:
+    """The sender's email address, also when the reader wrote it as 'Name <address>' or put it in the name."""
+    for text in (record.sender, record.sender_name):
+        found = EMAIL.findall(ZW.sub("", text))
+        if found:
+            return _norm(found[0])
+    return _norm(record.sender)
+
+
 def sender_ok(record: MailRecord, kind: Kind, domain: str) -> bool:
-    """Rule 21: the sender the brief authorises, in the form the brief states it."""
-    address = _norm(record.sender)
+    """
+    Rule 21: the sender the brief authorises, in the form the brief states it. A sender named by name or role
+    matches the display name (as whole words) or the address's local part, and also needs the bidder's mailbox
+    domain when that is known: a look-alike display name from another domain is not the authority.
+    """
+    address = sender_address(record)
+    local, _, host = address.partition("@")
     if kind.sender_form == "local_part_at_bidder_domain":
         return bool(domain) and address == _norm(f"{kind.sender}@{domain}")
     if kind.sender_form == "address":
         return address == _norm(kind.sender)
-    return _norm(kind.sender) in _norm(f"{record.sender_name} {record.sender}")
+    wanted = _words(kind.sender)
+    if not wanted:
+        return False
+    name = _words(record.sender_name)
+    by_name = any(name[i:i + len(wanted)] == wanted for i in range(len(name) - len(wanted) + 1))
+    by_address = _words(local) == wanted or "".join(_words(local)) == "".join(wanted)
+    if not (by_name or by_address):
+        return False
+    return not domain or host == _norm(domain)
 
 
 def valid_records(records: list[MailRecord], reference: str, kind: Kind, domain: str, scenario: datetime
@@ -728,7 +767,8 @@ class MailFacts(BaseModel):
     end_reserves: dict[str, Reserve] = Field(default_factory=dict)
     packaging: dict[str, PackagingTariff] = Field(default_factory=dict)
     commitments: dict[str, DeliveryCommitment] = Field(default_factory=dict)
-    fx_rates: dict[str, Decimal] = Field(default_factory=dict)
+    fx_rates: dict[str, Decimal] = Field(default_factory=dict)  # EUR per currency unit
+    fx_per_eur: dict[str, Decimal] = Field(default_factory=dict)  # currency units per EUR, as some fixings quote it
     setup_pools: dict[str, PoolTerms] = Field(default_factory=dict)
     project_bonuses: dict[str, BonusTerms] = Field(default_factory=dict)
     sources: list[Source] = Field(default_factory=list)
@@ -739,6 +779,15 @@ class MailFacts(BaseModel):
 def _num(text: str | None, record: MailRecord) -> Decimal | None:
     """A number as the message writes it, read in the message's number format (locale-aware)."""
     return None if text is None or not str(text).strip() else parse_number(str(text), record.number_format or None)
+
+
+PER_KG = {"kilogram": Decimal(1), "hundred_kilograms": Decimal(100), "tonne": Decimal(1000),
+          "gram": Decimal("0.001")}  # kg the stated mass unit holds
+
+
+def _per_kg(rate: Decimal | None, per: str) -> Decimal | None:
+    """A metal index rate stated per some mass, in EUR per kg (exact)."""
+    return None if rate is None else rate / PER_KG.get(per, Decimal(1))
 
 
 def _apply(facts: "MailFacts", kind: Kind, valid: list[MailRecord]) -> set[int]:
@@ -762,7 +811,8 @@ def _apply(facts: "MailFacts", kind: Kind, valid: list[MailRecord]) -> set[int]:
                 latest[rate.code.strip()] = rec
         for code, rec in latest.items():
             facts.metal_indices[code] = [
-                MetalIndexRate(rate=_num(r.rate, rec), valid_from=parse_date(r.valid_from) if r.valid_from else None,
+                MetalIndexRate(rate=_per_kg(_num(r.rate, rec), r.per),
+                               valid_from=parse_date(r.valid_from) if r.valid_from else None,
                                valid_to=parse_date(r.valid_to) if r.valid_to else None)
                 for r in rec.content.rates if r.code.strip() == code]  # type: ignore[union-attr]
             used.add(id(rec))
@@ -792,7 +842,14 @@ def _apply(facts: "MailFacts", kind: Kind, valid: list[MailRecord]) -> set[int]:
                 ceiling=parse_int(e.ceiling_pieces, rec.number_format or None),  # type: ignore[attr-defined]
                 lead_time_weeks=parse_int(e.lead_time_weeks))  # type: ignore[attr-defined]
         elif name == "fx":
-            facts.fx_rates[key] = _num(e.eur_per_unit, rec)  # type: ignore[attr-defined,assignment]
+            # The rate as quoted, per one unit of the quoted amount; the direction is converted by calc (rule 22).
+            rate, amount = _num(e.rate, rec), _num(e.amount, rec) or Decimal(1)  # type: ignore[attr-defined]
+            if rate is None or rate <= 0 or amount <= 0:
+                facts.problems.append(f"fx {key}: no usable rate")
+                continue
+            table = facts.fx_rates if e.direction == "eur_per_currency" else facts.fx_per_eur  # type: ignore
+            table[key] = rate / amount
+            (facts.fx_per_eur if table is facts.fx_rates else facts.fx_rates).pop(key, None)
         elif name == "setup_pools":
             facts.setup_pools[key] = PoolTerms(fee=_num(e.fee, rec), allocation=e.allocation,  # type: ignore
                                                tie_order=e.tie_order, rest_base=e.rest_base)  # type: ignore
@@ -879,9 +936,10 @@ class BidClauses(BaseModel):
     """calc.BidInput fields from the mails, plus per-position clauses and what could not be resolved."""
     approval: Approval | None
     fx_rates: dict[str, Decimal]
+    fx_per_eur: dict[str, Decimal] = Field(default_factory=dict)
     metal_indices: dict[str, list[MetalIndexRate]]
-    setup_pool: SetupPool | None
-    project_bonus: ProjectBonus | None
+    setup_pools: list[SetupPool] = Field(default_factory=list)  # one per pool key the Q&A names (rule 25)
+    project_bonuses: list[ProjectBonus] = Field(default_factory=list)  # one per plan key (rule 26)
     positions: list[PositionClauses]
     problems: list[str] = Field(default_factory=list)
 
@@ -907,26 +965,23 @@ def bid_clauses(tender: TenderFacts, mail: MailFacts) -> BidClauses:
                                          discount_scope=scope, setup_fee=p.setup_fee, packaging=packaging,
                                          commitment=commitment, problems=own))
 
-    def one(keys: set[str], table: dict, what: str):
-        if len(keys) > 1:
-            problems.append(f"several {what} keys {sorted(keys)}; calc takes one")
-        key = next(iter(sorted(keys)), None)
-        if key is not None and key not in table:
-            problems.append(f"{what} {key} not found in the mails")
-        return key, table.get(key) if key else None
+    def per_key(attr: str, table: dict, what: str) -> dict[str, tuple[object, list[str]]]:
+        """Every key the Q&A assigns, with its terms from the mails and its member positions."""
+        out: dict[str, tuple[object, list[str]]] = {}
+        for key in sorted({getattr(p, attr) for p in tender.positions if getattr(p, attr, None)}):
+            terms = table.get(key, table.get(key.strip()))
+            if terms is None:
+                problems.append(f"{what} {key} not found in the mails")
+                continue
+            out[key] = (terms, [p.position for p in tender.positions if getattr(p, attr) == key])
+        return out
 
-    pool_key, pool = one({p.setup_pool_key for p in tender.positions if p.setup_pool_key}, mail.setup_pools,
-                         "setup pool")
-    setup_pool = None
-    if pool is not None:
-        setup_pool = SetupPool(fee=pool.fee, allocation=pool.allocation, tie_order=pool.tie_order,
-                               rest_base=pool.rest_base,
-                               members=[p.position for p in tender.positions if p.setup_pool_key == pool_key])
-    bonus_key, bonus = one({p.bonus_key for p in tender.positions if p.bonus_key}, mail.project_bonuses,
-                           "project bonus")
-    project_bonus = None
-    if bonus is not None:
-        project_bonus = ProjectBonus(bands=bonus.bands, include_surcharge=bonus.include_surcharge,
-                                     members=[p.position for p in tender.positions if p.bonus_key == bonus_key])
-    return BidClauses(approval=mail.approval, fx_rates=mail.fx_rates, metal_indices=mail.metal_indices,
-                      setup_pool=setup_pool, project_bonus=project_bonus, positions=positions, problems=problems)
+    setup_pools = [SetupPool(key=key, fee=t.fee, allocation=t.allocation, tie_order=t.tie_order,  # type: ignore
+                             rest_base=t.rest_base, members=members)  # type: ignore[attr-defined]
+                   for key, (t, members) in per_key("setup_pool_key", mail.setup_pools, "setup pool").items()]
+    project_bonuses = [ProjectBonus(key=key, bands=t.bands, include_surcharge=t.include_surcharge,  # type: ignore
+                                    members=members)
+                       for key, (t, members) in per_key("bonus_key", mail.project_bonuses, "project bonus").items()]
+    return BidClauses(approval=mail.approval, fx_rates=mail.fx_rates, fx_per_eur=mail.fx_per_eur,
+                      metal_indices=mail.metal_indices, setup_pools=setup_pools, project_bonuses=project_bonuses,
+                      positions=positions, problems=problems)
