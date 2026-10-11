@@ -45,6 +45,23 @@ MISSING = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>N
 captured/_missing.log; record it with sim/drive.py.</p></body></html>"""
 
 
+VOLATILE = [(re.compile(r'name="csrf" value="[^"]*"'), 'name="csrf" value=""'),
+            (re.compile(r'"navigation":\d+'), '"navigation":0'),
+            (re.compile(r'name="revision" value="\d+"'), 'name="revision" value=""'),
+            (re.compile(r'data-confirm-token="[^"]*"'), 'data-confirm-token=""'),
+            (re.compile(r'"key":"overlay:\d+:'), '"key":"overlay:0:'),
+            # what the websites place at random on every page: a popup's close button, a list's order
+            (re.compile(r"left:\d+%;top:\d+%"), "left:0%;top:0%"),
+            (re.compile(r'aria-posinset="\d+" aria-setsize="(\d+)" style="order:\d+">[^<]*'), r'aria-setsize="\1">')]
+
+
+def plain(text: str) -> str:
+    """A page without what differs between two loads of the same page (tokens, counters, random placement)."""
+    for pattern, with_ in VOLATILE:
+        text = pattern.sub(with_, text)
+    return text
+
+
 def canon(query: str) -> tuple:
     return tuple(sorted(parse_qsl(query, keep_blank_values=True)))
 
@@ -89,6 +106,7 @@ class Recording:
             if e.ok:
                 self.pages.setdefault((e.path, e.query), []).append(e)
         self.errors = {e.path: e for e in gets if e.status >= 500 and e.body}
+        self.absent = {(e.path, e.query): e for e in gets if e.status in (400, 403, 404, 410) and e.body}
         self.login = next(e for e in gets if e.path == "/login" and e.ok)
         self.consent = next((e for e in gets if e.path == "/consent" and e.ok), None)
         self.cookie = "sim_" + directory.name.replace("-", "_")
@@ -278,6 +296,7 @@ class Site:
                 f'href="{error.path}"', f'href="{here}"'), session), error.kind)
         without = next((f'action="{f}"' for c, f in rec.checks.items() if path == c), "")
         found = rec.page(path, query, without=without) or self.loosely(path, query)
+        found = found or self.rec.absent.get((path, query))  # the website's own "no such page", where recorded
         return self.recorded(found, session) if found else self.missing(f"GET {here}")
 
     def loosely(self, path: str, query: tuple) -> Exchange | None:

@@ -18,20 +18,7 @@ import bidform  # noqa: E402
 import mirror  # noqa: E402
 
 RECORDED = any(mirror.CAPTURED.glob("*/exchanges.jsonl")) if mirror.CAPTURED.exists() else False
-VOLATILE = [(re.compile(r'name="csrf" value="[^"]*"'), 'name="csrf" value=""'),
-            (re.compile(r'"navigation":\d+'), '"navigation":0'),
-            (re.compile(r'name="revision" value="\d+"'), 'name="revision" value=""'),
-            (re.compile(r'data-confirm-token="[^"]*"'), 'data-confirm-token=""'),
-            (re.compile(r'"key":"overlay:\d+:'), '"key":"overlay:0:'),
-            # what the websites place at random on every page: a popup's close button, a list's order
-            (re.compile(r"left:\d+%;top:\d+%"), "left:0%;top:0%"),
-            (re.compile(r'aria-posinset="\d+" aria-setsize="(\d+)" style="order:\d+">[^<]*'), r'aria-setsize="\1">')]
-
-
-def plain(text: str) -> str:
-    for pattern, with_ in VOLATILE:
-        text = pattern.sub(with_, text)
-    return text
+plain = mirror.plain
 
 
 class Visitor:

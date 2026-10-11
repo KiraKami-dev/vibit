@@ -145,6 +145,18 @@ class Recorder:
         }, ensure_ascii=False) + "\n")
         self.exchanges.flush()
 
+    def store(self, method: str, url: str, post: str, status: int, headers: dict, body: bytes) -> None:
+        """Write one exchange that did not come through the browser (`sim/refresh.py` asks the website directly)."""
+        kind = headers.get("content-type", "")
+        self.count += 1
+        self.exchanges.write(json.dumps({
+            "n": self.count, "t": round(time.monotonic() - self.started, 2), "label": self.label, "method": method,
+            "url": self.scrub(url), "post": self.scrub(post) or None, "resource": "document", "navigation": True,
+            "in": "main", "page": "", "referer": None, "status": status, "type": kind,
+            "location": self.scrub(headers.get("location", "")) or None, "cookies": [], "headers": {},
+            "body": self.keep(body, kind) if body else None, "size": len(body)}, ensure_ascii=False) + "\n")
+        self.exchanges.flush()
+
     async def snapshot(self, session: SiteSession, requested: str, note: str = "") -> dict:
         """The page as it stands: every frame's document, the agent's view of it, a screenshot, what it offers."""
         page = session.page

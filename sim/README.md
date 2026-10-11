@@ -29,6 +29,33 @@ dev/run-sim.sh v2 "what changed"
 python3 sim/mirror.py                                                  # or just serve it and browse
 ```
 
+## Keeping it complete and current
+
+```sh
+uv run --project agent python sim/refresh.py audit            # offline: what could be asked for but is not recorded
+uv run --project agent python sim/refresh.py refresh --form   # ask the websites again; store what changed or is new
+```
+
+`audit` lists addresses the recorded pages link to, addresses an agent asked the mirror for, and bid-form choices
+nobody walked. `refresh` fetches every recorded address and every gap from the live websites with the scouting
+login, reports changed, new and gone pages, and stores the new answers; `--form` walks every dependent choice of
+the bid form (it never signs). Run it before a testing session and after every agent run that left a
+`_missing.log`; restart the mirror afterwards. `captured/_refresh.json` holds the last report, with the scenario
+and challenge version it saw.
+
+## Browsers with DevTools
+
+```sh
+python3 sim/mirror.py &                                               # the mirror
+uv run --project agent python sim/chrome.py 2                         # two browsers, prints CDP_URL / CDP_URLS
+SIM_BROWSERS=4 dev/run-sim.sh v2 "attach like the sandbox"            # agent run that attaches over CDP
+```
+
+`chrome.py` opens 1 to 4 browsers, each with a Chrome DevTools port (9222 and up), the way the sandbox provides
+them. Playwright attaches with `chromium.connect_over_cdp("http://127.0.0.1:9222")`; Puppeteer, an MCP browser
+server or the DevTools window (chrome://inspect, add `127.0.0.1:9222`) work the same way, also while an agent is
+running in that browser.
+
 `drive.py` prints each page the way the agent sees it (text with `[eN ...]` refs) and takes `goto`, `click`,
 `fill`, `select`, `check`, `back`, `crawl`, `halt`, `label`, `open`. Every action is recorded. The run's login is
 replaced by placeholders before anything is written.
