@@ -354,6 +354,48 @@ class OpenPagesTest(unittest.TestCase):
         self.assertIn("No unopened links remain", second)
         self.assertIsNotNone(late)
 
+    def test_a_record_worker_counts_only_the_record_links(self):
+        pages = {**self.PAGES, "/rec/b": "<h1>Tab B</h1><p>Value 2</p><a href='/menu'>Main menu</a>"}
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                data = f"<!doctype html><html><body>{pages.get(self.path, 'missing')}</body></html>".encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_port}"
+
+        async def go():
+            async with _Browser() as b:
+                session = SiteSession({"siteId": "erp", "url": base + "/", "credentials": {}}, b.context,
+                                      SimpleNamespace(event=lambda *a, **k: None))
+                page = await b.context.new_page()
+                session._watch(page)
+                await page.goto(base + "/rec")
+                await session.look()
+                session.__dict__["record_key"] = "rec"
+                ctx = SimpleNamespace(deps=Deps(session=session))
+                await research.open_pages(ctx, ["/rec/a", "/rec/b"])
+                return await research.open_pages(ctx, ["/rec/a/sub"]), session.__dict__.get("exhausted_at")
+        hold = research.DETAIL_HOLD
+        research.DETAIL_HOLD = 0.01
+        try:
+            text, exhausted = asyncio.run(go())
+        finally:
+            research.DETAIL_HOLD = hold
+            server.shutdown()
+        self.assertIn("No unopened links remain", text)  # /menu is no view of the record
+        self.assertIsNotNone(exhausted)
+
 
 if __name__ == "__main__":
     unittest.main()

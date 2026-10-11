@@ -26,7 +26,7 @@ import re
 import time
 from decimal import Decimal
 from typing import Awaitable, Callable, TypeVar
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from playwright.async_api import BrowserContext, Page
 from pydantic import BaseModel, Field
@@ -229,6 +229,9 @@ async def open_pages(ctx: RunContext[Deps], paths: list[str]) -> str:
         return not text.startswith(("not opened", "did not open", "already opened"))
 
     head, tail = _common_edges([t for t in texts if was_opened(t)])
+    # a worker on one record (its number set by the caller) counts only the links about that record as left to
+    # open: menus, search help and other records are not views of it
+    record = session.__dict__.get("record_key", "")
     out, more = [], {}
     shown: list[str] = []  # the opened views as shown, for _drop_repeated_nav
     for i, (name, text) in enumerate(zip(names, texts)):
@@ -237,7 +240,8 @@ async def open_pages(ctx: RunContext[Deps], paths: list[str]) -> str:
             body = "\n".join(lines[head:len(lines) - tail]) if len(texts) > 1 else text  # not the site chrome
             for link in _LINK.findall(body):
                 target = urljoin(session.page.url, link)
-                if urlparse(target).netloc == urlparse(session.site["url"]).netloc and target not in opened:
+                if urlparse(target).netloc == urlparse(session.site["url"]).netloc and target not in opened \
+                        and (not record or record in unquote(target)):
                     more.setdefault(link, None)
         if i and was_opened(text) and (head or tail):
             lines = text.splitlines()
@@ -268,6 +272,10 @@ async def open_pages(ctx: RunContext[Deps], paths: list[str]) -> str:
         session.__dict__.setdefault("exhausted_at", time.monotonic())
         out.append("No unopened links remain: everything the views you opened link to has been opened. Return "
                    "your result now.")
+        if record and DETAIL_STOP:
+            # the worker's only step left is its answer, which nothing reads: the harness ends it now (its tab is
+            # read by the reader), so this result waits instead of starting that model call
+            await asyncio.sleep(DETAIL_HOLD)
     return "\n\n".join(out)
 
 
@@ -858,6 +866,11 @@ RECIPE_WAIT = 40.0  # how long the other groups wait for the first group's searc
 # A worker that has what it came for (a complete hit list; every view of a record opened) but keeps going is ended
 # this many seconds later; what it has is then read from its pages.
 SETTLE_SECONDS = float(os.environ.get("ERP_SETTLE_SECONDS", "20"))
+# A detail worker that has opened every view of its record is ended right away instead of answering (the answer
+# lists facts it missed, which nothing reads; the reader reads the views and a second pass follows from the record).
+# ERP_DETAIL_STOP=0: it answers, ended SETTLE_SECONDS later at the latest.
+DETAIL_STOP = os.environ.get("ERP_DETAIL_STOP", "1") == "1"
+DETAIL_HOLD = 5.0  # seconds open_pages waits for that end before it returns anyway
 
 # Time the ERP stage keeps before the research deadline, so that what it started finishes and counts: a material's
 # reader call after its worker stops (READ_SECONDS), the model's choice over the records (CHOOSE_SECONDS); a search
@@ -1442,6 +1455,9 @@ class Erp:
                 name = session.name
                 try:
                     _keep_views(session, views)
+                    if not attempt:  # open_pages: only this record's links are left to open; a second pass (facts
+                        # missing, e.g. views whose addresses do not name the record) counts every link again
+                        session.__dict__["record_key"] = number
                     if link and session.view:  # the record view it opened on, kept for the reader too
                         views[session.page.url] = _strip_refs(session.view)
                     until = self._until(READ_SECONDS)
@@ -1450,7 +1466,8 @@ class Erp:
                         run_worker(session, DETAIL_GOAL.format(material=number, focus=focus), Coverage,
                                    deadline=until, max_steps=steps(until, 6, 18), tools=(open_pages,),
                                    **_worker_kwargs(notes=False, grounded=False)),
-                        lambda: session.__dict__.get("exhausted_at"), SETTLE_SECONDS, self.trace, session.name)
+                        lambda: session.__dict__.get("exhausted_at"),
+                        0.0 if DETAIL_STOP else SETTLE_SECONDS, self.trace, session.name)
                     coverage = result[0] if result else None
                 finally:
                     await self._close(session)
