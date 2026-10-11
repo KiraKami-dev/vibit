@@ -221,3 +221,23 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   20 s, retry at once in a fresh context with 45/60/90/120 s budgets, and accept a rendered page whose settle never
   ends. Test runs of 86b4f27: 100 (7:33) and 100 (11:33), all starts in 2.4 to 4.6 s; the second still had three
   mail gotos mid-research that never committed, now bounded (30 s goto + about 22 s settle) and traced as slow_page.
+- Synthetic scenarios (`dev/synth`, invented data on four local mock sites, look drawn per seed): 3,000 seeds give
+  the same answer from an independent rule implementation and from `calc.py`. First agent runs (v3 working tree):
+  seed 7 scored 10 (false no_bid), then 15 and seed 12 scored 57 after two fixes. What they showed: revision labels
+  were matched as text ("III" against "Revision III vom <date>"), so a reserve that was read was never applied and
+  amendments would be dropped (`evidence.revision_id`); an ERP hit list without attribute columns came back as the
+  one hit the worker opened, which read as "search complete, no material" (search goal now asks for every row).
+  Still open: a record kind with no mail in the mailbox burns its 240 s budget twice; ERP detail workers hit their
+  12-step limit on a material whose data sits on five tabs; research then takes 650 to 750 s, so the form phase runs
+  out (seed 7: all positions omitted at signing, seed 12: two of five). The mock has no gates, iframes or cascading
+  selects, so it is easier than public-1 in those respects and harder in these.
+- Generation 2 of the synthetic set takes its surface forms from a sandbox run log of ours: ids that say nothing
+  about order (revisions, Q&A numbers, keys), records dated hours apart, small quantities, a stated number notation
+  per mail, unused keys beside the used ones, a mail reading pane, an access-number gate, hex TANs. Seeds mean other
+  scenarios than in generation 1. The log also caught a bug in the new `revision_id`: it split "R-1234" at the
+  hyphen and so took every such revision for the same one; identifiers keep their hyphen now (tested).
+- Generation 3 of the synthetic set has 33 named datasets (`dev/synth/run.py ... --dataset NAME`; list in
+  `scenario.DATASETS`): 28 of them push one kind of oddness each (one or twelve positions, exact ties, boundaries met
+  or missed by one, minute precision, long version chains, decoy floods, strange ids, foreign number notations, a
+  release taken back, ...). Each passes oracle against `calc.py` and a bid-form round trip on 60 seeds; no agent
+  run on them yet.

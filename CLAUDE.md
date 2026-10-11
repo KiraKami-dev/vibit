@@ -20,6 +20,9 @@ per team). The agent lives in `agent/` and is built on the Atira starter kit. Ke
 - `dev/`: `smoke.py` (v0 check), `run-local.sh`, `test-run.sh`, `track.py` (run log), `soak.py` (keeps N sandbox test
   runs of HEAD going: `python3 dev/soak.py --slots 2`), `local-soak.sh` (local runs up to signing, scored by
   `checks/score.py`), `robustness.py` (renamed sites, reworded brief), `research_check*.py`, `configurator_check.py`.
+- `dev/synth/`: invented scenarios on four local mock sites with their own look per seed, an independent answer
+  oracle and the platform's scoring (`run.py check | show | serve | agent | report`). A proxy for the private set,
+  never a copy of it: fix what a failing seed shows in general terms, never teach `agent/` the mock sites.
 - `checks/` (gitignored): hand-derived public-1 answer and `python3 checks/score.py <answer.json>`; never copy its
   values into `agent/`.
 - Submitting: export committed code with `git archive HEAD agent` into a temp dir and submit/test from there, so

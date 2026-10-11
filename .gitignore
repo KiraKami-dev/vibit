@@ -8,3 +8,9 @@ dev/clef_eval/data/
 dev/local/
 experiments/soak.log
 experiments/local-soak.log
+
+# synthetic-scenario runs and served run files: local only
+experiments/synth-runs.jsonl
+dev/synth/.run-*.json
+dev/synth/data/
+__pycache__/
