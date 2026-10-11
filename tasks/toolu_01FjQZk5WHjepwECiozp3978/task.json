@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01FjQZk5WHjepwECiozp3978",
+  "agent_id": "abbfed8ae994e0d88",
+  "subagent_type": "general-purpose",
+  "task_description": "Speed up mail research via HTTP",
+  "token_usage": {
+    "input_tokens": 194,
+    "cache_creation_tokens": 218181,
+    "cache_read_tokens": 15924987,
+    "output_tokens": 57460,
+    "api_call_count": 97
+  },
+  "started_at": "2026-10-11T08:27:43.545478+02:00",
+  "completed_at": "2026-10-11T08:48:28.426843+02:00"
+}
