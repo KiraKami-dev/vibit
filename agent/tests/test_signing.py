@@ -54,6 +54,19 @@ class SigningNeverStopsAtAStepCap(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.assertEqual(len(script.calls), 2)
 
+    async def test_a_revoked_model_token_ends_signing(self):
+        calls = []
+
+        async def revoked(session, goal, output_type, **kwargs):
+            calls.append(output_type)
+            if output_type is FormReady:
+                return FormReady(at_signing_step=True, open_points=""), {}
+            raise RuntimeError("status_code: 401, model_name: m, body: {'type': 'authentication_error'}")
+
+        with mock.patch.object(submit, "run_worker", revoked), mock.patch.object(submit, "check_summary", no_check):
+            await submit_bid(FakeSession(), FakeMailbox(["bids@example.com"]), BRIEFING, time.monotonic() + 900, None)
+        self.assertEqual(calls, [FormReady, SubmissionResult])
+
     def test_reserve_grows_with_slow_model_calls(self):
         with mock.patch.object(worker, "PACE", []):
             self.assertEqual(submit.signing_reserve(1000), submit.SIGNING_RESERVE)  # no pace known yet

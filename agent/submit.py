@@ -690,6 +690,8 @@ submission (or shows why it failed)."""
         except Exception as error:  # in a run, the platform closes the model token once the bid is in
             bid_session.trace.event(bid_session.name, "stopped",
                                     reason=f"{type(error).__name__}: {str(error)[:200]}")
+            if TOKEN_CLOSED.search(str(error)):  # the bid is in: the platform revoked the model token
+                break
             await asyncio.sleep(2)
         if (result and result.submitted) or deadline - time.monotonic() <= LAST_CHANCE:
             break
@@ -704,6 +706,8 @@ submission (or shows why it failed)."""
 
 SIGN_STEPS = 10  # worker steps signing takes at worst: TAN request, the mailbox's lookup, entering it, confirming
 LAST_STEPS = 15  # steps of one sign-only pass; passes repeat while time is left
+# a run's model token is revoked once the platform accepted the answer (sandbox run 85ea: 401 right after submit)
+TOKEN_CLOSED = re.compile(r"status_code: 401|authentication_error")
 
 
 def signing_reserve(left: float) -> float:
