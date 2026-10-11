@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01YMSJbm1Xz3o1cKwkYqFDSc",
+  "agent_id": "a83143a445f6324be",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix huge base price bug",
+  "token_usage": {
+    "input_tokens": 132,
+    "cache_creation_tokens": 130355,
+    "cache_read_tokens": 7122841,
+    "output_tokens": 30860,
+    "api_call_count": 66
+  },
+  "started_at": "2026-10-11T06:26:38.495633+02:00",
+  "completed_at": "2026-10-11T06:38:17.712068+02:00"
+}

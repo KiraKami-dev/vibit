@@ -3,7 +3,7 @@
   "checkpoint_id": "01M4MM3P890NX5EZXVEW4NYGS2",
   "strategy": "manual-commit",
   "branch": "codex/reader-kernel",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": null,
   "sessions": [
     {
@@ -12,13 +12,27 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 2367,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 332288,
-    "output_tokens": 1107,
-    "api_call_count": 3
+    "input_tokens": 2371,
+    "cache_creation_tokens": 1230,
+    "cache_read_tokens": 722889,
+    "output_tokens": 1146,
+    "api_call_count": 4,
+    "subagent_tokens": {
+      "input_tokens": 62,
+      "cache_creation_tokens": 89332,
+      "cache_read_tokens": 3660613,
+      "output_tokens": 9685,
+      "api_call_count": 31
+    }
   }
 }
