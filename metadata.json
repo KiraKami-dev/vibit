@@ -3,7 +3,7 @@
   "checkpoint_id": "01M4MJ52A2MANJ1WA26NXF8HSB",
   "strategy": "manual-commit",
   "branch": "codex/reader-kernel",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     "docs/python-kernel-feasibility.md"
   ],
@@ -14,13 +14,27 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 13396,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 1457920,
-    "output_tokens": 5860,
-    "api_call_count": 14
+    "input_tokens": 13408,
+    "cache_creation_tokens": 1875,
+    "cache_read_tokens": 2844683,
+    "output_tokens": 6305,
+    "api_call_count": 18,
+    "subagent_tokens": {
+      "input_tokens": 32,
+      "cache_creation_tokens": 26024,
+      "cache_read_tokens": 5993464,
+      "output_tokens": 13871,
+      "api_call_count": 16
+    }
   }
 }
