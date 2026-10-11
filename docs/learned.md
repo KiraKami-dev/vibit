@@ -250,3 +250,10 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - Mail search with thinking off took 211 calls instead of 85 and lost end_reserves in one run: keep thinking on.
 - ERP hits whose rows contradict the requirement are read only when needed (ERP_DEFER_REST): detail calls 28-32
   instead of 36-53, $0.112-0.129 per run. Records that finished after a requirement's choice were never used anyway.
+- Cheaper own-key models on OpenRouter (model-qwen3.7-flash, model-gpt-oss-120b): neither keeps quality. Qwen3.7
+  Flash (only Alibaba serves it; not Fireworks) scored 21.7, 59.9 and 72 in 10-16 min for $0.039-0.051; its
+  thinking-off tender worker re-requested the TAN instead of submitting, so two runs looped through TAN requests
+  until the deadline, and research missed the discount, total and metal index window. GPT-OSS-120B (DeepInfra)
+  scored 10: no positions by the answer deadline, thinking-on calls hit the 180 s timeout. Hosted Qwen stays.
+- OpenRouter reasoning for Qwen: {"effort": "low", "exclude": true} still bills 2,000-4,000 hidden reasoning tokens
+  per call (23-43 s); {"enabled": false} gives 0. Qwen3.7 Flash prices triple above 32k prompt tokens.
