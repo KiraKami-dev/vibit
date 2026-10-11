@@ -392,6 +392,23 @@ class DoubtsYield(unittest.TestCase):
         self.assertEqual([g.ident for g in filler.spare_doubts(todo)], ["mail/setup_pools", "erp/A-1", "mail/fx"])
         o.mail_sessions = [object()]
         self.assertEqual([g.ident for g in filler.spare_doubts(todo)], ["mail/setup_pools", "erp/A-1"])
+        o.mail_sessions = [object()] * 4
+        self.assertEqual(filler.spare_doubts([g for g in todo if g.reason.startswith(gaps.DOUBT)]), [])
+
+    def test_doubts_alone_start_no_round(self):
+        o = runnable(GAP_TAIL + GAP_MIN_ROUND + 60)
+        o.tender_facts.positions = []
+        o.plan.needs = []
+        o.mail_kinds = [SimpleNamespace(name="fx")]
+        o.mail_sessions = [object()]
+        o.board.post("mail", "fx/USD", "1.1", Source(site="s"), "mails").verdict = "header only"
+        o.gap_rework = True
+        o.mail_facts.approval = object()
+        filler = GapFiller(o)
+        filler.feasible = lambda g: g.area == "mail"
+        first = calc_for(o)()
+        self.assertIs(asyncio.run(filler.run(first, calc_for(o))), first)
+        self.assertEqual(filler.round, 0)
 
 
 if __name__ == "__main__":

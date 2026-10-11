@@ -226,6 +226,8 @@ class GapFiller:
         self._report(gaps, set())
         while self.round < GAP_ROUNDS:
             todo = [g for g in gaps if self.feasible(g) and self.tries.get(g.ident, 0) < self.limit(g)]
+            if not any(not g.reason.startswith(DOUBT) for g in todo):
+                break  # nothing the answer lacks; verifier doubts alone are no reason to browse
             if not todo:
                 break
             if self.left() < GAP_MIN_ROUND:
@@ -329,7 +331,9 @@ class GapFiller:
         """
         real = [g for g in todo if not (g.area == "mail" and g.reason.startswith(DOUBT))]
         doubted = [g for g in todo if g not in real]
-        spare = max(0, len(getattr(self.o, "mail_sessions", None) or []) - sum(g.area == "mail" for g in real))
+        # doubts alone never start a round: in a complete run that round only delayed the answer (190 s)
+        spare = max(0, len(getattr(self.o, "mail_sessions", None) or []) - sum(g.area == "mail" for g in real)) \
+            if real else 0
         if doubted[spare:]:
             self.trace("gap_skipped", gaps=[g.ident for g in doubted[spare:]], reason="no spare mail tab")
         return real + doubted[:spare]
