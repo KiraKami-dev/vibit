@@ -62,9 +62,6 @@ RETRY_SECONDS = 90.0  # a search that kept nothing is tried once more, for this 
 READ_TIMEOUT = 60.0  # one message reads in 10 to 35 s; a stalled call (seen: 180 s of silence) is retried sooner
 PLAN_TIMEOUT = 30.0  # the plan answers in about 12 s; a stalled call is retried sooner than the default 45 s
 FIRST = ("approval",)  # searched first: the approval moves every position's price
-# The search worker only searches, pages and names the subjects to keep: which record governs is decided later,
-# mechanically (resolve_mail), from what the thinking reader copies. THINKING_MAIL_SEARCH=1 turns thinking back on.
-SEARCH_THINKING = llm.thinking("mail_search", False)
 
 # ---------------------------------------------------------------- record contents per kind
 
@@ -507,7 +504,7 @@ async def _search(session: SiteSession, kind: Kind, reference: str, kept: _Readi
     "ended" (stopped by time) or "stalled".
     """
     worker = asyncio.create_task(run_worker(
-        session, _goal(kind, reference, again), Summary, deadline=until, max_steps=20, thinking=SEARCH_THINKING,
+        session, _goal(kind, reference, again), Summary, deadline=until, max_steps=20, thinking=True,
         grounded=False, tools=(paging_tool(Collected()), keep_messages_tool(kept))))
     stalled, ended = False, False
     progress, moved = (session.stamp, len(kept)), time.monotonic()
