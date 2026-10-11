@@ -235,3 +235,8 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   settle/look reopen such a tab (same URL in a new tab, keeping the site session and the wizard step; else a fresh
   start) and every worker tool call is cut off after STUCK_SECONDS without an answer. Test runs 565c and 8c1e: 100
   and 100; in 565c a hung mail tab was reopened in about 1 s.
+- Q&A worker stop (2187356): collect_pages tells the Q&A worker the list is complete and until_settled ends it 10 s
+  after the list's end. Test runs: 100 (11:12) and 100 (7:18), 266 and 269 model requests and $0.120 each, against
+  292 and 307 requests ($0.127, $0.145) for 9fb3be4, where the Q&A worker alone used 25 and 28. The 11:12 run lost
+  its time to model stalls (a 180 s reader timeout delayed the positions to 262 s, the tender watch fired, and
+  verify timed out), not to the Q&A.
