@@ -15,9 +15,11 @@ Each tool acts only on what the model points at and makes no decision of its own
 Controls and lists are found through refs and roles, never through site-specific labels, URLs or values.
 """
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
+from urllib.parse import unquote_plus
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
@@ -385,8 +387,18 @@ def _hit_notes(text: str, rows: int) -> list[str]:
     return notes
 
 
-async def run_search(session: SiteSession, field_ref: str, query: str, submit_ref: str | None = None) -> str:
-    """Fill the search field, submit, and list every row of the result list that shows."""
+def _shows_query(session: SiteSession, query: str) -> bool:
+    """Whether the result page shows the query (in its field, the address or the text): a search that a pop-up or a
+    re-rendered form swallowed comes back with an empty field and the unfiltered page."""
+    want = " ".join(query.split()).casefold()
+    if not want:
+        return True
+    url = unquote_plus(session.page.url)
+    return want in " ".join(session.view.split()).casefold() or want in url.casefold()
+
+
+async def _submit(session: SiteSession, field_ref: str, query: str, submit_ref: str | None) -> str | None:
+    """Type and send the query; the failure text of the action, or None."""
     async def typed(element):
         await element.fill(query, timeout=5000)
         if not submit_ref:
@@ -398,15 +410,47 @@ async def run_search(session: SiteSession, field_ref: str, query: str, submit_re
         view = await session.act("click", submit_ref, _click)
         if view.startswith("No element") or view.startswith("click "):
             return view
+    return None
+
+
+async def run_search(session: SiteSession, field_ref: str, query: str, submit_ref: str | None = None) -> str:
+    """Fill the search field, submit, and list every row of the result list that shows. A result page that does
+    not show the query (a pop-up or re-rendered form swallowed it) is searched once more."""
+    failed = await _submit(session, field_ref, query, submit_ref)
+    if failed:
+        return failed
+    reached = _shows_query(session, query)
+    if not reached:
+        await session.look()
+        session.trace.event(session.name, "search_resent", query=query, url=session.page.url)
+        if not await _submit(session, field_ref, query, submit_ref):
+            reached = _shows_query(session, query)
     said = _page_text(session)
     listing = await paginate(session)
-    listing.notes = _hit_notes(said, len(listing.rows)) + listing.notes
-    # what each search showed, for the caller: an empty result counts only with the site's own no-hits notice
-    session.__dict__.setdefault("searches", []).append(
-        {"query": query, "rows": len(listing.rows), "no_hits": not listing.rows and bool(NO_HITS.search(said))})
+    notes = _hit_notes(said, len(listing.rows))
+    no_hits = bool(NO_HITS.search(said))
+    if listing.rows and no_hits and not any(r.links for r in listing.rows):
+        # the site says there are no hits and the "list" found has no links: page chrome, not hits
+        listing.rows = []
+        notes = _hit_notes(said, 0)
+    listing.notes = notes + listing.notes
+    if not reached:
+        listing.notes.append(f"the result page does not show {query!r}: the search may not have been sent; "
+                             "search again")
+    complete = reached and bool(listing.rows) and not listing.capped
     header = (f"Search for {query!r}: {len(listing.rows)} rows" + (f" over {listing.pages} pages" if listing.pages > 1
               else "") + f" ({listing.how}). URL: {session.page.url}")
-    return _format(listing, header)
+    text = _format(listing, header)
+    if complete:
+        text += (f"\nThis is the complete result list: {len(listing.rows)} "
+                 f"{'hit' if len(listing.rows) == 1 else 'hits'}, no further page.")
+    # what each search showed, for the harness: an empty result counts only with the site's own no-hits notice;
+    # `complete` (the list ended, the query reached the site) and `text` let it end a worker that has its list
+    session.__dict__.setdefault("searches", []).append(
+        {"query": query, "rows": len(listing.rows) if reached or any(r.links for r in listing.rows) else 0,
+         "no_hits": reached and not listing.rows and no_hits,
+         "complete": complete, "text": text, "at": time.monotonic()})
+    return text
 
 
 async def search(ctx: RunContext[Deps], field_ref: str, query: str, submit_ref: str = "") -> str:
