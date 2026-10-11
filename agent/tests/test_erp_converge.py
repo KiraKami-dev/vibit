@@ -1,8 +1,8 @@
 """
 ERP research converges: the search tool says when a hit list is complete, resends a search a pop-up swallowed and
-flags a group the site has no hits for; a worker that has what it came for is ended; open_pages says when nothing
-is left to open; hits whose rows fit are inspected first (up to 20), and the others are not waited for once one of
-them is chosen. Pages, groups and materials are invented.
+records the site's no-hits notice for an empty group; a worker that has what it came for is ended; open_pages says
+when nothing is left to open; hits whose rows fit are inspected first (up to 20), and the others are not waited for
+once one of them is chosen. Pages, groups and materials are invented.
 """
 import asyncio
 import re
@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import research  # noqa: E402
 import site_tools  # noqa: E402
 from browser_tools import Deps, SiteSession  # noqa: E402
-from evidence import Candidate, EffectiveRequirement, MaterialRecord  # noqa: E402
+from evidence import Candidate, EffectiveRequirement, MaterialRecord, group_without_hits  # noqa: E402
 from tests.test_site_tools import _Browser  # noqa: E402
 
 FOOTER = "<footer><p>Demo system</p><p>System date 01.02.2030</p></footer>"
@@ -63,10 +63,9 @@ class SearchToolTest(unittest.TestCase):
         out, searches = search(False, "GR-1")
         self.assertIn("1 rows", out)
         self.assertIn("This is the complete result list: 1 hit, no further page.", out)
-        self.assertTrue(searches[0].complete)
-        listing, empty = research.group_search(searches, "GR-1")
-        self.assertIs(listing, searches[0])
-        self.assertFalse(empty)
+        self.assertTrue(searches[0]["complete"])
+        self.assertIs(research.group_listing(searches, "GR-1"), searches[0])
+        self.assertFalse(group_without_hits(searches, "GR-1"))
 
     def test_swallowed_query_is_sent_again(self):
         out, searches = search(True, "GR-2")
@@ -79,10 +78,9 @@ class SearchToolTest(unittest.TestCase):
         self.assertIn("(no rows)", out)
         self.assertNotIn("Demo system", out)
         self.assertNotIn("complete result list", out)
-        self.assertTrue(searches[0].no_hits)
-        listing, empty = research.group_search(searches, "gr 9")
-        self.assertIsNone(listing)
-        self.assertTrue(empty)
+        self.assertTrue(searches[0]["no_hits"])
+        self.assertIsNone(research.group_listing(searches, "GR-9"))
+        self.assertTrue(group_without_hits(searches * 2, "GR-9"))
 
 
 class UntilSettledTest(unittest.TestCase):
@@ -201,17 +199,17 @@ class RequirementPhasesTest(unittest.TestCase):
         self.assertEqual(out.problems, [])
 
     def test_empty_group_is_flagged(self):
-        searches = [site_tools.SearchRecord(query="GR-1", rows=0, complete=False, no_hits=True, text="(no rows)")]
-        out = self.run_requirement(None, searches)
-        self.assertTrue(out.group_empty)
+        searches = [{"query": "GR-1", "rows": 0, "no_hits": True, "complete": False, "text": "(no rows)", "at": 0}]
+        out = self.run_requirement(None, searches * 2)
+        self.assertTrue(out.no_hits)
         self.assertEqual(out.candidates, [])
         self.assertNotIn("search worker returned no result", out.problems)
 
     def test_hits_clear_the_flag(self):
-        searches = [site_tools.SearchRecord(query="GR-1", rows=0, complete=False, no_hits=True, text="(no rows)")]
+        searches = [{"query": "GR-1", "rows": 0, "no_hits": True, "complete": False, "text": "(no rows)", "at": 0}]
         report = research.SearchReport(search_term="GR 1", candidates=[
             research.CandidateSeen(material_number="M-1", link="/m/1")])
-        self.assertFalse(self.run_requirement(report, searches).group_empty)
+        self.assertFalse(self.run_requirement(report, searches * 2).no_hits)
 
 
 class OpenPagesTest(unittest.TestCase):

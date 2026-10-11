@@ -197,7 +197,15 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   footer as "rows". Now the search tool resends a query the result page does not show, drops link-less rows when
   the site says there are no hits, and ends a complete list with "This is the complete result list"; the harness
   ends a search worker 20 s after it has a complete hit list of the group (or a second no-hits search for the group,
-  which sets `group_empty`) and reads the list it had. Local probe: single-hit group 13 s, one search call.
+  which with `group_without_hits` sets `no_hits`) and reads the list it had. Local probe: single-hit group 13 s, one search call.
 - Detail workers: open_pages now tracks unopened links over all its calls and says when none remain; the harness
   ends a worker 20 s after that and the reader reads what was opened. Hits are inspected up to 20, those whose rows
   fit the requirement as known now first; a choice among those does not wait for the others.
+- Hung starts (run_9f6e6e23f55952fc, quality 30.6; the Haiku run lost 210 s the same way): in one browser context the
+  webmail's requests never completed (first a goto that never committed, then a sign-in post), while a fresh context
+  opened it in under 1 s. Playwright page calls (locator.count, evaluate) on a tab whose navigation has not
+  committed wait for ever, so every settle hit its 45 s cap and the attempt waited 210 s on a dead tab. Starts now
+  race a tab in a fresh context after 15 s without a usable page, give up a page that answers no script call for
+  20 s, retry at once in a fresh context with 45/60/90/120 s budgets, and accept a rendered page whose settle never
+  ends. Test runs of 86b4f27: 100 (7:33) and 100 (11:33), all starts in 2.4 to 4.6 s; the second still had three
+  mail gotos mid-research that never committed, now bounded (30 s goto + about 22 s settle) and traced as slow_page.

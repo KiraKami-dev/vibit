@@ -21,7 +21,12 @@ HUNDRED = Decimal(100)
 
 
 class CalcError(ValueError):
-    """The facts are incomplete or contradictory, so a field cannot be computed."""
+    """The facts are incomplete or contradictory, so a field cannot be computed. `position` names the position the
+    problem belongs to, when it is one position's."""
+
+    def __init__(self, message: str = "", position: str | None = None):
+        super().__init__(message)
+        self.position = position
 
 
 def money(value: Decimal) -> Decimal:
@@ -32,6 +37,51 @@ def money(value: Decimal) -> Decimal:
 def position_key(position: str) -> tuple:
     """Natural sort key for position identifiers, so "2" sorts before "10" and "1.2" before "1.10"."""
     return tuple((0, int(part), "") if part.isdigit() else (1, 0, part) for part in re.findall(r"\d+|\D+", position))
+
+
+# ---------------------------------------------------------------- identifiers as pages write them
+
+_ZERO_WIDTH = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad]")
+_ID_PREFIX = re.compile(r"^(?:pos(?:ition)?|nr|no|num(?:ber|mer)?|antwort|answer|frage|question|ziffer|item|"
+                        r"lfd)(?![^\W\d_])\.?\s*|^[#:\-.\s]+")
+_LABEL_WORDS = {"rev", "revision", "version", "ver", "stand", "index", "req", "requirement", "anforderung", "anf",
+                "nr", "no", "pos", "position"}
+
+
+def norm_id(text: str | None) -> str:
+    """
+    One comparable form for a position or Q&A answer number: "Pos. 2", "Position 02", " 2" and "2" are equal;
+    zero-width characters, whitespace, a leading label word and leading zeros of every digit run are dropped
+    ("1.02" -> "1.2"); letters stay ("A-07" -> "a-7").
+    """
+    t = _ZERO_WIDTH.sub("", str(text or "")).strip().casefold()
+    previous = None
+    while previous != t:
+        previous, t = t, _ID_PREFIX.sub("", t, count=1).strip()
+    t = re.sub(r"\s+", "", t)
+    return re.sub(r"\d+", lambda m: str(int(m.group())), t)
+
+
+def norm_code(text: str | None) -> str:
+    """A material number or key, comparable: case, whitespace, zero-width characters and leading zeros of digit
+    runs do not count ("MAT-0042" equals "mat-42"); every letter and separator does."""
+    t = re.sub(r"\s+", "", _ZERO_WIDTH.sub("", str(text or ""))).casefold()
+    return re.sub(r"\d+", lambda m: str(int(m.group())), t)
+
+
+def same_label(a: str | None, b: str | None) -> bool:
+    """
+    Revision or requirement labels as different records write them: "Rev. C", "Revision C" and "C" are equal,
+    "REQ-01" and "Req 1" too; label words (rev, revision, anforderung, ...) and separators do not count, every
+    other letter and number does ("Rev. B" is not "C", "C-1" is not "C").
+    """
+    def tokens(text: str | None) -> list[str]:
+        raw = re.findall(r"[^\W\d_]+|\d+", _ZERO_WIDTH.sub("", str(text or "")).casefold())
+        raw = [str(int(t)) if t.isdigit() else t for t in raw]
+        kept = [t for t in raw if t not in _LABEL_WORDS]
+        return kept or raw
+    ta, tb = tokens(a), tokens(b)
+    return bool(ta) and ta == tb
 
 
 # ---------------------------------------------------------------- dates and timestamps
@@ -90,11 +140,12 @@ class Unit(StrEnum):
 
 
 def parse_unit(text: str) -> Unit:
-    """Map a stated unit (Stück, St, ST, pcs, Satz, Sätze, Set) to a Unit."""
-    t = text.strip().lower().rstrip(".")
-    if t.startswith(("satz", "sätz", "saetz", "set")):
+    """Map a stated unit (Stück, Stücke, St, ST, Stk., pcs, Satz, Sätze, Set, Kit) to a Unit."""
+    t = " ".join(_ZERO_WIDTH.sub("", str(text or "")).split()).casefold().rstrip(".")
+    if t.startswith(("satz", "sätz", "saetz", "set", "kit")):
         return Unit.SET
-    if t in {"st", "stk", "stck", "stück", "stueck", "pc", "pcs", "piece", "pieces"}:
+    if t.startswith(("stück", "stueck", "stuck", "stk", "stck", "piece", "pcs", "teil")) or \
+            t in {"st", "pc", "ea", "each", "unit", "units", "einheit", "einheiten"}:
         return Unit.PIECE
     raise CalcError(f"unknown unit {text!r}")
 
@@ -125,8 +176,8 @@ class Material(BaseModel):
     """The chosen active ERP material with the attributes calc needs."""
     material_number: str
     free_stock: int = Field(default=0, description="Unrestricted free stock in pieces, not blocked stock")
-    stock_lead_time_weeks: int
-    production_lead_time_weeks: int
+    stock_lead_time_weeks: int | None = Field(description="None = unknown (only fails a position that needs it)")
+    production_lead_time_weeks: int | None = Field(description="None = unknown (only fails a position that needs it)")
     pieces_per_carton: int | None = Field(default=None, gt=0)
     allocation_mass: Decimal = Field(default=Decimal(0), description="kg per piece, used for the setup pool")
     surcharge_mass: Decimal = Field(default=Decimal(0), description="kg per piece, used for the metal surcharge")
@@ -315,9 +366,9 @@ def resolve_quantity(tender_quantity: int, position: str, changes: list[Quantity
     Changes and withdrawals dated after the scenario date never apply: a future withdrawal does not remove a change.
     Withdrawals given as bare answer numbers are taken as applicable (the caller has already dated them).
     """
-    gone = {w if isinstance(w, str) else w.withdraws for w in withdrawn
+    gone = {norm_id(w if isinstance(w, str) else w.withdraws) for w in withdrawn
             if isinstance(w, str) or scenario_date is None or _not_later(w.date, scenario_date)}
-    live = [c for c in changes if c.position == position and c.number not in gone
+    live = [c for c in changes if norm_id(c.position) == norm_id(position) and norm_id(c.number) not in gone
             and (scenario_date is None or _not_later(c.date, scenario_date))]
     if not live:
         return tender_quantity
@@ -351,7 +402,7 @@ def apply_amendments(attributes: dict[str, Decimal | str], amendments: list[Amen
     result = dict(attributes)
     latest: dict[str, datetime] = {}
     for a in amendments:
-        if a.revision != revision or a.requirement != requirement:
+        if not same_label(a.revision, revision) or not same_label(a.requirement, requirement):
             continue
         if scenario_date is not None and not _not_later(a.date, scenario_date):
             continue
@@ -532,11 +583,22 @@ def lead_time(pos: PositionInput, pooled_demand: int) -> int:
     material = pos.material
     assert material is not None
     c = pos.commitment
-    if c is not None and c.material_number == material.material_number and pooled_demand <= c.ceiling:
+    if c is not None and norm_code(c.material_number) == norm_code(material.material_number) \
+            and pooled_demand <= c.ceiling:
         return c.lead_time_weeks
     if material.free_stock >= pooled_demand:
-        return material.stock_lead_time_weeks
-    return material.production_lead_time_weeks
+        weeks, which = material.stock_lead_time_weeks, "from-stock"
+    else:
+        weeks, which = material.production_lead_time_weeks, "production"
+    if weeks is None:
+        raise CalcError(f"{pos.position}: {which} lead time of {material.material_number} unknown", pos.position)
+    return weeks
+
+
+def _members(members: list[str], positions: Iterable[str]) -> list[str]:
+    """The bid's own position ids that a member list names, however it writes them ("Pos. 02" for "2")."""
+    wanted = {norm_id(m) for m in members}
+    return [p for p in positions if norm_id(p) in wanted]
 
 
 def calculate(bid: BidInput) -> BidResult:
@@ -565,7 +627,7 @@ def calculate(bid: BidInput) -> BidResult:
     if bid.setup_pool is not None:
         by_pos = {p.position: p for p in bid.positions}
         weights = {m: pieces[m] * by_pos[m].material.allocation_mass  # type: ignore[union-attr]
-                   for m in bid.setup_pool.members if m in by_pos}
+                   for m in _members(bid.setup_pool.members, by_pos)}
         if weights:
             pool = allocate_cents(bid.setup_pool.fee, weights, bid.setup_pool.allocation, bid.setup_pool.tie_order,
                                   bid.setup_pool.rest_base)
@@ -574,8 +636,9 @@ def calculate(bid: BidInput) -> BidResult:
     bonus_total = None
     if bid.project_bonus is not None:
         goods = {}
+        bonus_members = {norm_id(m) for m in bid.project_bonus.members}
         for p in bid.positions:
-            if p.position in bid.project_bonus.members:
+            if norm_id(p.position) in bonus_members:
                 unit = base[p.position][0] + (surcharge[p.position] if bid.project_bonus.include_surcharge else 0)
                 goods[p.position] = pieces[p.position] * unit
         bonus_total = bonus_credit(money(sum(goods.values(), Decimal(0))), bid.project_bonus.bands)
@@ -590,11 +653,11 @@ def calculate(bid: BidInput) -> BidResult:
         f_base = factor if p.discount_scope is not DiscountScope.NONE else Decimal(1)
         f_sur = factor if p.discount_scope is DiscountScope.BASE_AND_SURCHARGE else Decimal(1)
         if n == 0:
-            raise CalcError(f"{k}: zero pieces")
+            raise CalcError(f"{k}: zero pieces", k)
         cartons, carton_cost = 0, Decimal(0)
         if p.packaging is not None:
             if not material.pieces_per_carton:
-                raise CalcError(f"{k}: carton size unknown")
+                raise CalcError(f"{k}: carton size unknown", k)
             cartons = math.ceil(n / material.pieces_per_carton)
             carton_cost = cartons * p.packaging.price_per_carton
         setup = p.setup_fee + pool.get(k, Decimal(0))

@@ -387,17 +387,6 @@ def _hit_notes(text: str, rows: int) -> list[str]:
     return notes
 
 
-@dataclass
-class SearchRecord:
-    """One search the tool ran, kept on the session for the harness (e.g. to end a worker that has its list)."""
-    query: str
-    rows: int
-    complete: bool  # the list ended (no next page, not capped) and the query reached the site
-    no_hits: bool  # no rows, and the site said so in its own words
-    text: str  # the tool's result as the model got it
-    at: float = 0.0
-
-
 def _shows_query(session: SiteSession, query: str) -> bool:
     """Whether the result page shows the query (in its field, the address or the text): a search that a pop-up or a
     re-rendered form swallowed comes back with an empty field and the unfiltered page."""
@@ -455,9 +444,12 @@ async def run_search(session: SiteSession, field_ref: str, query: str, submit_re
     if complete:
         text += (f"\nThis is the complete result list: {len(listing.rows)} "
                  f"{'hit' if len(listing.rows) == 1 else 'hits'}, no further page.")
-    session.__dict__.setdefault("searches", []).append(SearchRecord(
-        query=query, rows=len(listing.rows), complete=complete, no_hits=reached and not listing.rows and no_hits,
-        text=text, at=time.monotonic()))
+    # what each search showed, for the harness: an empty result counts only with the site's own no-hits notice;
+    # `complete` (the list ended, the query reached the site) and `text` let it end a worker that has its list
+    session.__dict__.setdefault("searches", []).append(
+        {"query": query, "rows": len(listing.rows) if reached or any(r.links for r in listing.rows) else 0,
+         "no_hits": reached and not listing.rows and no_hits,
+         "complete": complete, "text": text, "at": time.monotonic()})
     return text
 
 

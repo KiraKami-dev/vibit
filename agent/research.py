@@ -47,9 +47,11 @@ from evidence import (
     SpecResult,
     SpecRevision,
     check_choice,
+    group_without_hits,
     merged_attributes,
     mismatches,
     number_format,
+    parse_currency,
     parse_date,
     parse_int,
     parse_mass_kg,
@@ -732,7 +734,7 @@ def _material_record(seen: MaterialSeen) -> MaterialRecord:
                                       price=parse_number(s.price, fmt)) for s in c.scales]
             conditions.append(calc.PriceCondition(
                 valid_from=parse_date(c.valid_from), valid_to=parse_date(c.valid_to) if c.valid_to.strip() else None,
-                currency=c.currency.strip().upper()[:3] or "EUR", fx_key=c.fx_key.strip() or None,
+                currency=parse_currency(c.currency) or "EUR", fx_key=c.fx_key.strip() or None,
                 price_unit=parse_int(c.price_unit), scales=scales))
         except (ParseError, ValueError) as error:
             problems.append(f"condition {c.valid_from}..{c.valid_to}: {error}")
@@ -882,13 +884,12 @@ def _group_key(text: str) -> str:
     return re.sub(r"[\s\-_./]+", "", text).casefold()
 
 
-def group_search(searches: list, group: str) -> tuple[site_tools.SearchRecord | None, bool]:
-    """From the searches a worker ran: the first complete hit list that shows the group, and whether a search for
-    the group itself came back with the site's own no-hits text."""
+def group_listing(searches: list[dict], group: str) -> dict | None:
+    """From the searches a worker ran (as site_tools records them): the first complete hit list that shows the
+    group."""
     key = _group_key(group)
-    listing = next((s for s in searches if s.complete and s.rows and key in _group_key(s.text)), None)
-    empty = any(s.no_hits and key in _group_key(s.query) for s in searches)
-    return listing, empty
+    return next((s for s in searches if s.get("complete") and s.get("rows") and key in _group_key(s.get("text", ""))),
+                None)
 
 
 async def until_settled(work: Awaitable[R], settled: Callable[[], float | None], grace: float, trace: Trace,
@@ -1142,11 +1143,11 @@ class Erp:
         def settled() -> float | None:
             """When the worker had its answer: a complete hit list of the group, or a second search for the group
             (another field or spelling) that the site also answered with no hits."""
-            listing, _ = group_search(searches, req.catalog_group)
+            listing = group_listing(searches, req.catalog_group)
             if listing:
-                return listing.at
+                return listing["at"]
             key = _group_key(req.catalog_group)
-            empty = [s.at for s in searches if s.no_hits and key in _group_key(s.query)]
+            empty = [s["at"] for s in searches if s.get("no_hits") and key in _group_key(s.get("query", ""))]
             return empty[1] if len(empty) > 1 else None
 
         result, _ = await until_settled(run_worker(
@@ -1155,15 +1156,15 @@ class Erp:
             **_worker_kwargs(notes=False)), settled, SETTLE_SECONDS, self.trace, session.name)
         report = result[0] if result else None
         if report is None:  # stopped (steps, time, settled): read the hit list it had
-            listing, _ = group_search(searches, req.catalog_group)
-            report = await _salvage_search(session, views, req.catalog_group, listing.text if listing else "")
+            listing = group_listing(searches, req.catalog_group)
+            report = await _salvage_search(session, views, req.catalog_group, listing["text"] if listing else "")
         return report
 
     async def requirement(self, req: EffectiveRequirement) -> RequirementResearch:
         out = RequirementResearch(requirement_id=req.requirement_id)
         report = None
         until = self._until(MATERIAL_SECONDS)
-        searches: list[site_tools.SearchRecord] = []
+        searches: list[dict] = []  # what the search worker's site_tools.search calls showed, over both attempts
         for attempt in range(2):  # retry once: the ERP sometimes drops the session mid-search
             if self.left() < MATERIAL_SECONDS + 20:
                 break
@@ -1175,11 +1176,14 @@ class Erp:
                     report = await self._search(session, req, until, searches)
                 finally:
                     await self._close(session)
-            if report is not None or group_search(searches, req.catalog_group)[1]:
+            if report is not None or group_without_hits(searches, req.catalog_group):
                 break  # a result, or the site said the group has no hits (another attempt would see the same)
-        _, empty = group_search(searches, req.catalog_group)
-        if report is None and empty:
-            report = SearchReport(search_term=req.catalog_group, candidates=[])
+        if (report is None or not report.candidates) and group_without_hits(searches, req.catalog_group):
+            out.search_term = report.search_term if report else req.catalog_group
+            out.no_hits = True  # searched, no match (rule 3), not a gap
+            self.trace.event("erp", "group_without_hits", requirement=req.requirement_id,
+                             searches=[{k: v for k, v in x.items() if k != "text"} for x in searches])
+            return out
         if report is None:
             out.problems.append("search worker returned no result")
             return out
@@ -1188,9 +1192,6 @@ class Erp:
                                     bore=_num(c.bore), stroke=_num(c.stroke), pressure=_num(c.pressure),
                                     mounting=c.mounting, certification=c.certification)
                           for c in report.candidates]
-        out.group_empty = empty and not out.candidates
-        if out.group_empty:
-            self.trace.event("erp", "group_empty", requirement=req.requirement_id, group=req.catalog_group)
         # every hit of the model's search is inspected (the rules cap a usable search at 20 hits), those whose rows
         # fit the requirement as known now first; which one fits is the model's choice below, once details are known
         first, rest = inspection_order(req, out.candidates)
@@ -1412,6 +1413,9 @@ async def reselect(requirements: list[EffectiveRequirement], erp: ErpResearch, t
     async def one(req: EffectiveRequirement) -> None:
         research = by_id.get(req.requirement_id)
         if research is None:
+            return
+        if research.no_hits and not research.inspected:  # the group is empty: nothing to choose from
+            chosen[req.requirement_id] = None
             return
         materials = {n: erp.materials[n] for n in research.inspected if n in erp.materials}
         if (req.stroke is not None and research.selected in materials
