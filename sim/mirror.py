@@ -8,13 +8,17 @@ was not recorded gets a plain "not recorded" page and a line in `captured/_missi
 paths still to record.
 
 Each website gets its own port, since the agent keeps a tab on its website's host. From the repo root:
-    python3 sim/mirror.py            # serves until stopped; prints the run to put into CHALLENGE_SCOUTING
+    python3 sim/mirror.py                    # serves until stopped; prints the run for CHALLENGE_SCOUTING
+    python3 sim/mirror.py -- <command ...>   # runs the command against the mirror, then prints the signed bid
+SIM_SESSION_SECONDS makes sessions time out, SIM_FLAKY (0 to 1) answers that share of pages with the recorded
+error page first, SIM_PORT moves the ports, SIM_SEED fixes the order of the bid form's positions.
 """
 import json
 import os
 import random
 import re
 import secrets
+import subprocess
 import sys
 import threading
 import time
@@ -223,13 +227,17 @@ class Site:
         if path == "/logout" and method == "POST":
             self.sessions.pop(cookie, None)
             return Reply(303, location="/login?returnTo=%2F")
-        if rec.consent and not session.consented:
-            if path == "/consent" and method == "POST":
+        if path == "/login":  # a second tab still showing the sign-in form signs in again
+            if method == "POST" and (form.get("username"), form.get("password")) == tuple(self.credentials.values()):
+                return Reply(303, location=back)
+            return self.sign_in_page(back)
+        if rec.consent and path == "/consent":  # also from a tab that loaded the notice before another answered it
+            if method == "POST":
                 session.consented = True
                 return Reply(303, location=back)
-            if path == "/consent":
-                text = re.sub(r'(name="returnTo" value=")[^"]*', lambda m: m.group(1) + back, rec.text(rec.consent))
-                return Reply(200, self.render(text, session))
+            text = re.sub(r'(name="returnTo" value=")[^"]*', lambda m: m.group(1) + back, rec.text(rec.consent))
+            return Reply(200, self.render(text, session))
+        if rec.consent and not session.consented:
             return Reply(303, location="/consent?returnTo=" + quote(here, safe=""))
         if rec.entry and rec.entry not in session.passed:
             if path != rec.entry:
@@ -365,15 +373,51 @@ def handler(site: Site):
     return Handler
 
 
+def mirrored_run(world: World) -> tuple[dict, dict]:
+    """The scouting run with the mirror in place of the websites, and the model settings for a local run.
+
+    The brief is fetched now and not stored: its addresses and logins are swapped for the mirror's."""
+    try:
+        live = json.loads(subprocess.run(["atira", "scout", "--json"], check=True, capture_output=True, text=True).stdout)
+        exports = subprocess.run(["atira", "scout", "--env"], check=True, capture_output=True, text=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return world.run(), {}
+    brief = live.get("brief", "")
+    for real in live.get("access", []):
+        site = world.sites.get(real["siteId"])
+        if site:
+            brief = brief.replace(real["url"], site.origin)
+            for key, value in real["credentials"].items():
+                brief = brief.replace(value, site.credentials[key])
+    models = dict(re.findall(r"^export ((?!CHALLENGE_)\w+)='?([^'\n]*)'?$", exports, re.M))
+    extra = {k: live[k] for k in ("answer_schema", "scenario_id", "challenge_id") if k in live}
+    return world.run(brief, extra), models
+
+
 def main() -> None:
+    """`mirror.py` serves until stopped; `mirror.py -- command ...` runs the command against the mirror."""
     world = World(os.environ.get("SIM_SEED", ""))
     world.serve()
-    print(json.dumps(world.run(), indent=1), flush=True)
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        pass
+    task, models = mirrored_run(world)
+    if "--" not in sys.argv:
+        print(json.dumps(task, indent=1), flush=True)
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            return
+    command = sys.argv[sys.argv.index("--") + 1:]
+    env = {k: v for k, v in os.environ.items() if k not in ("CHALLENGE_RUN_TOKEN", "CDP_URL", "CDP_URLS")}
+    env.update(models)
+    env["CHALLENGE_SCOUTING"] = json.dumps(task)
+    code = subprocess.run(command, env=env).returncode
+    missing = CAPTURED / "_missing.log"
+    print(f"\nmirror: {len(world.tans)} TAN(s) handed out, {len(world.signed)} bid(s) signed", flush=True)
+    for bid in world.signed:
+        print(json.dumps(bid, ensure_ascii=False, indent=1))
+    if missing.exists():
+        print(f"mirror: addresses asked for but not recorded are listed in {missing}")
+    sys.exit(code)
 
 
 if __name__ == "__main__":
