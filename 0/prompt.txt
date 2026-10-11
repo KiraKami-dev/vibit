@@ -936,3 +936,17 @@ do fast brother, what are you doing
 ---
 
 go, do both
+
+---
+
+Do not run 5. These two are more than enough. They have done enough damage so I want you to see why the input tokens are so big. Why are there so many input tokens? The team, first, they have 147k tokens together across all cases. You are using 8,000-9,000 tokens per turn so it's a lot of input tokens. First work on input tokens going forward. It's taking too much time. Look at the entire logs and let me find where things are getting false. We have already gone through this. Just look at it again.
+
+---
+
+<task-notification>
+<task-id>bedkvz6as</task-id>
+<tool-use-id>toolu_01XLSyZPrvc2CnH9scL1pjDM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gaurav-Downloads-ehl-final-error404ai-ehl-finals/591a1b26-dcf8-4b46-b17d-b3eb0358462d/tasks/bedkvz6as.output</output-file>
+<status>failed</status>
+<summary>Background command "Start five confirmation test runs of the latest commit, two at a time, and wait for all scores" failed with exit code 144</summary>
+</task-notification>
