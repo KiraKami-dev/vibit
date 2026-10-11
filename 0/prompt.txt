@@ -1,0 +1,1 @@
+Can you (only make changes in a subtree or so) analyze how we can drive down cost and time? With the decision model cleft provided? Somehow else? Also check the CLAUDE.md
