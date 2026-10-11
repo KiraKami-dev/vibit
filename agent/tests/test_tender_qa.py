@@ -385,5 +385,53 @@ class ReservesPerRevision(unittest.TestCase):
         self.assertEqual(o._reserves("R-9"), {"K-1": D("3"), "K-2": D("6")})
 
 
+class QaWorkerStops(unittest.TestCase):
+    def setUp(self):
+        self.saved = rt.run_worker, rt.read_qa, rt.QA_SETTLE_SECONDS, rt.PAGE_WAITS, rt._view_of
+        rt.QA_SETTLE_SECONDS, rt.PAGE_WAITS = 0.6, 1
+
+    def tearDown(self):
+        rt.run_worker, rt.read_qa, rt.QA_SETTLE_SECONDS, rt.PAGE_WAITS, rt._view_of = self.saved
+
+    def test_the_worker_is_ended_once_the_list_is_collected(self):
+        session = FakeSession([qa_page(1, "101", next_page=2), qa_page(2, "102")])
+        steps = []
+
+        async def view_of(s, url):
+            return None
+
+        rt._view_of = view_of
+
+        async def worker(session, goal, output_type, *, tools=(), **kwargs):
+            await tools[0](SimpleNamespace(deps=SimpleNamespace(session=session)), "e9")
+            while True:  # browses on instead of returning
+                steps.append(1)
+                await asyncio.sleep(0.1)
+
+        async def read_qa(pages, reference):
+            return rt.QaRecords()
+
+        rt.run_worker, rt.read_qa = worker, read_qa
+        started = time.monotonic()
+        qa, complete = run(rt.read_qa_site(session, "T-1"))
+        self.assertTrue(complete)
+        self.assertLess(time.monotonic() - started, 3.0)
+        self.assertTrue(session.trace.kinds("settled_stop"))
+
+    def test_a_worker_without_a_list_control_still_returns_on_its_own(self):
+        session = FakeSession([qa_page(1, "101")])
+
+        async def worker(session, goal, output_type, **kwargs):
+            return rt.Summary(summary="single page"), {}
+
+        async def read_qa(pages, reference):
+            self.assertEqual(pages, [session.seen])
+            return rt.QaRecords()
+
+        rt.run_worker, rt.read_qa = worker, read_qa
+        _, complete = run(rt.read_qa_site(session, "T-1"))
+        self.assertTrue(complete)
+
+
 if __name__ == "__main__":
     unittest.main()

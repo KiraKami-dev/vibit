@@ -33,12 +33,14 @@ from calc import (
     resolve_quantity,
 )
 from evidence import ParseError, parse_int, parse_number
+from research import until_settled
 from worker import run_worker, steps_for
 
 MAX_PAGES = 40
 MAX_RETURN = 30000  # characters of a collected list shown back to the model
 POSITIONS_READ_SECONDS = 240.0  # the thinking positions read in all (it answers in 20 to 90 s when healthy)
 POSITIONS_FALLBACK_SECONDS = 120.0  # the thinking-off read after that
+QA_SETTLE_SECONDS = 10.0  # the Q&A worker's time to return after collect_pages reached the list's end
 READER_TIMEOUT = 180.0  # a thinking reader writes long answers; the navigation timeout is too short
 
 # ---------------------------------------------------------------- records
@@ -196,6 +198,7 @@ def _content(normal: str) -> set[str]:
 class Collected:
     pages: list[str] = field(default_factory=list)
     finished: bool = False  # collect_pages ran to the list's end
+    finished_at: float | None = None  # time.monotonic() then
     mark: int | None = None  # len(session.seen) when collect_pages ended: later views are the worker's own
 
     def add(self, view: str) -> bool:
@@ -352,6 +355,7 @@ def paging_tool(collected: Collected, thorough: bool = False):
                 pages += followed
             break
         collected.finished = True
+        collected.finished_at = time.monotonic()
         collected.mark = len(session.seen)
         session.trace.event(session.name, "collect_pages", control=name, pages=len(collected.pages),
                             followed=followed)
@@ -359,7 +363,10 @@ def paging_tool(collected: Collected, thorough: bool = False):
         text = collected.text
         if len(text) > MAX_RETURN:
             text = text[:MAX_RETURN] + f"\n[... {len(text) - MAX_RETURN} more characters, kept for reading]"
-        return f"Collected {pages} page(s) of this list; they are kept for reading. The whole list:\n\n{text}"
+        if not thorough:
+            return f"Collected {pages} page(s) of this list; they are kept for reading. The whole list:\n\n{text}"
+        return (f"Collected {pages} page(s) of this list, to its end; they are kept for reading. Return your "
+                f"summary now: do not open the list's pages or answers again. The whole list:\n\n{text}")
 
     return collect_pages
 
@@ -643,8 +650,14 @@ async def read_qa_site(session: SiteSession, reference: str, *, deadline: float 
     """
     collected = Collected()
     goal = _qa_goal(reference) + (f"\n{hint}" if hint else "")
-    output, _ = await run_worker(session, goal, Summary, deadline=deadline, max_steps=steps_for(14, deadline),
-                                 thinking=False, grounded=False, tools=(paging_tool(collected, thorough=True),))
+    # Once collect_pages reached the list's end the worker has done its job: it is told to return, and ended
+    # QA_SETTLE_SECONDS later if it browses on (it used to page the list again until its step limit: 25 to 28
+    # requests where 7 to 11 do). Collapsed answers are opened in every kept view before that.
+    result, settled = await until_settled(
+        run_worker(session, goal, Summary, deadline=deadline, max_steps=steps_for(14, deadline), thinking=False,
+                   grounded=False, tools=(paging_tool(collected, thorough=True),)),
+        lambda: collected.finished_at, QA_SETTLE_SECONDS, session.trace, session.name)
+    output = result[0] if result else None
     complete = collected.finished or (output is not None and not collected.pages)
     if not complete:
         session.trace.event(session.name, "qa_incomplete", collected=len(collected.pages),
