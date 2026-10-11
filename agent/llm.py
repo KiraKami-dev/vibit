@@ -42,12 +42,15 @@ to OpenRouter's `reasoning`: GLM 5.3 Flash cannot turn reasoning off (400 "Reaso
 import asyncio
 import contextvars
 import dataclasses
+import functools
 import os
+import sys
 import time
 from contextlib import AsyncExitStack
 
 import httpx2
 from openai import AsyncOpenAI
+from pydantic_ai.agent.abstract import AbstractAgent
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, ThinkingPart
 from pydantic_ai.models import Model, ModelRequestParameters
@@ -117,6 +120,68 @@ def hedge_seconds() -> float:
 def _backoff(attempt: int) -> float:
     """Seconds to wait before retry `attempt`: 0.5 s doubling, capped at 8 s (as the OpenAI client does)."""
     return min(0.5 * 2 ** (attempt - 1), 8.0)
+
+
+# Who made each model call. Agent.run (patched below) sets LABEL to the agent function that called it: the nearest
+# frame in this package outside llm.py and worker.py, or for run_worker the worker kind it set. pydantic-ai makes the
+# request in tasks of its own, where the caller's frames are gone but the context variable carries over. USAGE sums
+# each label's calls, so the run summary shows where calls, tokens and seconds went (the platform's call list has
+# no caller).
+LABEL: contextvars.ContextVar[str] = contextvars.ContextVar("llm_label", default="")
+USAGE: dict[str, list[float]] = {}  # label -> [calls, input, cached, output, seconds, thinking-on calls]
+_PACKAGE = os.path.dirname(os.path.abspath(__file__))
+_NOT_CALLERS = ("llm.py", "worker.py")
+
+
+def caller() -> str:
+    """The agent function the current Agent.run serves (see LABEL)."""
+    frame = sys._getframe(1)
+    while frame is not None:
+        path = frame.f_code.co_filename
+        name = os.path.basename(path)
+        if name == "worker.py" and LABEL.get():
+            return LABEL.get()
+        if path.endswith(".py") and os.path.dirname(path) == _PACKAGE and name not in _NOT_CALLERS:
+            return f"{name[:-3]}.{frame.f_code.co_name}"
+        frame = frame.f_back
+    return LABEL.get() or "other"
+
+
+def _labelled(run):
+    @functools.wraps(run)
+    async def labelled_run(self, *args, **kwargs):
+        token = LABEL.set(caller())
+        try:
+            return await run(self, *args, **kwargs)
+        finally:
+            LABEL.reset(token)
+    return labelled_run
+
+
+if not getattr(AbstractAgent.run, "_labelled", False):
+    AbstractAgent.run = _labelled(AbstractAgent.run)  # type: ignore[method-assign]
+    AbstractAgent.run._labelled = True  # type: ignore[attr-defined]
+
+
+def record(label: str, response: ModelResponse, seconds: float, thinking: bool) -> None:
+    usage = response.usage
+    row = USAGE.setdefault(label, [0, 0, 0, 0, 0.0, 0])
+    for i, value in enumerate((1, usage.input_tokens, usage.cache_read_tokens, usage.output_tokens, seconds,
+                               int(thinking))):
+        row[i] += value
+
+
+def usage_table() -> str:
+    """USAGE as lines, most input first, with each label's share of the simulated cost (Qwen's input, cached and
+    output prices per token as the platform listed them; only the shares matter)."""
+    def cost(row):
+        return (row[1] - row[2]) * 0.15 + row[2] * 0.016 + row[3] * 0.47
+    total = sum(cost(row) for row in USAGE.values()) or 1.0
+    lines = ["calls  think  input  cached  output  seconds  cost%  caller"]
+    for label, row in sorted(USAGE.items(), key=lambda item: -cost(item[1])):
+        lines.append(f"{row[0]:5.0f} {row[5]:6.0f} {row[1]:6.0f} {row[2]:7.0f} {row[3]:7.0f} {row[4]:8.1f} "
+                     f"{100 * cost(row) / total:5.1f}  {label}")
+    return "\n".join(lines)
 
 
 class Stalled(Exception):
@@ -206,6 +271,13 @@ class _WatchdogModel(OpenAIChatModel):
 
     async def request(self, messages: list[ModelMessage], model_settings: ModelSettings | None,
                       model_request_parameters: ModelRequestParameters) -> ModelResponse:
+        label, started = LABEL.get() or "other", time.monotonic()
+        response = await self._request(messages, model_settings, model_request_parameters)
+        record(label, response, time.monotonic() - started, settings_thinking(model_settings))
+        return response
+
+    async def _request(self, messages: list[ModelMessage], model_settings: ModelSettings | None,
+                       model_request_parameters: ModelRequestParameters) -> ModelResponse:
         if not watchdog():
             return await super().request(messages, model_settings, model_request_parameters)
         settings = ModelSettings(**(model_settings or {}))

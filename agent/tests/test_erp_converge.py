@@ -152,7 +152,7 @@ def record(number: str) -> MaterialRecord:
 class RequirementPhasesTest(unittest.TestCase):
     """Erp.requirement with its browser parts replaced: the search result and the material workers are fakes."""
 
-    def run_requirement(self, report, searches=(), slow=()):
+    def run_requirement(self, report, searches=(), slow=(), pick=lambda materials: sorted(materials)[0]):
         erp = research.Erp({"siteId": "erp", "url": "http://localhost/"}, None,
                            SimpleNamespace(event=lambda *a, **k: None), deadline=None)
         erp.left = lambda: 600.0
@@ -176,10 +176,15 @@ class RequirementPhasesTest(unittest.TestCase):
         async def material(number, link=""):
             await asyncio.sleep(5 if number in slow else 0.01)
             return record(number)
-        erp.material = lambda number, link="": asyncio.ensure_future(material(number, link))
+        self.started, self.erp = [], erp
+
+        def start(number, link=""):
+            self.started.append(number)
+            return asyncio.ensure_future(material(number, link))
+        erp.material = start
 
         async def choose(req_, research_, materials, trace=None):
-            return (sorted(materials)[0] if materials else None), []
+            return (pick(materials) if materials else None), []
         original = research.choose_material
         research.choose_material = choose
         try:
@@ -197,6 +202,43 @@ class RequirementPhasesTest(unittest.TestCase):
         self.assertEqual(out.inspected, ["M-1", "M-2"])
         self.assertEqual(out.selected, "M-1")
         self.assertEqual(out.problems, [])
+
+    def test_contradicted_rows_wait_until_needed(self):
+        report = research.SearchReport(search_term="GR-1", candidates=[
+            research.CandidateSeen(material_number="M-2", link="/m/2", bore="63"),
+            research.CandidateSeen(material_number="M-1", link="/m/1", bore="50")])
+        out = self.run_requirement(report)
+        self.assertEqual(out.selected, "M-1")
+        self.assertEqual(self.started, ["M-1"])
+        self.assertEqual(self.erp.deferred, {"A-1": ["M-2"]})
+        self.assertEqual(out.inspected, ["M-1", "M-2"])  # still listed: undecided, never "no material"
+
+    def test_deferred_hits_are_inspected_when_they_fit_the_final_requirement(self):
+        report = research.SearchReport(search_term="GR-1", candidates=[
+            research.CandidateSeen(material_number="M-2", link="/m/2", bore="63"),
+            research.CandidateSeen(material_number="M-1", link="/m/1", bore="50")])
+        self.run_requirement(report)
+        amended = req().model_copy(update={"bore": D("63")})
+        found = asyncio.run(self.erp.inspect_deferred(amended, 3))
+        self.assertEqual(sorted(found), ["M-2"])
+        self.assertEqual(self.erp.deferred, {})
+
+    def test_deferred_hits_that_still_do_not_fit_stay_unread(self):
+        report = research.SearchReport(search_term="GR-1", candidates=[
+            research.CandidateSeen(material_number="M-2", link="/m/2", bore="63"),
+            research.CandidateSeen(material_number="M-1", link="/m/1", bore="50")])
+        self.run_requirement(report)
+        self.assertEqual(asyncio.run(self.erp.inspect_deferred(req(), 3)), {})
+        self.assertEqual(self.started, ["M-1"])
+
+    def test_without_a_fitting_choice_every_hit_is_inspected(self):
+        report = research.SearchReport(search_term="GR-1", candidates=[
+            research.CandidateSeen(material_number="M-2", link="/m/2", bore="63"),
+            research.CandidateSeen(material_number="M-1", link="/m/1", bore="50")])
+        out = self.run_requirement(report, pick=lambda materials: None)
+        self.assertEqual(sorted(self.started), ["M-1", "M-2"])
+        self.assertEqual(self.erp.deferred, {})
+        self.assertIsNone(out.selected)
 
     def test_empty_group_is_flagged(self):
         searches = [{"query": "GR-1", "rows": 0, "no_hits": True, "complete": False, "text": "(no rows)", "at": 0}]

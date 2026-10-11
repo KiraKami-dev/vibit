@@ -32,8 +32,8 @@ import llm
 from board import Board, Source
 from briefing import Briefing
 from browser_tools import SiteSession
-from evidence import (EffectiveRequirement, Requirement, effective_requirement, merged_attributes, mismatches,
-                      parse_date, to_position_input, wording_differences)
+from evidence import (EffectiveRequirement, Requirement, check_choice, effective_requirement, merged_attributes,
+                      mismatches, parse_date, to_position_input, wording_differences)
 from gaps import Calculation, GapFiller
 from research import Erp, ErpResearch, SpecResult, research_spec, reselect, same_revision
 from tracing import Trace
@@ -51,21 +51,29 @@ except ImportError:  # pragma: no cover
 # research ends this long before the end: the form needs up to ~185 s and signing ~30 s (173 s with a bad TAN)
 SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "390"))
 FORM_SECONDS = float(os.environ.get("AGENT_FORM_SECONDS", "300"))  # the bid form and signing need this much
-MAIL_TABS = int(os.environ.get("MAIL_TABS", "4"))
+# Mail tabs in the webmail's one browser: about nine record kinds took three rounds over four tabs, and the mail is the
+# last research to finish; six tabs take them in two rounds (tabs are free, the work and its cost stay the same).
+MAIL_TABS = int(os.environ.get("MAIL_TABS", "6"))
 SPEC_STEPS_FAST = int(os.environ.get("SPEC_STEPS_FAST", "25"))  # navigation steps of the fast spec attempt
 SPEC_STEPS_THINKING = int(os.environ.get("SPEC_STEPS_THINKING", "35"))  # and of the careful one, run alongside
 SELECT_SECONDS = 75.0  # the final material choice (a model call per requirement, in parallel)
+DEFERRED_SECONDS = 90.0  # reading deferred ERP hits before the final choice (rare: an amendment moved the match)
 KIND_OPTIONS = set(inspect.signature(research_mail.research_kind).parameters) if research_mail else set()
 KIND_MIN_SECONDS = 120.0  # a mail record kind's search budget: at least this
 KIND_MAX_SECONDS = 240.0  # and at most this, from the mail time left per kind
 MAIL_RETRY_SECONDS = 90.0  # mail time a kind's second try needs
 MAIL_TAB_STAGGER = 4.0  # seconds between the mail tabs' sign-ins
 MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "540"))  # from the orchestrator's start
-FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys before planning from the brief alone
+# How long the mail planner waits for the tender's keys before planning from the brief alone. The keys arrive with
+# the Q&A (about 120 s in) while the wait was 45 s, so every sandbox run planned from the brief alone after waiting:
+# the wait only held the mail searches, the last research to finish, back by 45 s. Positions already on the
+# board are still passed along.
+FINDINGS_WAIT = float(os.environ.get("AGENT_FINDINGS_WAIT", "0"))
 PLAN_PATIENT_TIMEOUT = 90.0  # per call when the quick mail plan failed: a loaded model answers in up to ~90 s
 # doubtful mail facts go back to their search in the gap pass's first round (side by side with the gap retries)
 # instead of in a round of their own before calc, which held the first answer back by up to 2 minutes
 GAP_REWORK = os.environ.get("AGENT_GAP_REWORK", "1") == "1"
+VERIFY_ALONGSIDE = os.environ.get("AGENT_VERIFY_ALONGSIDE", "1") == "1"  # see run()
 REWORK_SECONDS = 150.0
 TENDER_WATCH_SECONDS = float(os.environ.get("AGENT_TENDER_WATCH_SECONDS", "240"))  # no positions by then: retry
 RECHECK_SECONDS = float(os.environ.get("AGENT_RECHECK_SECONDS", "150"))  # the Q&A re-check before a no_bid
@@ -646,7 +654,8 @@ class Orchestrator:
             # The tabs sign in while the planner reads the brief and waits for the tender's keys.
             # Staggered: several tabs signing in to one website at the same moment hung in local runs.
             starts = [asyncio.create_task(self._mail_tab(site, i)) for i in range(MAIL_TABS)]
-            positions = await board.wait("position", timeout=min(FINDINGS_WAIT, max(1.0, self.left())))
+            positions = (await board.wait("position", timeout=min(FINDINGS_WAIT, max(1.0, self.left())))
+                         if FINDINGS_WAIT > 0 else board.get("position"))
             findings = "\n".join(f"- position {k}: " + ", ".join(
                 f"{f} {v}" for f, v in fact.value.items() if f.endswith("_key") or f == "condition_group")
                 for k, fact in positions.items())
@@ -891,6 +900,7 @@ class Orchestrator:
         if self.erp is None or not self.requirements:
             return
         effective = [self.effective(req) for req in self.requirements.values()]
+        await self._inspect_deferred(effective)
         own = {r.requirement_id: r.selected for r in self.erp.requirements}
         # One choice per requirement, side by side: one hung model call must not cost the others; choices not made
         # in time are the ERP workers' own.
@@ -909,6 +919,36 @@ class Orchestrator:
             self.board.problem("select", f"no new choice in time for {late}; the ERP workers' choices are used")
         self.chosen = {**own, **chosen}
         self.trace.event("select", "done", chosen=self.chosen)
+
+    async def _inspect_deferred(self, effective: list[EffectiveRequirement]) -> None:
+        """
+        Hits the ERP stage left uninspected (their rows contradicted the requirement as it stood then) are read
+        now where the final requirement needs them: when the choice made then no longer holds (or none was made),
+        those that fit now, or all of them if none fits; when the stroke is still pending, those that fit now.
+        """
+        erp = self._erp
+        if erp is None or self.erp is None or not getattr(erp, "deferred", None):
+            return
+        by_id = {r.requirement_id: r for r in self.erp.requirements}
+        jobs = []
+        for req in effective:
+            research = by_id.get(req.requirement_id)
+            if research is None or not erp.deferred.get(req.requirement_id):
+                continue
+            materials = {n: self.erp.materials[n] for n in research.inspected if n in self.erp.materials}
+            holds = (research.selected is not None
+                     and check_choice(req, research, materials, research.selected) is None)
+            if holds and req.stroke is not None:
+                continue
+            jobs.append(erp.inspect_deferred(req, max(1.0, min(DEFERRED_SECONDS, self.form_left() - 60)),
+                                             every=not holds and req.stroke is not None))
+        if not jobs:
+            return
+        for found in await asyncio.gather(*jobs, return_exceptions=True):
+            if isinstance(found, dict):
+                self.erp.materials.update(found)
+            elif isinstance(found, BaseException):
+                self.board.problem("select", f"deferred hits: {type(found).__name__}: {str(found)[:160]}")
 
     def _unknown_clauses(self, p, clause, pools, bonuses) -> None:
         """A position whose Q&A names a key the mails did not resolve: calc would report a zero for that part,
@@ -1208,8 +1248,21 @@ class Orchestrator:
         omitted; with none complete it is still a bid with reference, decision and discount."""
         await self.research()
         # The deadline guard after research: each step runs only in the time the bid form leaves it.
-        if self.form_left() > 60:
+        # The verifier runs beside the rest: its doubts alone never change the answer (they only add a doubted mail
+        # kind to a gap round that has a real gap and a spare tab), and awaiting its one long call held the answer
+        # back 18 to 47 s in every measured run. The gap pass waits for it only when a round with real gaps runs.
+        self.verifying = (asyncio.create_task(self._bounded(self.verify(), "verify"))
+                          if self.form_left() > 60 and VERIFY_ALONGSIDE else None)
+        if self.verifying is None and self.form_left() > 60:
             await self._bounded(self.verify(), "verify")
+        try:
+            return await self._answer()
+        finally:
+            if self.verifying is not None and not self.verifying.done():
+                self.verifying.cancel()
+                await asyncio.gather(self.verifying, return_exceptions=True)
+
+    async def _answer(self) -> tuple[dict | None, calc.BidResult | None]:
         await self._bounded(self.select_materials(), "select")
         # The second pass: what the first answer lacks is retried while research time is left (gaps.py).
         best = await GapFiller(self).run(self.calculate(), self.calculate)

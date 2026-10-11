@@ -245,6 +245,45 @@ class Scheduling(unittest.TestCase):
         self.assertEqual(calls, ["A-1"] * gaps.GAP_TRIES)
         self.assertEqual(o.trace.kinds("gap_open")[0]["gaps"], ["erp/A-1"])
 
+    def test_a_round_waits_for_the_verifier_running_beside(self):
+        o = runnable(GAP_TAIL + GAP_MIN_ROUND + 60)
+        filler = GapFiller(o)
+        order = []
+
+        async def verify():
+            await asyncio.sleep(0.05)
+            order.append("verified")
+
+        async def erp_requirement(rid, reason):
+            order.append(rid)
+
+        async def reselect(rids):
+            pass
+
+        async def scenario():
+            o.verifying = asyncio.create_task(verify())
+            filler.erp_requirement, filler.reselect = erp_requirement, reselect
+            await filler.run(calc_for(o)(), calc_for(o))
+
+        asyncio.run(scenario())
+        self.assertEqual(order[0], "verified")
+
+    def test_a_complete_answer_does_not_wait_for_the_verifier(self):
+        o = state([position("1", "A-1")], [requirement("A-1")],
+                  [RequirementResearch(requirement_id="A-1", inspected=["M-1"], selected="M-1")],
+                  {"M-1": complete_record("M-1")})
+        o.research_deadline = time.monotonic() + GAP_TAIL + GAP_MIN_ROUND + 60
+        o._erp = SimpleNamespace(materials={})
+
+        async def scenario():
+            o.verifying = asyncio.create_task(asyncio.sleep(30))
+            started = time.monotonic()
+            await GapFiller(o).run(calc_for(o)(), calc_for(o))
+            o.verifying.cancel()
+            return time.monotonic() - started
+
+        self.assertLess(asyncio.run(scenario()), 1.0)
+
     def test_a_failing_pass_keeps_the_first_answer(self):
         o = runnable(GAP_TAIL + GAP_MIN_ROUND + 60)
         filler = GapFiller(o)
