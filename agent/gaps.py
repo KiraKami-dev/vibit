@@ -255,7 +255,7 @@ class GapFiller:
             if kept:
                 best = self.best = new
             gaps = after
-        still = [g.ident for g in gaps if g.area != "doubt"]
+        still = [g.ident for g in gaps if g.area != "doubt" and not g.reason.startswith(DOUBT)]
         if still:
             self.trace("gap_open", gaps=still, rounds=self.round)
         return best
