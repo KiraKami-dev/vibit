@@ -4410,3 +4410,54 @@ If this event is something the user would act on now, send a PushNotification. R
 <event>03:48 run_2755f4d8738cddd4 1af7d11 quality=100 7.6min $0.148 signed</event>
 If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a5fed577ffefa0386</task-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a5fed577ffefa0386.output</output-file>
+<status>completed</status>
+<summary>Agent "Add Anthropic backend option" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>GLM 5.3 Flash through OpenRouter (pinned to Fireworks) scored 5 in all four sandbox runs. Every run sent `no_bid` on a bid scenario, so only the tender reference scored. Main's Qwen runs reach 100 on the same scenario, so the model is the cause, not the agent.
+
+**Proxy facts (run-contract.md)**
+- OpenRouter is a built-in provider: "`openrouter` | `https://openrouter.ai/api` | `$LLM_PROXY_URL/openrouter/v1`".
+- Runs get no `OPENROUTER_BASE_URL`, so the code builds the URL from `LLM_PROXY_URL`.
+- The key is sent as `Authorization: Bearer`. I checked it through the platform proxy with the real key: 200, served by Fireworks.
+- On cost: "An upstream-reported USD cost takes precedence. OpenRouter reports one for every call (send `"usage": {"include": true}` with older clients)". We send it.
+
+**What I built (on my branch, not merged or pushed)**
+- `0fdfafb`: `LLM_BACKEND=openrouter`, with `LLM_MODEL` defaulting to `z-ai/glm-5.3-flash`. It reuses the Qwen client path, so deadlines, the stream watchdog, retries and the `[model]` log all apply.
+  - `LLM_PROVIDER` pins the serving provider: default `fireworks` with no fallbacks, and `any` lets OpenRouter choose.
+  - Without `OPENROUTER_API_KEY` the run falls back to Qwen.
+- **Thinking on:** `reasoning: {"effort": LLM_EFFORT}`, default medium.
+- **Thinking off:** GLM 5.3 Flash refuses to turn reasoning off ("Reasoning is mandatory for this endpoint and cannot be disabled"). So off sends `{"effort": "low", "exclude": true}`, which measured 0 reasoning tokens on short answers.
+- `a1db13f`: answers are capped at `LLM_MAX_TOKENS` (16000) and no temperature is sent (model default). This targets the 5-minute hangs described below.
+- `agent/.env.example` and `agent/README.md` list the new variables. All 316 unit tests pass, including the new `tests/test_llm_openrouter.py`, which checks the request shape against a fake server.
+
+**Local smoke test (direct to OpenRouter):** both modes returned the typed answer, served by Fireworks, in 1.3 s (thinking off) and 1.4 s (thinking on), each costing $0.0000375. OpenRouter reported `is_byok: false`, so the Fireworks key set up on openrouter.ai was not used and the calls ran on OpenRouter's own Fireworks access.
+
+**Sandbox runs** (all four recorded in the main repo's `experiments/runs.jsonl`, not committed):
+
+| Run | Commit | Quality | Time | Cost | p50 / p95 latency | Problems |
+| --- | --- | --- | --- | --- | --- | --- |
+| `run_bcc9a7a32d2da160` | 0fdfafb | 5 | 11:16 | $0.128 | 1.6 s / 5:01 | 15 calls hung 5 min |
+| `run_111fb6e406222472` | 0fdfafb | 5 | 13:00 | $0.108 | 1.6 s / 7.3 s | 7 calls hung 5 min; the materials step finished only at 706 s |
+| `run_fe95a4d0905342b9` | a1db13f, watchdog on | 5 | 10:06 | $0.140 | 1.6 s / 6.6 s | 42 × 429 rate limited |
+| `run_0adaa2a208c0230d` | a1db13f, watchdog on | 5 | 8:01 | $0.150 | 1.4 s / 6.5 s | 73 × 429 rate limited |
+
+Main's Qwen runs, for comparison: 6–9 min, $0.12–0.14, quality 100, p50 about 3.5 s.
+
+**What failed and why**
+- **No-bid decisions (the model):** in every run the per-end reserves for A-2 and A-4 stayed "pending" and material selection left A-2 (and in some runs A-1 or A-3) without a material. The agent therefore declared no_bid, which is worth 0 of the 75 decision points. In one run the end-reserve mail search hit its step budget. The decision itself is the agent's rules working as designed: they turn missing material choices into no_bid.
+- **Hangs (the first two runs):** identical requests stalled until the proxy cut them at 5 minutes, with no usage reported, and repeated on each retry. With the stream watchdog on, the reruns had only 2–3 stalls, each cut within 20–60 s. I could not reproduce a hang locally, even with tools and large prompts.
+- **429s (the reruns):** OpenRouter's shared Fireworks capacity rate-limited 42 and 73 calls, which pydantic-ai retried. Getting the Fireworks key itself used (BYOK) might avoid this.
+- **Not the model:** the webmail sign-in timed out ("still loading") several times in run 3, a website problem. The two 401s at the end of runs 1 and 2 came after the bid was signed, when the run token closes.
+
+**Cost:** Fireworks through OpenRouter charges $0.15 per million input tokens, $0.50 per million output tokens and $0.03 per million cached input tokens. Measured: $0.11–0.15 per run (650k–810k input with 90k–200k cached, 24k–52k output), about the same as Qwen. Prompt caching works but hit only 12–25 % of input.
+
+GLM 5.3 Flash is not usable as the agent's model right now, and I see no further backend change that would fix the decision quality. Nothing else is running; no keys or secrets need setting.</result>
+<usage><subagent_tokens>340484</subagent_tokens><tool_uses>170</tool_uses><duration_ms>2202901</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a5fed577ffefa0386</worktreePath><worktreeBranch>worktree-agent-a5fed577ffefa0386</worktreeBranch></worktree>
+</task-notification>
