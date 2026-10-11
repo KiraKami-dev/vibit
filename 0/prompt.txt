@@ -494,3 +494,11 @@ also do all the edits only in this branch btw
 <status>completed</status>
 <summary>Background command "Start a sandbox test run of the latest commit from the clean export (retrying if the queue is full) and wait for its score" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+so try a test run with the latest changes added in
+
+---
+
+do fast bro
