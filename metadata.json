@@ -2,7 +2,7 @@
   "cli_version": "0.11.4",
   "checkpoint_id": "01M4M5XEG7TTTMQF2MWM886ZPD",
   "strategy": "manual-commit",
-  "checkpoints_count": 3,
+  "checkpoints_count": 5,
   "files_touched": [
     "agent/research.py"
   ],
@@ -13,13 +13,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 908,
-    "cache_creation_tokens": 1045450,
-    "cache_read_tokens": 87754212,
-    "output_tokens": 492990,
-    "api_call_count": 392
+    "input_tokens": 1054,
+    "cache_creation_tokens": 1325604,
+    "cache_read_tokens": 102874805,
+    "output_tokens": 626448,
+    "api_call_count": 461
   }
 }
