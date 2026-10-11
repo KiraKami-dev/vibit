@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01DxaSuA7gwg4LdQ2DeNDMTS",
+  "agent_id": "a8b7ef45f5802af58",
+  "subagent_type": "general-purpose",
+  "task_description": "Speed up tender, spec and ERP research",
+  "token_usage": {
+    "input_tokens": 396,
+    "cache_creation_tokens": 747312,
+    "cache_read_tokens": 50245512,
+    "output_tokens": 87051,
+    "api_call_count": 198
+  },
+  "started_at": "2026-10-11T08:25:44.409463+02:00",
+  "completed_at": "2026-10-11T08:58:32.287855+02:00"
+}
