@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M4MK5MWKD2RG8BKGJK38Q4DD",
+  "strategy": "manual-commit",
+  "branch": "monitoring",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "monitor/.vercelignore",
+    "monitor/README.md",
+    "monitor/api/_pipeline.js",
+    "monitor/api/_pipeline.test.js",
+    "monitor/api/pipeline.js",
+    "monitor/dev-server.js",
+    "monitor/index.html",
+    "monitor/pipeline.js",
+    "monitor/pipeline.test.js",
+    "monitor/vercel.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 184,
+    "cache_creation_tokens": 277878,
+    "cache_read_tokens": 34903818,
+    "output_tokens": 166021,
+    "api_call_count": 83
+  }
+}

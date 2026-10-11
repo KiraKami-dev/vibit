@@ -1,0 +1,47 @@
+Why are the arrows going down? Even if it's not necessary. Make it look good. Make no mistakes.
+
+---
+
+[Image #2] our pipeline should look like this i feel
+and we also have after every runs quite some logs stored of learned and other things which i want to show in this dashboard because we would be showing this dashboard as part of our final pitch to make them visualize the whole process and decision making we did how the architecture looks and what happens 
+also have a demo button which is on the top right and clickable which has a 3d interactive website to inside it to under our architecture and how we are doing every thing
+
+---
+
+[Image #2] our pipeline should look like this i feel
+and we also have after every runs quite some logs stored of learned and other things which i want to show in this dashboard because we would be showing this dashboard as part of our final pitch to make them visualize the whole process and decision making we did how the architecture looks and what happens 
+also have a demo button which is on the top right and clickable which has a 3d interactive website to inside it to under our architecture and how we are doing every thing
+
+---
+
+<task-notification>
+<task-id>bqteeodv2</task-id>
+<tool-use-id>toolu_01R8q56wLqjdgwvg18rNG21L</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-akshatkhair-Documents-Projects-error404ai-ehl-finals--claude-worktrees-monitoring/4c8faa7b-6a45-4748-833c-14d30ff91578/tasks/bqteeodv2.output</output-file>
+<status>failed</status>
+<summary>Background command "Start the local monitor preview on port 3123" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+i don't see anything related to learned .md files and recuring loops of learning and also can you have the pipeline made based on what actually is happening in main branch in a really good ui way ?
+
+---
+
+i am not quite happy with the pipeline make the pipeline like atira platform
+
+---
+
+also can you have the pipeline being show for the finished ones as well ?
+
+---
+
+where is the visually appeling pipeline ?
+
+---
+
+can you make a viusally appeling pipline like n8n thing ?
+
+---
+
+i love the pipeline but below that section we have too much text which goes on and on

@@ -1,0 +1,254 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M4MK5MWKD2RG8BKGJK38Q4DD",
+  "session_id": "4c8faa7b-6a45-4748-833c-14d30ff91578",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-11T04:22:40.948115Z",
+  "branch": "monitoring",
+  "checkpoints_count": 6,
+  "save_step_count": 8,
+  "files_touched": [
+    "monitor/.vercelignore",
+    "monitor/README.md",
+    "monitor/api/_pipeline.js",
+    "monitor/api/_pipeline.test.js",
+    "monitor/api/pipeline.js",
+    "monitor/dev-server.js",
+    "monitor/index.html",
+    "monitor/pipeline.js",
+    "monitor/pipeline.test.js",
+    "monitor/vercel.json"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "bd844381001b",
+  "checkpoint_transcript_start": 444,
+  "transcript_lines_at_start": 444,
+  "compact_transcript_start": 71,
+  "token_usage": {
+    "input_tokens": 184,
+    "cache_creation_tokens": 277878,
+    "cache_read_tokens": 34903818,
+    "output_tokens": 166021,
+    "api_call_count": 83
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01A7jhpEs9zVdgp1v5WF4qTV",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "dataviz"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bd844381001b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 603,
+        "end": 604,
+        "entry_ids": [
+          "74f1d04b-bee6-4792-ad8b-7daed3612e16"
+        ],
+        "tool_use_id": "toolu_01A7jhpEs9zVdgp1v5WF4qTV"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01A7jhpEs9zVdgp1v5WF4qTV"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: dataviz",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-11T04:22:40.13176Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 7214,
+    "human_modified": 864,
+    "human_removed": 0,
+    "total_committed": 7717,
+    "total_lines_changed": 8078,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 892,
+      "agent_lines_removed": 8
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 2456,
+      "user_lines_removed": 60,
+      "agent_lines_added": 900,
+      "agent_lines_removed": 8,
+      "user_added_per_file": {
+        "monitor/.vercelignore": 2,
+        "monitor/build-story.js": 127,
+        "monitor/build-story.test.js": 35,
+        "monitor/demo.html": 83,
+        "monitor/demo.js": 371,
+        "monitor/dev-server.js": 5,
+        "monitor/index.html": 125,
+        "monitor/pipeline.js": 70,
+        "monitor/pipeline.test.js": 11,
+        "monitor/story.json": 1615,
+        "monitor/vercel.json": 12
+      },
+      "user_removed_per_file": {
+        "monitor/dev-server.js": 3,
+        "monitor/index.html": 44,
+        "monitor/pipeline.js": 12,
+        "monitor/vercel.json": 1
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 1880,
+      "user_lines_removed": 24,
+      "agent_lines_added": 1466,
+      "agent_lines_removed": 10,
+      "user_added_per_file": {
+        "monitor/build-story.js": 130,
+        "monitor/build-story.test.js": 35,
+        "monitor/demo.html": 6,
+        "monitor/demo.js": 13,
+        "monitor/pipeline.js": 70,
+        "monitor/pipeline.test.js": 11,
+        "monitor/story.json": 1615
+      },
+      "user_removed_per_file": {
+        "monitor/demo.html": 6,
+        "monitor/demo.js": 6,
+        "monitor/pipeline.js": 12
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 715,
+      "user_lines_removed": 101,
+      "agent_lines_added": 3383,
+      "agent_lines_removed": 11,
+      "user_added_per_file": {
+        "monitor/build-story.js": 48,
+        "monitor/build-story.test.js": 7,
+        "monitor/pipeline.js": 50,
+        "monitor/pipeline.test.js": 15,
+        "monitor/story.json": 595
+      },
+      "user_removed_per_file": {
+        "monitor/build-story.js": 15,
+        "monitor/build-story.test.js": 4,
+        "monitor/pipeline.js": 33,
+        "monitor/pipeline.test.js": 4,
+        "monitor/story.json": 45
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 684,
+      "user_lines_removed": 149,
+      "agent_lines_added": 3345,
+      "agent_lines_removed": 12,
+      "user_added_per_file": {
+        "monitor/build-story.js": 48,
+        "monitor/build-story.test.js": 7,
+        "monitor/pipeline.js": 24,
+        "monitor/pipeline.test.js": 10,
+        "monitor/story.json": 595
+      },
+      "user_removed_per_file": {
+        "monitor/build-story.js": 15,
+        "monitor/build-story.test.js": 4,
+        "monitor/pipeline.js": 75,
+        "monitor/pipeline.test.js": 10,
+        "monitor/story.json": 45
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 776,
+      "user_lines_removed": 162,
+      "agent_lines_added": 3348,
+      "agent_lines_removed": 12,
+      "user_added_per_file": {
+        "monitor/build-story.js": 48,
+        "monitor/build-story.test.js": 7,
+        "monitor/index.html": 55,
+        "monitor/pipeline.js": 48,
+        "monitor/pipeline.test.js": 23,
+        "monitor/story.json": 595
+      },
+      "user_removed_per_file": {
+        "monitor/build-story.js": 15,
+        "monitor/build-story.test.js": 4,
+        "monitor/index.html": 18,
+        "monitor/pipeline.js": 70,
+        "monitor/pipeline.test.js": 10,
+        "monitor/story.json": 45
+      }
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 739,
+      "user_lines_removed": 144,
+      "agent_lines_added": 3427,
+      "agent_lines_removed": 12,
+      "user_added_per_file": {
+        "monitor/build-story.js": 48,
+        "monitor/build-story.test.js": 7,
+        "monitor/pipeline.js": 61,
+        "monitor/pipeline.test.js": 28,
+        "monitor/story.json": 595
+      },
+      "user_removed_per_file": {
+        "monitor/build-story.js": 15,
+        "monitor/build-story.test.js": 4,
+        "monitor/pipeline.js": 70,
+        "monitor/pipeline.test.js": 10,
+        "monitor/story.json": 45
+      }
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 739,
+      "user_lines_removed": 144,
+      "agent_lines_added": 3453,
+      "agent_lines_removed": 19,
+      "user_added_per_file": {
+        "monitor/build-story.js": 48,
+        "monitor/build-story.test.js": 7,
+        "monitor/pipeline.js": 61,
+        "monitor/pipeline.test.js": 28,
+        "monitor/story.json": 595
+      },
+      "user_removed_per_file": {
+        "monitor/build-story.js": 15,
+        "monitor/build-story.test.js": 4,
+        "monitor/pipeline.js": 70,
+        "monitor/pipeline.test.js": 10,
+        "monitor/story.json": 45
+      }
+    }
+  ]
+}
