@@ -26,7 +26,7 @@ import re
 import time
 from decimal import Decimal
 from typing import Awaitable, Callable, TypeVar
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from playwright.async_api import BrowserContext, Page
 from pydantic import BaseModel, Field
@@ -229,19 +229,32 @@ async def open_pages(ctx: RunContext[Deps], paths: list[str]) -> str:
         return not text.startswith(("not opened", "did not open", "already opened"))
 
     head, tail = _common_edges([t for t in texts if was_opened(t)])
+    # a worker on one record (its number set by the caller) counts only the links about that record as left to
+    # open: menus, search help and other records are not views of it
+    record = session.__dict__.get("record_key", "")
     out, more = [], {}
+    shown: list[str] = []  # the opened views as shown, for _drop_repeated_nav
     for i, (name, text) in enumerate(zip(names, texts)):
         if was_opened(text):
             lines = text.splitlines()
             body = "\n".join(lines[head:len(lines) - tail]) if len(texts) > 1 else text  # not the site chrome
             for link in _LINK.findall(body):
                 target = urljoin(session.page.url, link)
-                if urlparse(target).netloc == urlparse(session.site["url"]).netloc and target not in opened:
+                if urlparse(target).netloc == urlparse(session.site["url"]).netloc and target not in opened \
+                        and (not record or record in unquote(target)):
                     more.setdefault(link, None)
         if i and was_opened(text) and (head or tail):
             lines = text.splitlines()
             text = "\n".join(lines[head:len(lines) - tail]) + "\n[page frame as in the first page]"
+        if COMPACT_VIEWS and was_opened(text):  # tab bars and menus once per call; their links stay listed
+            text = _drop_repeated_nav([*shown, text])[-1]
+            shown.append(text)
         out.append(f"=== {name}\n{text}")
+    if COMPACT_VIEWS:  # the record's banner and system lines once per call, when the views are different pages
+        at = [i for i, text in enumerate(texts) if was_opened(text)]
+        compact = _drop_common_lines([out[i] for i in at], [urlparse(names[i]).path for i in at])
+        for i, text in zip(at, compact):
+            out[i] = text
     # links seen on any view this tool opened and not opened since, over all calls of this worker
     pending: dict[str, str] = session.__dict__.setdefault("pending_links", {})
     for link in more:
@@ -259,6 +272,10 @@ async def open_pages(ctx: RunContext[Deps], paths: list[str]) -> str:
         session.__dict__.setdefault("exhausted_at", time.monotonic())
         out.append("No unopened links remain: everything the views you opened link to has been opened. Return "
                    "your result now.")
+        if record and DETAIL_STOP:
+            # the worker's only step left is its answer, which nothing reads: the harness ends it now (its tab is
+            # read by the reader), so this result waits instead of starting that model call
+            await asyncio.sleep(DETAIL_HOLD)
     return "\n\n".join(out)
 
 
@@ -766,17 +783,67 @@ def _keep_views(session: SiteSession, views: dict[str, str] | None = None) -> di
     return views
 
 
-def _corpus(views: dict[str, str]) -> str:
-    """The kept views as one text, site chrome shown once."""
-    texts = list(views.values())
+# The ERP reader and detail workers get compact views (ERP_COMPACT_VIEWS=0: as before): gate pages and repeated
+# navigation lines left out. Local check: the reader's text shrank by about a third with every value kept.
+COMPACT_VIEWS = os.environ.get("ERP_COMPACT_VIEWS", "1") == "1"
+# A line made only of links and buttons (a tab bar, a transaction menu) or separators: page navigation, no values.
+_NAV_LINE = re.compile(r'^(?:\s*(?:\[(?:link|button) "[^"\]]*"(?: -> \S+)?\]|[-|·•]))+\s*$')
+
+
+def _drop_repeated_nav(texts: list[str]) -> list[str]:
+    """The texts with every navigation line that an earlier text already showed left out (tab bars and menus repeat
+    on every view of a record); lines with any value stay wherever they are."""
+    seen: set[str] = set()
+    out = []
+    for text in texts:
+        lines = []
+        for line in text.splitlines():
+            if _NAV_LINE.match(line):
+                if line in seen:
+                    continue
+                seen.add(line)
+            lines.append(line)
+        out.append("\n".join(lines))
+    return out
+
+
+def _drop_common_lines(texts: list[str], paths: list[str]) -> list[str]:
+    """
+    Lines that every text shows (the record's banner, the system line under it) kept in the first text only, when
+    the texts come from at least two different pages (paths): such a line is the page frame of the record, not a
+    value of one view. Texts from one page only (several condition records of one transaction) stay whole, so a
+    record's own lines are never taken away from it.
+    """
+    if len(texts) < 2 or len(set(paths)) < 2:
+        return texts
+    common = set.intersection(*(set(t.splitlines()) for t in texts)) - {""}
+    if not common:
+        return texts
+    return [texts[0]] + ["\n".join(line for line in t.splitlines() if line not in common) for t in texts[1:]]
+
+
+def _corpus(views: dict[str, str], gates: set[str] | frozenset[str] = frozenset(), home: str = "") -> str:
+    """The kept views as one text for the reader: site chrome and repeated navigation shown once, without the views
+    of sign-in and entry gates (paths in `gates`) or the bare start page (`home`, without a query), and without a
+    view whose text repeats an earlier one (a record's first tab opened under two addresses)."""
+    def skipped(url: str) -> bool:
+        parsed = urlparse(url)
+        return parsed.path in gates or (bool(home) and parsed.path == home and not parsed.query)
+    kept = ({url: text for url, text in views.items() if not skipped(url)} or views) if COMPACT_VIEWS else views
+    texts = list(kept.values())
     head, tail = _common_edges(texts)
-    parts = []
-    for i, (url, text) in enumerate(views.items()):
+    bodies, urls, seen = [], [], set()
+    for i, (url, text) in enumerate(kept.items()):
         lines = text.splitlines()
-        if i and (head or tail):
-            lines = lines[head:len(lines) - tail]
-        parts.append(f"=== {url}\n" + "\n".join(lines))
-    return "\n\n".join(parts)
+        inner = "\n".join(lines[head:len(lines) - tail])  # without the site chrome, to spot a repeated view
+        if COMPACT_VIEWS and inner in seen:
+            continue
+        seen.add(inner)
+        bodies.append("\n".join(lines[head:len(lines) - tail] if i and (head or tail) else lines))
+        urls.append(url)
+    if COMPACT_VIEWS:
+        bodies = _drop_common_lines(_drop_repeated_nav(bodies), [urlparse(u).path for u in urls])
+    return "\n\n".join(f"=== {url}\n{body}" for url, body in zip(urls, bodies))
 
 
 async def _read_material(number: str, corpus: str, trace: Trace, name: str) -> MaterialSeen:
@@ -790,10 +857,20 @@ MAX_INSPECT = int(os.environ.get("ERP_MAX_INSPECT", "20"))  # the rules cap a us
 # up front cost a third of the ERP detail and reader calls, and records that finished after the requirement's
 # choice were not used anyway (collect() keeps only the records finished by then).
 DEFER_REST = os.environ.get("ERP_DEFER_REST", "1") == "1"
+# The first catalogue-group search a model makes (its page, field and button, the group as the query) is repeated by
+# a helper for the other groups, whose hit lists then need one reader call instead of a search worker each; any
+# group the repeat does not list completely gets its own worker. AGENT_ERP_BATCH=0: a worker per group.
+ERP_BATCH = os.environ.get("AGENT_ERP_BATCH", "1") == "1"
+RECIPE_WAIT = 40.0  # how long the other groups wait for the first group's search
 
 # A worker that has what it came for (a complete hit list; every view of a record opened) but keeps going is ended
 # this many seconds later; what it has is then read from its pages.
 SETTLE_SECONDS = float(os.environ.get("ERP_SETTLE_SECONDS", "20"))
+# A detail worker that has opened every view of its record is ended right away instead of answering (the answer
+# lists facts it missed, which nothing reads; the reader reads the views and a second pass follows from the record).
+# ERP_DETAIL_STOP=0: it answers, ended SETTLE_SECONDS later at the latest.
+DETAIL_STOP = os.environ.get("ERP_DETAIL_STOP", "1") == "1"
+DETAIL_HOLD = 5.0  # seconds open_pages waits for that end before it returns anyway
 
 # Time the ERP stage keeps before the research deadline, so that what it started finishes and counts: a material's
 # reader call after its worker stops (READ_SECONDS), the model's choice over the records (CHOOSE_SECONDS); a search
@@ -885,6 +962,24 @@ def inspection_order(req: EffectiveRequirement, candidates: list[Candidate]) -> 
     return first, list(other)[:MAX_INSPECT - len(first)]
 
 
+def search_recipe(searches: list[dict], group: str) -> dict | None:
+    """The search that listed the group completely with the group itself as the query: where and with which
+    controls it was made, for repeating it with another group; None without one."""
+    key = _group_key(group)
+    for entry in searches:
+        if (entry.get("complete") and entry.get("rows") and _group_key(entry.get("query", "")) == key
+                and entry.get("form_url") and entry.get("field_label")):
+            return {k: entry.get(k, "") for k in ("form_url", "field_label", "submit_label")}
+    return None
+
+
+def _labelled_ref(view: str, label: str, kinds: tuple[str, ...]) -> tuple[str | None, str]:
+    """The ref of the control of one of `kinds` whose label is exactly `label`; (None, why) otherwise."""
+    found = [ref for ref, kind, text in re.findall(r'\[(e\d+) (\w+) "((?:[^"\\]|\\.)*)"', view)
+             if kind in kinds and text == label]
+    return (found[0], "") if len(found) == 1 else (None, f"{len(found)} controls labelled {label!r}")
+
+
 def _group_key(text: str) -> str:
     return re.sub(r"[\s\-_./]+", "", text).casefold()
 
@@ -949,6 +1044,10 @@ class Erp:
         self.idle_limit = float(os.environ.get("ERP_IDLE_SECONDS", "120"))  # the ERP drops idle sessions
         self.partial: dict[str, RequirementResearch] = {}  # requirement -> research whose search has finished
         self.deferred: dict[str, list[str]] = {}  # requirement -> hits not inspected (see inspect_deferred)
+        # the first search a model made for a catalogue group, repeated for the other groups (ERP_BATCH)
+        self.recipe: dict | None = None
+        self.recipe_owner: str | None = None
+        self.recipe_ready = asyncio.Event()
         self.started_at: float | None = None
 
     def left(self) -> float:
@@ -1145,6 +1244,59 @@ class Erp:
         stops without a result leaves its hit list to the salvage reader."""
         views = _keep_views(session)
         session.__dict__["searches"] = searches  # the search tool records every search here
+        if ERP_BATCH:
+            if self.recipe_owner is None:
+                self.recipe_owner = req.requirement_id
+            elif not self.recipe_ready.is_set():
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(self.recipe_ready.wait(), RECIPE_WAIT)
+            if self.recipe is not None and self.recipe_owner != req.requirement_id:
+                report = await self._repeat_search(session, req, searches)
+                if report is not None:
+                    return report
+        try:
+            return await self._search_worker(session, req, until, searches, views)
+        finally:
+            if self.recipe_owner == req.requirement_id and not self.recipe_ready.is_set():
+                self.recipe = search_recipe(searches, req.catalog_group)
+                self.trace.event("erp", "search_recipe", recipe={k: v for k, v in (self.recipe or {}).items()
+                                                                 if k != "text"})
+                self.recipe_ready.set()
+
+    async def _repeat_search(self, session: SiteSession, req: EffectiveRequirement,
+                             searches: list) -> SearchReport | None:
+        """
+        The search a model made for the first catalogue group, repeated for this group: the same search page,
+        field and button, with this group as the query. Its complete hit list goes to the reader; anything else
+        (no hits, an incomplete list, a changed page) leaves the group to a search worker of its own.
+        """
+        recipe = self.recipe or {}
+        try:
+            if not await self.open(session, recipe["form_url"]):
+                return None
+            view = await session.look()
+            field, _ = _labelled_ref(view, recipe["field_label"], ("textbox", "searchbox", "combobox"))
+            submit, _ = _labelled_ref(view, recipe["submit_label"], ("button",)) if recipe["submit_label"] else (
+                None, "")
+            if field is None or (recipe["submit_label"] and submit is None):
+                self.trace.event(session.name, "search_repeat", group=req.catalog_group, result="controls missing")
+                return None
+            await site_tools.run_search(session, field, req.catalog_group, submit)
+        except Exception as error:
+            self.trace.event(session.name, "search_repeat", group=req.catalog_group,
+                             result=f"{type(error).__name__}: {str(error)[:160]}")
+            return None
+        listing = group_listing(searches, req.catalog_group)
+        if listing is None:
+            self.trace.event(session.name, "search_repeat", group=req.catalog_group, result="no complete hit list")
+            return None
+        report = await _salvage_search(session, {}, req.catalog_group, listing["text"])
+        self.trace.event(session.name, "search_repeat", group=req.catalog_group,
+                         result=f"{len(report.candidates)} hits" if report else "reader found none")
+        return report
+
+    async def _search_worker(self, session: SiteSession, req: EffectiveRequirement, until: float | None,
+                             searches: list, views: dict[str, str]) -> SearchReport | None:
 
         def settled() -> float | None:
             """When the worker had its answer: a complete hit list of the group, or a second search for the group
@@ -1303,6 +1455,9 @@ class Erp:
                 name = session.name
                 try:
                     _keep_views(session, views)
+                    if not attempt:  # open_pages: only this record's links are left to open; a second pass (facts
+                        # missing, e.g. views whose addresses do not name the record) counts every link again
+                        session.__dict__["record_key"] = number
                     if link and session.view:  # the record view it opened on, kept for the reader too
                         views[session.page.url] = _strip_refs(session.view)
                     until = self._until(READ_SECONDS)
@@ -1311,11 +1466,12 @@ class Erp:
                         run_worker(session, DETAIL_GOAL.format(material=number, focus=focus), Coverage,
                                    deadline=until, max_steps=steps(until, 6, 18), tools=(open_pages,),
                                    **_worker_kwargs(notes=False, grounded=False)),
-                        lambda: session.__dict__.get("exhausted_at"), SETTLE_SECONDS, self.trace, session.name)
+                        lambda: session.__dict__.get("exhausted_at"),
+                        0.0 if DETAIL_STOP else SETTLE_SECONDS, self.trace, session.name)
                     coverage = result[0] if result else None
                 finally:
                     await self._close(session)
-            corpus = _corpus(views)
+            corpus = _corpus(views, self.gate_paths, self.home)
             self.trace.event(name, "material_read", views=len(views), chars=len(corpus),
                              not_found=coverage.not_found if coverage else "worker stopped")
             try:

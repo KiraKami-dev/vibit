@@ -67,6 +67,21 @@ class SearchToolTest(unittest.TestCase):
         self.assertIs(research.group_listing(searches, "GR-1"), searches[0])
         self.assertFalse(group_without_hits(searches, "GR-1"))
 
+    def test_a_complete_group_search_gives_a_recipe_for_the_other_groups(self):
+        _, searches = search(False, "GR-1")
+        recipe = research.search_recipe(searches, "GR-1")
+        self.assertEqual(recipe["field_label"], "Term")
+        self.assertEqual(recipe["submit_label"], "")  # sent with Enter
+        self.assertIsNone(research.search_recipe(searches, "GR-2"))  # another group's query is no recipe
+        _, empty = search(False, "GR-9")
+        self.assertIsNone(research.search_recipe(empty, "GR-9"))  # no hits: no recipe
+
+    def test_labelled_ref_needs_one_exact_control(self):
+        view = '[e1 textbox "Term" value=""] [e2 button "Suchen"] [e3 button "Suchen"]'
+        self.assertEqual(research._labelled_ref(view, "Term", ("textbox",))[0], "e1")
+        self.assertIsNone(research._labelled_ref(view, "Suchen", ("button",))[0])
+        self.assertIsNone(research._labelled_ref(view, "Ter", ("textbox",))[0])
+
     def test_swallowed_query_is_sent_again(self):
         out, searches = search(True, "GR-2")
         self.assertIn("2 rows", out)
@@ -254,6 +269,41 @@ class RequirementPhasesTest(unittest.TestCase):
         self.assertFalse(self.run_requirement(report, searches * 2).no_hits)
 
 
+class CompactViewsTest(unittest.TestCase):
+    """The reader's corpus: gates and duplicate views out, page frame and navigation once, every value kept."""
+
+    BANNER = "## M-1 · Cylinder 50/100; group G-1"
+    VIEWS = {
+        "http://erp.example/rec?m=M-1": f"Top\n{BANNER}\n[link \"Tab A\" -> /rec?tab=a]\nBasic 1\nFoot",
+        "http://erp.example/rec?m=M-1&tab=a": f"Top\n{BANNER}\n[link \"Tab A\" -> /rec?tab=a]\nBasic 1\nFoot",
+        "http://erp.example/login?returnTo=x": "Top\nSign in\nReceipt 12345\nFoot",
+        "http://erp.example/stock?m=M-1": f"Top\n{BANNER}\n[link \"Tab A\" -> /rec?tab=a]\nFree 14\nFoot",
+        "http://erp.example/prices?m=M-1&p=1": f"Top\n{BANNER}\nRecord 1\nCurrency EUR\nPrice 9.50\nFoot",
+        "http://erp.example/prices?m=M-1&p=2": f"Top\n{BANNER}\nRecord 2\nCurrency EUR\nPrice 8.75\nFoot",
+    }
+
+    def test_values_stay_and_repeats_go(self):
+        corpus = research._corpus(self.VIEWS, {"/login"}, "/")
+        for value in ("Basic 1", "Free 14", "Price 9.50", "Price 8.75"):
+            self.assertIn(value, corpus)
+        self.assertNotIn("Receipt 12345", corpus)
+        self.assertEqual(corpus.count(self.BANNER), 1)
+        self.assertEqual(corpus.count('[link "Tab A"'), 1)
+        self.assertNotIn("tab=a\n", corpus.split("===")[-1])
+        self.assertEqual(corpus.count("Basic 1"), 1)  # the same tab under two addresses: once
+
+    def test_lines_of_one_page_are_never_taken_from_its_records(self):
+        views = {k: v for k, v in self.VIEWS.items() if "/prices" in k}
+        self.assertEqual(research._corpus(views).count("Currency EUR"), 2)
+
+    def test_off_switch_keeps_every_view(self):
+        research.COMPACT_VIEWS = False
+        try:
+            self.assertIn("Receipt 12345", research._corpus(self.VIEWS, {"/login"}, "/"))
+        finally:
+            research.COMPACT_VIEWS = True
+
+
 class OpenPagesTest(unittest.TestCase):
     """open_pages on a local site: a record with two tabs, one of which links to a sub-view."""
 
@@ -303,6 +353,48 @@ class OpenPagesTest(unittest.TestCase):
         self.assertIsNone(early)
         self.assertIn("No unopened links remain", second)
         self.assertIsNotNone(late)
+
+    def test_a_record_worker_counts_only_the_record_links(self):
+        pages = {**self.PAGES, "/rec/b": "<h1>Tab B</h1><p>Value 2</p><a href='/menu'>Main menu</a>"}
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                data = f"<!doctype html><html><body>{pages.get(self.path, 'missing')}</body></html>".encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_port}"
+
+        async def go():
+            async with _Browser() as b:
+                session = SiteSession({"siteId": "erp", "url": base + "/", "credentials": {}}, b.context,
+                                      SimpleNamespace(event=lambda *a, **k: None))
+                page = await b.context.new_page()
+                session._watch(page)
+                await page.goto(base + "/rec")
+                await session.look()
+                session.__dict__["record_key"] = "rec"
+                ctx = SimpleNamespace(deps=Deps(session=session))
+                await research.open_pages(ctx, ["/rec/a", "/rec/b"])
+                return await research.open_pages(ctx, ["/rec/a/sub"]), session.__dict__.get("exhausted_at")
+        hold = research.DETAIL_HOLD
+        research.DETAIL_HOLD = 0.01
+        try:
+            text, exhausted = asyncio.run(go())
+        finally:
+            research.DETAIL_HOLD = hold
+            server.shutdown()
+        self.assertIn("No unopened links remain", text)  # /menu is no view of the record
+        self.assertIsNotNone(exhausted)
 
 
 if __name__ == "__main__":
