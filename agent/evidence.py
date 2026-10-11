@@ -255,12 +255,14 @@ def revision_id(text: str | None) -> str:
 
 
 def same_revision(a: str | None, b: str | None) -> bool:
-    """Two labels of one revision: the same identifier, or a bare identifier that is a whole word of the other
-    label. Whole words only: "A" is not inside "Revision B (aktuell)", "I" is not "III"."""
-    ta, tb = _revision_tokens(a), _revision_tokens(b)
-    if not ta or not tb:
-        return False
-    return ta[0] == tb[0] or (len(ta) == 1 and ta[0] in tb) or (len(tb) == 1 and tb[0] in ta)
+    """
+    Two labels of one revision. A label carries the identifier and often more (a label word, a date, a status):
+    without the label words, the tokens of one label must all be among the other's. Whole tokens, never the first
+    one alone or a substring: "Fassung 3" is not "Fassung 4", "R 3" is not "R 4", a document number shared by
+    two revisions does not make them one, and a one-letter identifier is not in every word with that letter.
+    """
+    ta, tb = set(_revision_tokens(a)), set(_revision_tokens(b))
+    return bool(ta and tb) and (ta <= tb or tb <= ta)
 
 
 # ---------------------------------------------------------------- specification

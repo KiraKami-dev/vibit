@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, RunContext
 
 import calc
+import evidence
 import llm
 import site_tools
 from briefing import Briefing
@@ -114,18 +115,10 @@ async def _grounded_read(output_type: type[T], instructions: str, prompt: str, s
             trace.event(name, "read", what=what, seconds=round(time.monotonic() - started, 1), refusals=refusals)
 
 
-_LABEL_TOKEN = re.compile(r"\w+(?:[-./]\w+)*")
-
-
 def same_revision(a: str, b: str) -> bool:
-    """
-    Whether two revision labels name the same revision. A label may carry words around the identifier (a label
-    word, a date, a status), so one label's tokens must all be among the other's; whole tokens, never substrings:
-    a one-letter revision is not "in" every word that has that letter, and an identifier is not the start of a
-    longer one.
-    """
-    ta, tb = (set(_LABEL_TOKEN.findall(str(x or "").casefold())) for x in (a, b))
-    return bool(ta and tb) and (ta <= tb or tb <= ta)
+    """Whether two revision labels name the same revision (evidence.same_revision: whole tokens, label words
+    such as "Revision" or "Rev." aside)."""
+    return evidence.same_revision(a, b)
 
 
 def _worker_kwargs(**kwargs) -> dict:
