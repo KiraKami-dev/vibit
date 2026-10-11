@@ -73,14 +73,26 @@ def same_label(a: str | None, b: str | None) -> bool:
     """
     Revision or requirement labels as different records write them: "Rev. C", "Revision C" and "C" are equal,
     "REQ-01" and "Req 1" too; label words (rev, revision, anforderung, ...) and separators do not count, every
-    other letter and number does ("Rev. B" is not "C", "C-1" is not "C").
+    other letter and number does ("Rev. B" is not "C", "C-1" is not "C"). A document number around the revision word
+    and a date in brackets do not count ("DOC-12 Revision C (26.9.)" is "C").
     """
     ta, tb = _label_tokens(a), _label_tokens(b)
     return bool(ta) and ta == tb
 
 
+# The word right after a revision word ("DOC-12 Revision C", "Rev. C-1 of DOC-12"): the revision label itself.
+_REVISION_LABEL = re.compile(r"(?<![^\W\d_])(?:rev|revision|version|ver)(?![^\W\d_])[.:#\s-]*([^\s,;()\[\]]+)")
+
+
 def _label_tokens(text: str | None) -> list[str]:
-    raw = re.findall(r"[^\W\d_]+|\d+", _ZERO_WIDTH.sub("", str(text or "")).casefold())
+    text = _ZERO_WIDTH.sub("", str(text or "")).casefold()
+    # A document number or a date around the revision does not count: "DOC-12 Revision C (26.9.)" is "C".
+    label = _REVISION_LABEL.search(text)
+    if label:
+        text = label.group(1)
+    else:
+        text = re.sub(r"\([^)]*\)", " ", text).strip() or text
+    raw = re.findall(r"[^\W\d_]+|\d+", text)
     raw = [str(int(t)) if t.isdigit() else t for t in raw]
     kept = [t for t in raw if t not in _LABEL_WORDS]
     return kept or raw

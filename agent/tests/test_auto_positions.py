@@ -84,5 +84,80 @@ class AutoPositions(unittest.TestCase):
         self.assertIn("Position 01.02", page)
 
 
+class _Trace:
+    def __init__(self):
+        self.events = []
+
+    def event(self, worker, kind, quiet=False, **data):
+        self.events.append((kind, data))
+
+
+class _Page:
+    """A form page without a browser: look() shows `view`."""
+
+    def __init__(self, view: str):
+        self.view, self.name, self.trace, self.restarts = view, "bid", _Trace(), 0
+        self.lock = asyncio.Lock()
+
+    async def look(self, *args, **kwargs):
+        return self.view
+
+    async def settle(self, *args, **kwargs):
+        return None
+
+
+def refused_calls(view: str, calls: int):
+    desk = PositionDesk(ENTRIES, deadline=time.monotonic() + 600)
+    page = _Page(view)
+    ctx = SimpleNamespace(deps=SimpleNamespace(session=page))
+    fields = {"Material": "material_number", "Menge": "quantity"}
+
+    async def go():
+        out = []
+        for _ in range(calls):
+            try:
+                out.append(await desk.configure_position(ctx, "01.02", fields=fields, next_button="Weiter"))
+            except submit.UnexpectedModelBehavior as error:
+                out.append(error)
+        return out
+
+    return asyncio.run(go()), page
+
+
+class Refusals(unittest.TestCase):
+    OVERVIEW = "# Angebot\nSchritt 3 von 8: Konditionen\n[e4 button \"Weiter\"]\n"
+
+    def test_a_page_without_positions_says_so_and_points_to_the_list(self):
+        texts, _ = refused_calls(self.OVERVIEW, 1)
+        self.assertIn("shows none of the bid's positions", texts[0])
+        self.assertIn("position list or overview", texts[0])
+
+    def test_the_refusal_names_the_positions_the_page_shows(self):
+        text = submit.not_on_page("01.02", ["01.03"], "01.02, 01.03")
+        self.assertIn("the page shows position(s) 01.03", text)
+
+    def test_three_refusals_in_a_row_send_the_model_away_and_six_end_the_worker(self):
+        texts, page = refused_calls(self.OVERVIEW, 7)
+        self.assertNotIn("in a row", texts[1])
+        self.assertIn("do not call configure_position again on this page", texts[2])
+        self.assertIsInstance(texts[5], submit.UnexpectedModelBehavior)
+        self.assertIsInstance(texts[6], str)  # the count starts again for the next pass
+        self.assertEqual([d["reason"] for k, d in page.trace.events if k == "configure_refused"][5], "stop")
+
+
+class ReviewCheck(unittest.TestCase):
+    def test_a_position_missing_on_the_review_is_named(self):
+        review = "# Prüfen\n| 01.01 | M-1 | 5 |\n| 01.02 | M-2 | 3 |\nSumme 74,25\n"
+        self.assertEqual(submit.missing_on_review(review, ENTRIES), ["01.03"])
+        self.assertEqual(submit.missing_on_review(review + "| 01.03 | M-1 | 1 |\n", ENTRIES), [])
+
+    def test_a_review_that_lists_no_position_is_no_evidence(self):
+        self.assertEqual(submit.missing_on_review("# Prüfen\nSumme 74,25\n", ENTRIES), [])
+
+    def test_a_longer_number_is_not_the_position(self):
+        review = "| 01.01 | 01.02 | 101.03 | 01.031 |\n"
+        self.assertEqual(submit.missing_on_review(review, ENTRIES), ["01.03"])
+
+
 if __name__ == "__main__":
     unittest.main()

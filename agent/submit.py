@@ -27,11 +27,13 @@ from configurator import (KIND_JS, NUMBER_ONLY, VALUE_NAMES, FillPlan, choice_op
 from extract import locate
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from worker import run_worker, seconds_per_step
 
 ADDRESS_WAIT = 15  # seconds the bid worker waits for the contact address before it starts without it
 SIGNING_RESERVE = 180  # seconds kept for the review, the TAN round trip and submitting (seen: 25-30 s, 173 s)
 LAST_CHANCE = 45  # seconds a final sign-only pass needs at least
+REVIEW_REFUSALS = 2  # TAN requests refused while the review lacks a position of the bid (then it is signed as is)
 HAND_OVER_AFTER = 2  # form failures of one position after which the model enters it itself with fill_in()
 # After a position the model named is entered and saved, the next position pages are entered with the same mapping
 # (PositionDesk._continue) while each passes the checks; any difference goes back to the model. Saves a model step
@@ -59,6 +61,34 @@ class SubmissionResult(BaseModel):
     submitted: bool = Field(description="True only when the website confirmed the bid as submitted")
     confirmation: str = Field(description="The website's confirmation or error text, word for word")
     omitted_positions: list[str] = Field(description="Position numbers the summary lists as omitted")
+
+
+REFUSALS_HINT = 3  # configure_position refusals in a row after which the model is sent to the position list
+REFUSALS_STOP = 6  # and after which the form worker ends (the next pass starts from the page as it is)
+
+
+def not_on_page(position: str, shown: list[str], remaining: str) -> str:
+    """The refusal for a position the page does not show: which of the bid's positions it does show, if any."""
+    if shown:
+        return (f"Position {position} is not on the page now; the page shows position(s) {', '.join(shown)}. "
+                f"Configure one of those, by its own number; omit only a position that is not one of {remaining}.")
+    return (f"Position {position} is not on the page now, and the page shows none of the bid's positions. Go to "
+            f"the form's position list or overview (or the step that shows one position to enter) and call again "
+            f"for a position shown there. Still to enter: {remaining}.")
+
+
+def missing_on_review(view: str, expected) -> list[str]:
+    """
+    Positions the bid enters that the review page does not list, when it lists positions at all (a review that
+    shows no position number of the bid is no evidence: its layout may not show them).
+    """
+    def listed(number: str) -> bool:
+        return re.search(r"(?<![\w.])" + re.escape(number) + r"(?![\w]|\.\d)", view) is not None
+
+    expected = sorted(expected, key=position_key)
+    if not any(listed(p) for p in expected):
+        return []
+    return [p for p in expected if not listed(p)]
 
 
 class Mailbox:
@@ -115,19 +145,21 @@ class Mailbox:
         return found
 
 
-TAN_STEPS = 16
+TAN_STEPS = 24  # 16 ran out on a mailbox that lists the oldest message first, six per page
 TAN_RETRY_SECONDS = 60  # a second TAN lookup only with at least this much time left
 
 
 def tan_goal(reference: str, said: str = "", older: str = "") -> str:
     """The TAN lookup's goal: what to find, not where a mailbox shows it."""
-    return (f"A new signing TAN for tender {reference} was just requested.{said} Find the message with that TAN: "
-            "a signing TAN for exactly this tender reference, and when the bid website or the messages show a "
+    return (f"A new signing TAN (a one-time signing or confirmation code; the mail may call it a TAN, signing "
+            f"code or confirmation code) for tender {reference} was just requested.{said} Find the message with "
+            "that code: one for exactly this tender reference, and when the bid website or the messages show a "
             "request number or reference, the one for this request. Among several candidates take the newest "
-            "request (its number or the mailbox's own order tells; never compare dates with today's clock). Use "
-            "the mailbox's search or folders if it is not in view, and reload once if it has not arrived yet. If a "
-            "preview stays empty, open the message's own page. Copy the TAN exactly from its text and return it "
-            f"at once.{older}")
+            "request (its number or the mailbox's own order tells; never compare dates with today's clock). A "
+            "list may show the oldest messages first: then the newest is on its last page, or search for the "
+            "tender reference. Use the mailbox's search or folders if it is not in view, and reload once if it "
+            "has not arrived yet. If a preview stays empty, open the message's own page. Copy the code exactly "
+            f"from its text and return it at once.{older}")
 
 
 class FormAction(BaseModel):
@@ -235,6 +267,7 @@ class PositionDesk:
         self.handed: set[str] = set()  # positions handed to the model to enter itself with fill_in()
         self.restarts = 0  # the bid website's restarts known here (SiteSession.restarts)
         self.layout: frozenset[tuple[str, str]] = frozenset()  # controls of the last position page the model named
+        self.refused = 0  # configure_position calls refused in a row (reset when a position page is entered)
 
     def sync(self, session) -> None:
         """A website started again from scratch (a dead page, SiteSession.reopen) lost every position entered."""
@@ -328,8 +361,20 @@ class PositionDesk:
         self.sync(session)
 
         def refuse(reason: str, text: str) -> str:  # every early return is traced: the run logs show why
+            self.refused += 1
+            if self.refused >= REFUSALS_STOP:
+                # run_f3f02de5: 60 requests on the same two numbers while the page showed no position page; the
+                # worker ends here and the next pass starts from the page as it is
+                session.trace.event(session.name, "configure_refused", position=asked, reason="stop",
+                                    fields=fields or {}, text=text[:300], in_row=self.refused)
+                self.refused = 0
+                raise UnexpectedModelBehavior(f"configure_position refused {REFUSALS_STOP} times in a row")
+            if self.refused >= REFUSALS_HINT:
+                text += (f" This is the {self.refused}th refused call in a row: do not call configure_position "
+                         "again on this page. Go to the form's position list or overview first (or the step that "
+                         "shows one position to enter), then call it for a position that page shows.")
             session.trace.event(session.name, "configure_refused", position=asked, reason=reason,
-                                fields=fields or {}, text=text[:300])
+                                fields=fields or {}, text=text[:300], in_row=self.refused)
             return text
 
         if entered_yourself:
@@ -359,9 +404,7 @@ class PositionDesk:
                                        f"positions {', '.join(sorted(self.entries, key=position_key))}): leave it "
                                        f"out with the form's option to omit a position. {self.so_far(session)}")
         if position not in shown:
-            return refuse("not_on_page", f"Position {position} is not on the page now. Configure the position "
-                                         "the page shows, by its own number; omit only a position that is not one "
-                                         f"of {self.remaining()}.")
+            return refuse("not_on_page", not_on_page(position, shown, self.remaining()))
         if not plan.fields:
             return refuse("no_fields", f"Position {position} has values to enter. Give fields (control label -> "
                                        f"value name) for the controls of this form, then call again; do not omit it.")
@@ -383,6 +426,7 @@ class PositionDesk:
                                       "that takes such a value (the mapping you gave stays); leave out fields that "
                                       "match none.")
         self.layout = page_layout(view)
+        self.refused = 0
         text, saved = await self._enter(session, position, shown, asked, choices)
         if saved and AUTO_POSITIONS:
             text = await self._continue(session, text)
@@ -664,19 +708,32 @@ async def submit_bid(bid_session: SiteSession, mailbox: Mailbox, briefing: Brief
         bid_session.seen += "\n" + found
         return found or "not found: the webmail did not show it"
 
+    review_refusals = [0]
+
     async def request_signing_tan(ctx: RunContext[Deps], ref: str) -> str:
         """
         Click the website's control that requests the signing TAN (its ref in the latest view), then fetch that
         TAN from the bidder's webmail. Returns the page after the request and the TAN: enter it right away (it is
         valid for five minutes, and any new request invalidates it).
         """
+        missing = missing_on_review(bid_session.view, desk.entries)
+        if missing and review_refusals[0] < REVIEW_REFUSALS and deadline - time.monotonic() > LAST_CHANCE + 120:
+            # a bid signed without a position the answer has loses that position, the total and more: enter it
+            # first (at most REVIEW_REFUSALS times, so a position that cannot be entered never blocks signing)
+            review_refusals[0] += 1
+            desk.entered -= set(missing)
+            bid_session.trace.event(bid_session.name, "review_missing", positions=missing, at="tan")
+            return (f"Not requested: the review does not list position(s) {', '.join(missing)} of this bid. Go to "
+                    "the form's positions step, enter them with configure_position (save each), then come back to "
+                    "the review and request the TAN.")
         before = set(bid_session.view.splitlines())
         view = await browser_tools.click(ctx, ref)
         answer = " ".join(line.strip() for line in bid_session.view.splitlines()
                           if line.strip() and line not in before and "[e" not in line)[:400]
-        found = await mailbox.tan(answer)
+        found = await mailbox.tan(answer)  # two lookups for this request's code before a new one is asked for
         if not found:
-            return f"{view}\n\nNo TAN found in the webmail. Request a new TAN with this tool again."
+            return (f"{view}\n\nNo TAN found in the webmail for this request, after two lookups. Request a new TAN "
+                    "with this tool again.")
         bid_session.seen += "\n" + found.tan
         return f"{view}\n\nTAN from the webmail: {found.tan} (message {found.subject!r}, received {found.received})."
 
@@ -713,6 +770,17 @@ Brief's submission steps:
     desk.sync(bid_session)  # a restart during the form: what the review shows is what was entered since
     requirements = _requirements(briefing, email, answer, desk, filled=True)
     at_review = bool(ready and ready.at_signing_step)
+    missing = missing_on_review(bid_session.view, desk.entries) if at_review else []
+    if missing:
+        # run_f3f02de5: a position entered by the repair pass was not on the review and the bid was signed
+        # without it (its position points, the total and the index check lost): enter it again, then sign
+        bid_session.trace.event(bid_session.name, "review_missing", positions=missing)
+        desk.entered -= set(missing)
+        at_review = False
+        ready = FormReady(at_signing_step=False,
+                          open_points=f"the review page does not list position(s) {', '.join(missing)}: go to "
+                                      "the form's positions step, enter them with configure_position (save each), "
+                                      "then go forward to the review again and sign")
 
     async def logged_check(view: str) -> None:  # a record for the run logs only: signing never waits for it
         check = await check_summary(view, requirements)
@@ -753,7 +821,7 @@ form's option to omit a position (never add one):
 Request the signing TAN with request_signing_tan(ref of the TAN request button), enter the TAN it returns at once
 and submit bindingly. Browser confirmation dialogs are accepted for you. Return once the website confirms the
 submission (or shows why it failed)."""
-    rescue = (request_signing_tan, fill_in) + ((bidder_contact_email,) if not email else ())
+    rescue = (request_signing_tan, fill_in, *desk.tools) + ((bidder_contact_email,) if not email else ())
     passes = [(review_goal, 15 if at_review else 30,
                (request_signing_tan,) if at_review else (*tools, request_signing_tan))]
     result = None

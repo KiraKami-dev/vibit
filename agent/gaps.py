@@ -158,6 +158,19 @@ def detect_gaps(o, calc_problems: list[str] = (), doubts: bool = False) -> list[
     return list(gaps.values())
 
 
+def decisive(gaps: list[Gap], calculation: Calculation | None) -> list[Gap]:
+    """
+    For a no_bid on established evidence (positions whose complete ERP search found no matching material) only
+    the gaps that can change it or the no_bid answer: the tender's Q&A (an amendment can bring a match back) and
+    the discount approval. Masses, prices, keys and the other positions' materials only price a bid; retrying
+    them held no_bid answers back by minutes.
+    """
+    result = getattr(calculation, "result", None)
+    if getattr(result, "decision", None) != "no_bid" or not getattr(result, "missing_materials", None):
+        return gaps
+    return [g for g in gaps if g.area in ("tender", "doubt") or (g.area == "mail" and g.key == "approval")]
+
+
 def better(new: Calculation, old: Calculation | None) -> bool:
     """The recalculation replaces the earlier answer unless it is less complete for the same decision (facts only
     accumulate, so that would mean a retry made things worse); a changed decision rests on new evidence."""
@@ -233,10 +246,10 @@ class GapFiller:
         best = first
         verifying = getattr(self.o, "verifying", None)  # the verifier, running beside the first answer
         if verifying is not None and not verifying.done() and any(
-                self.feasible(g) for g in detect_gaps(self.o, first.problems)):
+                self.feasible(g) for g in decisive(detect_gaps(self.o, first.problems), first)):
             # a round will run: its doubted mail kinds may ride along, so their verdicts are worth the wait
             await asyncio.wait({verifying}, timeout=max(0.0, self.left()))
-        gaps = detect_gaps(self.o, first.problems, doubts=getattr(self.o, "gap_rework", False))
+        gaps = decisive(detect_gaps(self.o, first.problems, doubts=getattr(self.o, "gap_rework", False)), first)
         self._report(gaps, set())
         while self.round < GAP_ROUNDS:
             todo = [g for g in gaps if self.feasible(g) and self.tries.get(g.ident, 0) < self.limit(g)]
@@ -258,7 +271,7 @@ class GapFiller:
             touched |= {rid for rid in self.o.requirements if self.o.chosen.get(rid) is None}
             await self.reselect(touched)
             new = calculate()
-            after = detect_gaps(self.o, new.problems)
+            after = decisive(detect_gaps(self.o, new.problems), new)
             open_now = {g.ident for g in after}
             filled = [g.ident for g in todo if g.ident not in open_now and not g.reason.startswith(DOUBT)]
             for ident in filled:

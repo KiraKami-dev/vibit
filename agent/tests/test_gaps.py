@@ -130,6 +130,19 @@ class DetectGaps(unittest.TestCase):
         self.assertEqual(found, {"mail/approval": (), "mail/packaging": ("1", "2"), "mail/project_bonus": ("2",),
                                  "mail/fx": ("2",), "mail/metal_indices": ("1",)})
 
+    def test_a_settled_no_bid_keeps_only_gaps_that_can_change_it(self):
+        found = [Gap("tender", "qa", "not read to its end"), Gap("mail", "approval", "no approval"),
+                 Gap("mail", "packaging", "key unresolved", ("1",)), Gap("material", "M-1", "missing", ("1",)),
+                 Gap("erp", "A-2", "undecided", ("2",)), Gap("requirement", "A-3", "not read", ("3",)),
+                 Gap("mail", "end_reserves", "pending", ("2",))]
+        no_bid = Calculation(SimpleNamespace(decision="no_bid", missing_materials=["4"]), {}, [])
+        self.assertEqual([g.ident for g in gaps.decisive(found, no_bid)], ["tender/qa", "mail/approval"])
+        bid = Calculation(SimpleNamespace(decision="bid", missing_materials=[]), {}, [])
+        self.assertEqual(gaps.decisive(found, bid), found)
+        # a no_bid without established missing materials (e.g. no positions) keeps every gap
+        unclear = Calculation(SimpleNamespace(decision="no_bid", missing_materials=[]), {}, [])
+        self.assertEqual(gaps.decisive(found, unclear), found)
+
     def test_irrelevant_missing_material_facts_are_no_gap(self):
         record = complete_record("M-1").model_copy(update={"pieces_per_carton": None, "allocation_mass_kg": None})
         o = state([position("1", "A-1")], [requirement("A-1")],

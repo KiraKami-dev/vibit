@@ -143,12 +143,13 @@ class CompletePlan(unittest.TestCase):
         plan = Plan(needs=[Need(kind="specification", site="docs", why="rule 2")])
         done, filled = complete_plan(plan, self.BRIEFING, self.IDS)
         self.assertEqual({(n.kind, n.site) for n in done.needs},
-                         {("specification", "docs"), ("tender", "bids"), ("mails", "inbox"), ("materials", "stock")})
-        self.assertEqual(sorted(filled), ["mails@inbox", "materials@stock", "tender@bids"])
+                         {("specification", "docs"), ("tender", "bids"), ("qa", "bids"), ("mails", "inbox"),
+                          ("materials", "stock")})
+        self.assertEqual(sorted(filled), ["mails@inbox", "materials@stock", "qa@bids", "tender@bids"])
 
     def test_complete_plan_is_unchanged(self):
         plan = Plan(needs=[Need(kind=k, site=s, why="x") for k, s in
-                           (("tender", "bids"), ("specification", "docs"), ("materials", "stock"),
+                           (("tender", "bids"), ("qa", "docs"), ("specification", "docs"), ("materials", "stock"),
                             ("mails", "inbox"))])
         self.assertEqual(complete_plan(plan, self.BRIEFING, self.IDS), (plan, []))
 
@@ -332,6 +333,144 @@ class DeferredHits(unittest.TestCase):
 
     def test_a_pending_stroke_reads_the_hits_that_fit_now(self):
         self.assertEqual(self.run_with("M-1", None), [False])
+
+
+class Events:
+    def __init__(self):
+        self.events = []
+
+    def event(self, worker, kind, quiet=False, **data):
+        self.events.append((kind, data))
+
+
+def flow_orchestrator() -> Orchestrator:
+    o = bare_orchestrator()
+    o.trace = Events()
+    o.left = o.form_left = lambda: 900.0
+    o.plan = Plan(needs=[Need(kind=k, site=s, why="x") for k, s in
+                         (("tender", "bids"), ("qa", "bids"), ("specification", "docs"), ("materials", "stock"),
+                          ("mails", "inbox"))])
+    o.task = {"access": [{"siteId": s} for s in ("bids", "stock", "inbox", "docs")]}
+    o.briefing = SimpleNamespace(mail_site="inbox", bid_site="bids")
+    o.qa_planned, o.qa_found, o.qa_tried = ["bids"], [], set()
+    o.mail_kinds, o.mail_results, o._mail_tabs = [], {}, []
+    o.no_bid_settled = None
+    o.mail_deadline = 1e12
+    return o
+
+
+class QaElsewhere(unittest.TestCase):
+    def test_the_specification_website_first_then_the_others_never_the_mailbox(self):
+        o = flow_orchestrator()
+        tried = []
+
+        async def qa_read(site, tag):
+            tried.append(site)
+            if site == "stock":
+                o.qa_found.append(site)
+                return True
+            return False
+
+        o._qa_read = qa_read
+        asyncio.run(o._qa_elsewhere({"bids"}))
+        self.assertEqual(tried, ["docs", "stock"])
+        self.assertEqual(o._qa_sites(), ["stock"])
+        tried.clear()
+        asyncio.run(o._qa_elsewhere({"bids"}))  # answers found: nothing more is read
+        self.assertEqual(tried, [])
+
+    def test_two_callers_do_not_read_one_website_twice(self):
+        o = flow_orchestrator()
+        tried = []
+
+        async def qa_read(site, tag):
+            tried.append(site)
+            await asyncio.sleep(0.01)
+            return False
+
+        o._qa_read = qa_read
+
+        async def both():
+            await asyncio.gather(o._qa_elsewhere({"bids"}), o._qa_elsewhere({"bids"}))
+
+        asyncio.run(both())
+        self.assertEqual(sorted(tried), ["docs", "stock"])
+
+
+def no_bid_result(decision="no_bid", missing=("2",)):
+    return SimpleNamespace(decision=decision, missing_materials=list(missing), positions=[])
+
+
+class EarlyNoBid(unittest.TestCase):
+    def run_with(self, recheck=None):
+        o = flow_orchestrator()
+        o.mail_kinds = [SimpleNamespace(name="approval"), SimpleNamespace(name="packaging")]
+        o.mail_results = {"approval": object()}
+        o._calculate = lambda: (no_bid_result(), {}, [])
+
+        async def nothing(*args):
+            return None
+
+        async def no_rescue(missing):
+            return {}
+
+        async def recheck_no_bid(missing):
+            return recheck
+
+        o.select_materials = nothing
+        o.recheck_no_bid = recheck_no_bid
+        o.wording_matches = no_rescue
+
+        async def scenario():
+            tab = asyncio.create_task(asyncio.sleep(30))
+            o._mail_tabs = [tab]
+            await o._early_no_bid()
+            await asyncio.sleep(0)
+            return tab.cancelled()
+
+        return o, asyncio.run(scenario())
+
+    def test_a_settled_no_bid_ends_the_pricing_mail_searches(self):
+        o, cut = self.run_with()
+        self.assertTrue(cut)
+        self.assertEqual(o.no_bid_settled, ["2"])
+
+    def test_a_recheck_that_brings_a_match_back_keeps_the_mail_searches(self):
+        o, cut = self.run_with(recheck=(no_bid_result("bid", ()), {}, []))
+        self.assertFalse(cut)
+        self.assertIsNone(o.no_bid_settled)
+
+
+class OmittedEverything(unittest.TestCase):
+    def test_the_check_turns_a_bid_without_positions_into_no_bid(self):
+        import orchestrator as orch
+        o = flow_orchestrator()
+        o.tender_facts = SimpleNamespace(positions=[SimpleNamespace(position="1")])
+        o.rules, o.verifying = "rules", None
+        empty = calc.calculate(calc.BidInput(tender_reference="T-1", scenario_date=date(2026, 6, 1), positions=[]))
+
+        async def nothing(*args):
+            return None
+
+        class Filler:
+            def __init__(self, _):
+                pass
+
+            async def run(self, first, again):
+                return orch.Calculation(empty, {}, [], {})
+
+        async def check(proposed, evidence, rules):
+            return SimpleNamespace(agrees=False, decision="no_bid", reason="no material for position 1")
+
+        saved = orch.GapFiller, orch.confirm_decision
+        orch.GapFiller, orch.confirm_decision = Filler, check
+        o.select_materials = nothing
+        o.calculate = lambda: None
+        try:
+            answer, result = asyncio.run(o._answer())
+        finally:
+            orch.GapFiller, orch.confirm_decision = saved
+        self.assertEqual((answer["decision"], answer["positions"], answer["total_net"]), ("no_bid", [], 0.0))
 
 
 if __name__ == "__main__":
