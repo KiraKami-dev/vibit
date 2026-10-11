@@ -32,8 +32,8 @@ import llm
 from board import Board, Source
 from briefing import Briefing
 from browser_tools import SiteSession
-from evidence import (EffectiveRequirement, Requirement, effective_requirement, merged_attributes, mismatches,
-                      parse_date, to_position_input, wording_differences)
+from evidence import (EffectiveRequirement, Requirement, check_choice, effective_requirement, merged_attributes,
+                      mismatches, parse_date, to_position_input, wording_differences)
 from gaps import Calculation, GapFiller
 from research import Erp, ErpResearch, SpecResult, research_spec, reselect, same_revision
 from tracing import Trace
@@ -57,6 +57,7 @@ MAIL_TABS = int(os.environ.get("MAIL_TABS", "6"))
 SPEC_STEPS_FAST = int(os.environ.get("SPEC_STEPS_FAST", "25"))  # navigation steps of the fast spec attempt
 SPEC_STEPS_THINKING = int(os.environ.get("SPEC_STEPS_THINKING", "35"))  # and of the careful one, run alongside
 SELECT_SECONDS = 75.0  # the final material choice (a model call per requirement, in parallel)
+DEFERRED_SECONDS = 90.0  # reading deferred ERP hits before the final choice (rare: an amendment moved the match)
 KIND_OPTIONS = set(inspect.signature(research_mail.research_kind).parameters) if research_mail else set()
 KIND_MIN_SECONDS = 120.0  # a mail record kind's search budget: at least this
 KIND_MAX_SECONDS = 240.0  # and at most this, from the mail time left per kind
@@ -899,6 +900,7 @@ class Orchestrator:
         if self.erp is None or not self.requirements:
             return
         effective = [self.effective(req) for req in self.requirements.values()]
+        await self._inspect_deferred(effective)
         own = {r.requirement_id: r.selected for r in self.erp.requirements}
         # One choice per requirement, side by side: one hung model call must not cost the others; choices not made
         # in time are the ERP workers' own.
@@ -917,6 +919,36 @@ class Orchestrator:
             self.board.problem("select", f"no new choice in time for {late}; the ERP workers' choices are used")
         self.chosen = {**own, **chosen}
         self.trace.event("select", "done", chosen=self.chosen)
+
+    async def _inspect_deferred(self, effective: list[EffectiveRequirement]) -> None:
+        """
+        Hits the ERP stage left uninspected (their rows contradicted the requirement as it stood then) are read
+        now where the final requirement needs them: when the choice made then no longer holds (or none was made),
+        those that fit now, or all of them if none fits; when the stroke is still pending, those that fit now.
+        """
+        erp = self._erp
+        if erp is None or self.erp is None or not getattr(erp, "deferred", None):
+            return
+        by_id = {r.requirement_id: r for r in self.erp.requirements}
+        jobs = []
+        for req in effective:
+            research = by_id.get(req.requirement_id)
+            if research is None or not erp.deferred.get(req.requirement_id):
+                continue
+            materials = {n: self.erp.materials[n] for n in research.inspected if n in self.erp.materials}
+            holds = (research.selected is not None
+                     and check_choice(req, research, materials, research.selected) is None)
+            if holds and req.stroke is not None:
+                continue
+            jobs.append(erp.inspect_deferred(req, max(1.0, min(DEFERRED_SECONDS, self.form_left() - 60)),
+                                             every=not holds and req.stroke is not None))
+        if not jobs:
+            return
+        for found in await asyncio.gather(*jobs, return_exceptions=True):
+            if isinstance(found, dict):
+                self.erp.materials.update(found)
+            elif isinstance(found, BaseException):
+                self.board.problem("select", f"deferred hits: {type(found).__name__}: {str(found)[:160]}")
 
     def _unknown_clauses(self, p, clause, pools, bonuses) -> None:
         """A position whose Q&A names a key the mails did not resolve: calc would report a zero for that part,

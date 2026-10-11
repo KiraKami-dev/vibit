@@ -263,5 +263,39 @@ class MailPlan(unittest.TestCase):
         self.assertTrue(any("planning again" in p for p in o.board.problems))
 
 
+class DeferredHits(unittest.TestCase):
+    """_inspect_deferred: hits the ERP stage left unread are read only where the final requirement needs them."""
+
+    def run_with(self, selected: str | None, stroke: str | None):
+        from evidence import EffectiveRequirement, MaterialRecord, RequirementResearch
+        from research import ErpResearch
+        o = bare_orchestrator()
+        o.form_left = lambda: 600.0
+        rec = MaterialRecord(material_number="M-1", active=True, status="01", bore=D("50"), stroke=D("100"),
+                             pressure=D("160"), mounting="Flange", certification="None")
+        research = RequirementResearch(requirement_id="A-1", inspected=["M-1", "M-2"], selected=selected)
+        o.erp = ErpResearch(requirements=[research], materials={"M-1": rec})
+        calls = []
+
+        async def inspect_deferred(req, seconds, every=False):
+            calls.append(every)
+            return {}
+        o._erp = SimpleNamespace(deferred={"A-1": ["M-2"]}, inspect_deferred=inspect_deferred)
+        req = EffectiveRequirement(requirement_id="A-1", catalog_group="G-1", bore=D("50"),
+                                   stroke=D(stroke) if stroke else None, pressure=D("160"), mounting="Flange",
+                                   certification="None", pending=[] if stroke else ["reserve"])
+        asyncio.run(o._inspect_deferred([req]))
+        return calls
+
+    def test_a_choice_that_holds_reads_nothing(self):
+        self.assertEqual(self.run_with("M-1", "100"), [])
+
+    def test_a_choice_that_fails_reads_every_deferred_hit(self):
+        self.assertEqual(self.run_with("M-1", "120"), [True])
+
+    def test_a_pending_stroke_reads_the_hits_that_fit_now(self):
+        self.assertEqual(self.run_with("M-1", None), [False])
+
+
 if __name__ == "__main__":
     unittest.main()

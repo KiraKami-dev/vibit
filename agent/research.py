@@ -785,6 +785,11 @@ async def _read_material(number: str, corpus: str, trace: Trace, name: str) -> M
 
 
 MAX_INSPECT = int(os.environ.get("ERP_MAX_INSPECT", "20"))  # the rules cap a usable search at 20 hits
+# Hits whose rows contradict the requirement are inspected only when no fitting hit is chosen, or when the final
+# requirement (amendments, reserves) makes them fit or the choice fail (Erp.inspect_deferred). Inspecting them all
+# up front cost a third of the ERP detail and reader calls, and records that finished after the requirement's
+# choice were not used anyway (collect() keeps only the records finished by then).
+DEFER_REST = os.environ.get("ERP_DEFER_REST", "1") == "1"
 
 # A worker that has what it came for (a complete hit list; every view of a record opened) but keeps going is ended
 # this many seconds later; what it has is then read from its pages.
@@ -943,6 +948,7 @@ class Erp:
         self.active_at = 0.0  # last time a worker used it
         self.idle_limit = float(os.environ.get("ERP_IDLE_SECONDS", "120"))  # the ERP drops idle sessions
         self.partial: dict[str, RequirementResearch] = {}  # requirement -> research whose search has finished
+        self.deferred: dict[str, list[str]] = {}  # requirement -> hits not inspected (see inspect_deferred)
         self.started_at: float | None = None
 
     def left(self) -> float:
@@ -1204,12 +1210,17 @@ class Erp:
         out.problems.append(UNFINISHED)
         self.partial[req.requirement_id] = out
         links = {c.material_number: c.link for c in out.candidates}
-        tasks = {number: self.material(number, links.get(number, "")) for number in out.inspected}
         # material workers stop early enough for their reader; a record still open at the deadline is left out
-        # and the choice is made over the ones that are complete. The hits whose rows fit come first: when one of
-        # them is chosen, the others are not waited for (they still finish, for a later reselect).
+        # and the choice is made over the ones that are complete. The hits whose rows fit come first; the others
+        # are inspected only when none of those is chosen (DEFER_REST), or later by inspect_deferred() when an
+        # amendment or reserve makes the choice fail or makes one of them fit.
+        deferring = DEFER_REST and bool(first and rest)
+        tasks: dict[str, asyncio.Task] = {}
         selected, problems, materials, phase = None, [], {}, out.inspected
         for phase in ([first, out.inspected] if first and rest else [out.inspected]):
+            for number in (phase if deferring else out.inspected):
+                if number not in tasks:
+                    tasks[number] = self.material(number, links.get(number, ""))
             wanted = [tasks[n] for n in phase]
             done = set()
             if wanted:
@@ -1229,7 +1240,33 @@ class Erp:
             problems.append(f"{len(phase) - len(materials)} of {len(phase)} materials not read")
         out.selected = selected
         out.problems = [p for p in out.problems if p != UNFINISHED] + problems
+        later = [n for n in rest if n not in tasks]
+        if later:
+            self.deferred[req.requirement_id] = later
+            self.trace.event("erp", "deferred", requirement=req.requirement_id, materials=later)
         return out
+
+    async def inspect_deferred(self, req: EffectiveRequirement, seconds: float,
+                               every: bool = False) -> dict[str, MaterialRecord]:
+        """
+        The hits a requirement's ERP research left uninspected (their rows contradicted it when it ran) that fit
+        `req` as known now (amended, reserves in), or all of them with `every`: inspected now, within `seconds`.
+        Returns the records read.
+        """
+        numbers = self.deferred.pop(req.requirement_id, [])
+        research = self.partial.get(req.requirement_id)
+        if not numbers or research is None:
+            return {}
+        rows = {c.material_number: c for c in research.candidates}
+        wanted = numbers if every else [n for n in numbers if n in rows and not contradicted(req, rows[n])]
+        self.trace.event("erp", "inspect_deferred", requirement=req.requirement_id, materials=wanted,
+                         skipped=[n for n in numbers if n not in wanted])
+        if not wanted:
+            return {}
+        tasks = [self.material(n, rows[n].link if n in rows else "") for n in wanted]
+        done, _ = await asyncio.wait(tasks, timeout=max(1.0, seconds))
+        return {t.result().material_number: t.result() for t in done
+                if not t.cancelled() and t.exception() is None and t.result() is not None}
 
     def so_far(self) -> ErpResearch:
         """What the ERP stage has at the deadline: finished requirements, the ones whose search finished (hits
