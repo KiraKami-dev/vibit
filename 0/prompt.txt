@@ -3431,3 +3431,56 @@ If this event is something the user would act on now, send a PushNotification. R
 <event>02:05 run_f5b169c7022bca96 6776b3a quality=0 17.8min $0.095 no bid</event>
 If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>ad91eb003002241ee</task-id>
+<tool-use-id>toolu_01LKQpvs87jS17rpZvqf562U</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/ad91eb003002241ee.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix slow site starts" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Site starts that hang are now detected and recovered within about 15 to 20 seconds instead of minutes. Both sandbox test runs of the fix scored 100, but neither hit a hung start, so the recovery path is so far proven only by the local tests.
+
+**Root cause.** In the failing run, the webmail's requests never completed in its own browser context, while a fresh context opened the site in under a second. So the site was fine and that one context was stuck.
+- **Attempt 1 (about:blank):** the page load never got its response. I reproduced locally that Playwright calls like `locator.count()` and `evaluate()` then wait forever with no timeout. `_settle` makes those calls (first in the sign-in helper, which checks for a password field), so it hit its 45 s cap over and over. On top of that, `_attempt` went straight back to settling after each timeout instead of checking whether the page was already usable.
+- **Attempt 2:** the sign-in was sent but never came back. The platform's recording shows no second sign-in being typed, which fits a sign-in step stuck on the same kind of call.
+- The Haiku run `run_6916caf75cb4fefd` shows the same thing on the webmail: the login page loaded, then nothing for 210 s.
+
+**Changes** (in `agent/browser_tools.py`, nothing branches on site id, URL or layout):
+- **Race:** if a start has no usable page after 15 s, a second tab opens next to it in a fresh context. The first tab stays open, so a site that is merely slow is not given up. Whichever shows a usable page first wins and the other tab and context are closed.
+- **The first tab is the session itself:** only the racing tab runs as a separate session that is taken over if it wins. This keeps the ERP research's own per-tab sign-in (one tab signs in at a time) and `revive()` working as before.
+- **Dead page:** a loaded page that answers no script call for 20 s ends its tab. A navigation that hasn't loaded yet keeps waiting, because the race covers that case.
+- **Budgets:** attempts get 45/60/90/120 s (previously 210 s each). Retries start after 0/10/30 s (previously 30/60/120 s), each in a fresh context.
+- **Usable page counts as a start:** if settling times out, the page is still read, and a page showing content counts as a successful start.
+- **Settle helpers:** each helper is capped at 15 s and skipped when the page doesn't answer. `SETTLE_SECONDS` stays at 45.
+- **During research:** `GOTO_SECONDS` went from 60 to 30 s. Every page open now runs through `_goto`, which logs slow ones as `slow_page` events.
+
+**Tests:** all 197 unit tests pass. The new `agent/tests/test_fast_start.py` uses a local server and covers:
+- a page load that never gets a response;
+- a sign-in that never comes back;
+- a page that stops answering script calls;
+- a page that shows content but never finishes loading;
+- a site that is slow for every tab, where the first tab must still win;
+- browser dialogs on a winning racing tab reaching the session.
+
+I updated `test_slow_start.py` for the new constants.
+
+**Sandbox runs of 86b4f27:**
+
+| Run | Quality | Time | Cost | `start_ok` seconds |
+|---|---|---|---|---|
+| `run_6f121a1dc3174d50` | 100 | 7:33 | $0.136 | tender 2.5, customer portal 2.7, mail 2.9, ERP 4.6 |
+| `run_412b8440736e3701` | 100 | 11:33 | $0.151 | tender 2.4, customer portal 2.5, mail 3.1, ERP 4.4 |
+
+Worker tabs started in 0.8 to 2.5 s in both runs.
+
+In the second run, three webmail tabs mid-research hit page loads that never got a response. That is the same symptom during research, not at the start. Each was now cut off after about 52 s (30 s load plus about 22 s settle) and logged as `slow_page`; before, there was no such log and the load alone could take up to 60 s.
+
+**Commits** on `worktree-agent-ad91eb003002241ee` (fast-forwarded to main 980ba45 first; not merged, not pushed):
+- `86b4f27` Race hung site starts against a fresh context
+- `a3c61fc` Record fast-starts test runs: 100 and 100 (both runs in `experiments/runs.jsonl`, plus a note on the root cause in `docs/learned.md`)</result>
+<usage><subagent_tokens>191009</subagent_tokens><tool_uses>86</tool_uses><duration_ms>2034877</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-ad91eb003002241ee</worktreePath><worktreeBranch>worktree-agent-ad91eb003002241ee</worktreeBranch></worktree>
+</task-notification>
