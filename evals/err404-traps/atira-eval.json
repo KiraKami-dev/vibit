@@ -1,0 +1,9 @@
+{
+  "start": "node server.js",
+  "sites": [
+    { "name": "tender-portal", "port": 3000 },
+    { "name": "customer-portal", "port": 3001 },
+    { "name": "erp", "port": 3002 },
+    { "name": "mail", "port": 3003 }
+  ]
+}
