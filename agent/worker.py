@@ -57,6 +57,10 @@ CURRENT_VIEW = "\nCurrent view:\n"  # where the first prompt's page view starts
 # view, so they stay, up to KEEP_CHARS.
 KEEP_RESULTS = {"search", "collect", "extract"}
 KEEP_CHARS = 12000
+# Pages a worker opened several at a time and then has to report on (which facts they did not show): with the older
+# batch cut to its headings the worker could not tell and opened the pages again until its steps ran out (40 to
+# 60 s a material). They stay whole; an unchanged history is also what the model's prompt cache reads.
+KEEP_WHOLE = {"open_pages"}
 
 
 def _shrink(part):
@@ -102,7 +106,7 @@ def _forget_old_views(messages: list[ModelMessage]) -> list[ModelMessage]:
     long_after = [(i, j) for i, message in enumerate(messages) if isinstance(message, ModelRequest)
                   for j, part in enumerate(message.parts)
                   if (i, j) > latest and isinstance(part, ToolReturnPart) and isinstance(part.content, str)
-                  and len(part.content) > LONG_RESULT and part.tool_name not in KEEP_RESULTS]
+                  and len(part.content) > LONG_RESULT and part.tool_name not in KEEP_RESULTS | KEEP_WHOLE]
     older = set(long_after[:-1])
     result: list[ModelMessage] = []
     for i, message in enumerate(messages):
@@ -172,6 +176,7 @@ async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, c
             return output
 
     session.reset_loop(guard=loop_guard, stop=stop_on_loop)
+    session.stopped = ""  # why this run ended early, for a caller that decides whether another pass can help
     view = await session.look(fresh=True)
     prompt = f"Website: {session.name} ({session.site['url']})\n\nGoal: {goal}\n"
     if context:
@@ -191,6 +196,7 @@ async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, c
                             cached_tokens=usage.cache_read_tokens, output_tokens=usage.output_tokens,
                             output=repr(output)[:500])
     except (asyncio.TimeoutError, UsageLimitExceeded, UnexpectedModelBehavior, Stuck) as error:
+        session.stopped = type(error).__name__
         session.trace.event(session.name, "stopped", reason=f"{type(error).__name__}: {str(error)[:200]}",
                             seconds=round(time.monotonic() - started, 1), requests=usage.requests,
                             input_tokens=usage.input_tokens, cached_tokens=usage.cache_read_tokens,

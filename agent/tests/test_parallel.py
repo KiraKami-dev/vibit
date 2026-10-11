@@ -113,10 +113,10 @@ class MailboxTab(unittest.TestCase):
             events.append("revive")
 
         async def goto(url):
-            events.append("goto")
-        page = SimpleNamespace(url="https://mail.test/", is_closed=lambda: closed)
+            events.append("goto" if url == "https://mail.test/" else f"goto {url}")
+        page = SimpleNamespace(url="https://mail.test/?folder=old&q=T-1", is_closed=lambda: closed)  # as left
         return SimpleNamespace(name=name, ok=ok, page=page, lock=asyncio.Lock(), revive=revive, _goto=goto,
-                               trace=Trace(tempfile.mkdtemp()), events=events)
+                               site={"url": "https://mail.test/"}, trace=Trace(tempfile.mkdtemp()), events=events)
 
     def adopt(self, sessions, busy: bool = False):
         import submit
@@ -294,6 +294,9 @@ class FormPages:
     async def settle(self) -> None:
         return None
 
+    async def front(self) -> None:
+        return None
+
 
 class PositionsInOneCall(unittest.TestCase):
     def enter(self, pages: list[str], positions: list[str], errors: dict | None = None, calls=None, batch=True,
@@ -360,6 +363,49 @@ class PositionsInOneCall(unittest.TestCase):
         self.assertEqual(filled[-1], ("01.03", {"Certification": "Without certification"}))
         self.assertEqual(desk.entered, {"01.01", "01.02", "01.03"})
         self.assertEqual(desk.failures, {"01.02": 1})
+
+    def test_a_busy_page_is_waited_for_instead_of_costing_the_position(self):
+        import submit
+
+        class TimeoutError(Exception):  # as the browser raises when a control takes no click in time
+            pass
+
+        def busy(times: int, patience: float):
+            session = FormPages([position_page("01.01"), TOTALS_PAGE])
+            desk = submit.PositionDesk({"01.01": {"position": "01.01", **ENTRY}}, time.monotonic() + 900)
+            desk.busy_until = time.monotonic() + patience
+            tries = []
+
+            async def fill_position(sess, entry, plan, log, choices=None):
+                tries.append(entry["position"])
+                if len(tries) <= times:
+                    raise TimeoutError("Locator.click: Timeout 5000ms exceeded.")
+                log.append("Bore (mm) = 50")
+                return None
+
+            async def locate(page, ref):
+                async def click(timeout=0):
+                    session.at += 1
+                return SimpleNamespace(click=click)
+
+            ctx = SimpleNamespace(deps=SimpleNamespace(session=session))
+            with patch.object(submit, "fill_position", fill_position), patch.object(submit, "locate", locate), \
+                    patch.object(submit, "BUSY_PAUSE", 0.05):
+                answer = asyncio.run(desk.configure_position(ctx, position="01.01", fields=FIELDS,
+                                                             confirm_button="Apply", next_button="Save and next"))
+            return desk, tries, answer
+
+        desk, tries, answer = busy(times=3, patience=30)  # the page takes the click on the fourth try
+        self.assertEqual((len(tries), desk.entered, desk.failures), (4, {"01.01"}, {}))
+        self.assertIn("Position 01.01 entered", answer)
+        desk, tries, answer = busy(times=10_000, patience=0.3)  # it never does: back to the model, counted once
+        self.assertEqual((desk.entered, desk.failures), (set(), {"01.01": 1}))
+        self.assertIn("not fully entered: TimeoutError", answer)
+        self.assertLess(len(tries), 20)
+        # the share is of the time the form has left, and is set once
+        desk = submit.PositionDesk({}, time.monotonic() + submit.SIGNING_RESERVE + 100)
+        self.assertTrue(desk.patient())
+        self.assertAlmostEqual(desk.busy_until - time.monotonic(), 100 * submit.BUSY_SHARE, delta=2)
 
     def test_a_page_that_only_names_the_next_position_is_left_to_the_model(self):
         pages = [position_page("01.02"), PREVIEW_PAGE, position_page("01.03")]

@@ -12,6 +12,7 @@ tender facts onto calc's input models.
 """
 import asyncio
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -23,8 +24,10 @@ from urllib.parse import urljoin, urlparse
 from pydantic import BaseModel, Field, field_validator
 from pydantic_ai import Agent, ModelRetry, RunContext
 
+import clef
 import llm
-from browser_tools import Deps, SiteSession
+import site_tools
+from browser_tools import REF_TOKEN, Deps, SiteSession, Stuck
 from calc import (
     Approval,
     BonusBand,
@@ -41,6 +44,8 @@ from evidence import ParseError, parse_date, parse_int, parse_number
 from research_tender import (
     EMPTY_FRAME,
     LINK,
+    REF_LINE,
+    _control,
     Collected,
     Summary,
     TenderFacts,
@@ -321,11 +326,13 @@ def _goal(kind: Kind, reference: str, again: bool = False) -> str:
 A first search for this record kept nothing. Search for {reference} alone (or for the topic word alone) in every
 folder and look for a subject that names this record; another word for the topic may be used.""" if again else "")
     return f"""Find every message on this website that is this record, for tender {reference}: {kind.what}{retry}
-- Search for the exact reference {reference} together with the word {kind.subject!r}.
-- Each time a result list shows hits whose subject is this record for exactly {reference}, call keep_results
-  RIGHT AWAY with those exact subjects (as the list shows them). A subject whose reference has any extra suffix
+- Search with find_messages(field_ref, query, submit_ref): give it the mailbox's search field and, as the query,
+  the exact reference {reference} together with the word {kind.subject!r}. In one step it types, submits, pages
+  through every result page and returns all hit rows; it also says which rows it has already kept for reading.
+- Each time a returned row that was not kept is this record for exactly {reference}, call keep_results RIGHT
+  AWAY with those exact subjects (as the list shows them). A subject whose reference has any extra suffix
   or prefix is another tender. Older and newer versions share a subject; keep_results keeps all of them.
-- If the hits span several pages, call collect_pages with the ref of the list's next-page control first.
+- If a hit list was not paged to its end, call collect_pages with the ref of its next-page control.
 - Check every folder the mailbox has (e.g. inbox and archive) once, with the same search. If a search shows
   nothing in any folder or asks you to narrow it, change the words once (another topic word, or more words).
 As soon as every folder is checked, return a one-line summary. Do not open messages yourself (unless
@@ -423,6 +430,10 @@ def keep_messages_tool(kept: list[str]):
         hits = [href for _, text, href in LINK.findall(session.seen) if _clean(text) in wanted]
         urls = list(dict.fromkeys(urljoin(session.site["url"], h) for h in hits))
         urls = [u for u in urls if urlparse(u).netloc == host][:20]
+        done = getattr(kept, "urls", set())  # addresses kept before (by this tool or by find_messages)
+        if urls and all(u in done for u in urls):
+            return "These are already kept for reading. Go on with the next folder, or return when all are checked."
+        urls = [u for u in urls if u not in done]
         opening = getattr(kept, "opening", None)
         if opening is not None:
             opening.add(id(urls))  # opening messages is progress, though the tab's own view does not change
@@ -432,6 +443,7 @@ def keep_messages_tool(kept: list[str]):
             if opening is not None:
                 opening.discard(id(urls))
         good = [v for v in views if v]
+        done.update(u for u, v in zip(urls, views) if v)
         for view in good:
             kept.append(view)
             session.seen += "\n" + view
@@ -444,6 +456,96 @@ def keep_messages_tool(kept: list[str]):
         return f"Kept {len(good)} of {len(urls)} result page(s):\n{_heads(good)}"
 
     return keep_results
+
+
+# One search step and a fast first pass over its rows. find_messages does what took the worker three to five steps
+# (type, submit, page through the results). Then Clef, the hosted decision model, says for every row at once
+# whether it is the wanted record (about a second for the whole list, however long), and the rows it is sure of
+# are opened and read at once. Clef only ever adds: the worker still sees every row and keeps what Clef left out,
+# and every kept message is read and checked against the reference, sender and date as before. Without Clef (not
+# configured, slow, failed, or AGENT_CLEF_ROWS=0) the tool returns the rows and nothing else changes.
+ROW_FILTER = os.environ.get("AGENT_CLEF_ROWS", "1") != "0"
+ROW_LIKELY = 0.5  # Clef's probability from which a row is opened without waiting for the worker
+ROW_FILTER_SECONDS = 4.0  # Clef answers in about a second; a call slower than this is not waited for
+ROW_FILTER_ROWS = 40  # rows asked about in one call
+
+
+async def likely_rows(rows: list[str], kind: Kind, reference: str) -> list[float] | None:
+    """Clef's probability for each result row that it is this record for exactly this reference, from one call;
+    None when there is no answer in time."""
+    if not ROW_FILTER or not rows or not os.environ.get("CLEF_BASE_URL"):
+        return None
+    ask = (f"Is this result row a message that is this record for tender reference {reference}: {kind.what} "
+           f"A reference with any extra prefix or suffix is another tender, and so is another topic. Row: ")
+    questions = {f"r{i}": {"type": "noul", "instructions": ask + row[:300]} for i, row in enumerate(rows)}
+    try:
+        answers = await asyncio.wait_for(
+            clef.decide({"tender_reference": reference, "record": kind.subject}, questions, retries=0),
+            ROW_FILTER_SECONDS)
+        return None if answers is None else [float(answers[f"r{i}"]["noul"]) for i in range(len(rows))]
+    except Exception:
+        return None
+
+
+def row_link(row, page_url: str, host: str) -> str | None:
+    """The address a result row opens: its link on this website, and of several the one with the longest text
+    (a record's title; the controls beside it are short). None for a row that is not a link."""
+    links = [((link.get("text") or "").strip(), urljoin(page_url, link["href"])) for link in row.links
+             if link.get("href")]
+    links = [(text, url) for text, url in links if urlparse(url).netloc == host]
+    return max(links, key=lambda item: len(item[0]))[1] if links else None
+
+
+def find_tool(kept: list[str], kind: Kind, reference: str):
+    """A tool that runs one search of the model's choosing to its last result page and keeps the rows Clef is
+    sure of."""
+
+    async def find_messages(ctx: RunContext[Deps], field_ref: str, query: str, submit_ref: str = "") -> str:
+        """Search in one step: type `query` into the search field `field_ref` (a textbox ref from the current
+        view), submit it (Enter, or click `submit_ref` if the form has a button), page through every result page
+        and get all hit rows with their links. Rows that a fast check finds to be the wanted record are opened
+        and kept for reading at once; the result says which. You choose the field, the words and the folder
+        (open another folder yourself, then search again)."""
+        session: SiteSession = ctx.deps.session
+        listing, header = await site_tools.search_rows(session, field_ref, query, submit_ref or None)
+        if listing is None:
+            return header
+        rows = listing.rows[:ROW_FILTER_ROWS]
+        marks = await likely_rows([row.text for row in rows], kind, reference)
+        host = urlparse(session.site["url"]).netloc
+        done = getattr(kept, "urls", set())
+        urls: list[str] = []
+        for row, p in zip(rows, marks or []):
+            target = row_link(row, session.page.url, host) if p >= ROW_LIKELY else None
+            if target and target not in done and target not in urls:
+                urls.append(target)
+        urls = urls[:20]
+        views: list = []
+        if urls:
+            opening = getattr(kept, "opening", None)
+            if opening is not None:
+                opening.add(id(urls))  # opening messages is progress, though the tab's own view does not change
+            try:
+                views = await asyncio.gather(*(open_message(session, u) for u in urls))
+            finally:
+                if opening is not None:
+                    opening.discard(id(urls))
+        good = [v for v in views if v]
+        done.update(u for u, v in zip(urls, views) if v)
+        for view in good:
+            kept.append(view)
+            session.seen += "\n" + view
+        session.trace.event(session.name, "find_messages", query=query, rows=len(listing.rows), pages=listing.pages,
+                            marks=None if marks is None else [round(p, 2) for p in marks], kept=len(good))
+        text = site_tools.format_rows(listing, header)
+        if good:
+            return (f"{text}\nAlready kept for reading ({len(good)}), found to be the record by a fast check:\n"
+                    f"{_heads(good)}\nIf another row above is this record for exactly {reference}, call "
+                    "keep_results with its exact subject; do not keep these again.")
+        return (f"{text}\nNothing was kept yet: if rows above are this record for exactly {reference}, call "
+                "keep_results with their exact subjects.")
+
+    return find_messages
 
 
 def keep_open_tool(kept: list[str]):
@@ -472,6 +574,7 @@ class _Reading(list):
         self.reads: dict[str, asyncio.Task] = {}
         self.first: float | None = None  # when the first message was kept
         self.opening: set[int] = set()  # keep calls still opening their messages
+        self.urls: set[str] = set()  # addresses of the messages kept so far
 
     def append(self, view: str) -> None:
         super().append(view)
@@ -479,6 +582,311 @@ class _Reading(list):
             self.first = time.monotonic()
         if view not in self.reads:
             self.reads[view] = asyncio.create_task(read_message(view, self.kind, self.reference))
+
+
+# ---------------------------------------------------------------- the survey: one look at the mailbox for all kinds
+#
+# A mailbox is read like a person reads it: list what there is for this tender, once per folder, see from the
+# subjects which message is which record, and open those. Searching once per record kind instead meant nine workers
+# typing into the same search box of the same mailbox, each finding out the same things again, and going on to
+# search for records that were plainly not in a list they had in front of them (seen: seven searches of 150 s each,
+# twice, in a mailbox of fourteen messages). Here a model lists the tender's messages (it chooses the folders and
+# the search), a model says which row is which record, and the chosen messages are opened and read side by side.
+# A record kind the survey found nothing for is searched on its own afterwards, by the worker below, only if
+# something refers to it.
+
+SURVEY_SECONDS = 120.0  # listing the folders, at most; it takes five to eight steps
+SURVEY_STEPS = 24
+MESSAGE_SECONDS = 75.0  # one message opened and read; a page that hangs (seen: a decoy that never loads) is left
+MESSAGE_OPEN_SECONDS = 15.0  # one try to open a message page in the survey
+MESSAGE_TRIES = 2  # a page that never loads (seen: a decoy) holds the survey no longer than two tries
+SURVEY_ROWS = 200  # rows the survey keeps
+SURVEY_OPEN = 8  # messages opened at one time
+
+
+@dataclass
+class SurveyRow:
+    text: str
+    url: str  # the address the row opens, '' for a row that is not a link
+    where: str  # the list it was seen in (its page address)
+
+
+SURVEY_GOAL = """\
+List this mailbox's messages for tender {reference}, in every folder the mailbox has (for example inbox and
+archive). For each folder call list_messages once with the mailbox's search field and one query per topic: the
+reference {reference} together with each of these topic words: {topics}. A search combines its words with AND, and
+a search that is too broad is cut short or refused, so the reference alone is not enough; if the mailbox says how
+it wants to be searched, follow that. list_messages runs every query, pages each result list to its end and
+remembers all rows. For a folder the page does not show yet, give the folder's own link as open_ref: the tool
+clicks it first and then searches there (a folder menu that is only expanded has not changed the folder; if the
+folder links are hidden behind a menu, open the menu first). With no field and no queries the tool takes the list
+as the page shows it (for a folder without a search). Do not open messages: the rows are sorted into records
+afterwards. As soon as every folder is listed, return a one-line summary."""
+
+
+def _same_control(view: str, control: tuple[str, str] | None) -> str | None:
+    """The ref of the control with this kind and name in a newer view (refs change with every view)."""
+    if control is None:
+        return None
+    return next((ref for ref, kind, name in REF_LINE.findall(view) if (kind, name) == control), None)
+
+
+def list_tool(index: list[SurveyRow]):
+    """A tool that takes the message lists the model chose (searches of its choosing, or the folder as shown) to
+    their last pages and remembers the rows."""
+    idle = [0]  # calls in a row that added nothing
+    again = [0]  # calls in a row with nothing done on the page since the listing before
+    left: list[tuple[str, str] | None] = [None]  # the page as the last listing left it
+    searched: dict[tuple[str, str], tuple[str, ...]] = {}  # (result address, query) -> the rows it showed
+
+    def shown(session: SiteSession) -> tuple[str, str]:
+        return session.page.url, REF_TOKEN.sub("e", session.view or "")
+
+    async def list_messages(ctx: RunContext[Deps], field_ref: str = "", queries: list[str] | None = None,
+                            submit_ref: str = "", open_ref: str = "") -> str:
+        """List messages and remember every row. With `field_ref` and `queries`: type each query in turn into that
+        search field, submit it (Enter, or click `submit_ref` if the form has a button) and page its result list
+        to the end, so one call lists a folder for every topic. `open_ref`: a link or tab to click first, for a
+        folder the page does not show yet (the field and button are then found again by their names). With no
+        field and no queries: take the list the page shows. You choose the folder, the field and the queries."""
+        session: SiteSession = ctx.deps.session
+        host = urlparse(session.site["url"]).netloc
+        known = {row.url for row in index if row.url}
+        lines: list[str] = []
+        added = 0
+
+        def remember(listing, where: str) -> int:
+            new = 0
+            for row in listing.rows:
+                url = row_link(row, where, host) or ""
+                if (url and url in known) or len(index) >= SURVEY_ROWS:
+                    continue
+                if not url and any(r.text == row.text and not r.url for r in index):
+                    continue
+                index.append(SurveyRow(text=row.text[:400], url=url, where=where))
+                known.add(url)
+                new += 1
+            return new
+
+        if not open_ref.strip() and left[0] is not None and left[0] == shown(session):
+            # listing the page a listing just left finds the same rows: no search is sent for it
+            again[0] += 1
+            if again[0] >= 3:
+                raise Stuck("the same list was asked for again and again")
+            return ("Nothing was done on the page since the last listing: its rows are remembered, and listing it "
+                    "again finds nothing new. A mailbox keeps messages in more than one folder (older ones, for "
+                    "example, in an archive): open a folder that is not listed yet and list it the same way. If "
+                    "every folder is listed, return.")
+        asked = [q.strip() for q in (queries or []) if q and q.strip()][:16]
+        # the controls by kind and name, as the model saw them: their refs change once the page does
+        field, button = _control(session.view, field_ref.strip()), _control(session.view, submit_ref.strip())
+        if field_ref.strip() and asked and field is None:
+            return f"No control {field_ref} in the latest view; use the search field's ref from the latest view."
+        if open_ref.strip():
+            opened = await session.act("click", open_ref.strip(), site_tools._click)
+            if opened.startswith("No element") or opened.startswith("click "):
+                return f"{opened.splitlines()[0][:200]}\n\nThe page now:\n" + await session.look()
+        same = False
+        if field_ref.strip() and asked:
+            for n, query in enumerate(asked):
+                ref = _same_control(session.view, field)
+                if ref is None:
+                    lines.append(f"- {query!r}: the search field is no longer on the page; not searched")
+                    break
+                listing, header = await site_tools.search_rows(session, ref, query,
+                                                               _same_control(session.view, button))
+                if listing is None:
+                    lines.append(f"- {query!r}: {header.splitlines()[0][:160]}")
+                    continue
+                shows = tuple(row.text for row in listing.rows)
+                if n == 0 and shows and searched.get((session.page.url, query)) == shows:
+                    same = True  # the list searched before: the folder did not change, the other queries are spared
+                    break
+                searched[(session.page.url, query)] = shows
+                new = remember(listing, session.page.url)
+                added += new
+                notes = ("; " + "; ".join(listing.notes)[:200]) if listing.notes else ""
+                lines.append(f"- {query!r}: {len(listing.rows)} rows, {new} new{notes}")
+        else:
+            listing = await site_tools.paginate(session)
+            added = remember(listing, session.page.url)
+            lines.append(f"- the list as shown: {len(listing.rows)} rows, {added} new")
+        if same:
+            again[0] += 1
+            session.trace.event(session.name, "list_messages", queries=asked[:1], added=0, total=len(index),
+                                results=["the list searched before: stopped"])
+            if again[0] >= 3:
+                raise Stuck("the same list was asked for again and again")
+            view = await session.look()
+            left[0] = shown(session)
+            return ("The page still shows the list that was searched before (same address, same rows): the folder "
+                    "has not changed, so nothing was searched again. A folder menu that is only expanded does not "
+                    "change the folder: give the other folder's own link as open_ref, so that its list shows "
+                    "before the searches run. If every folder is listed, return.\n\nThe page now:\n" + view)
+        again[0] = 0
+        idle[0] = 0 if added else idle[0] + 1
+        session.trace.event(session.name, "list_messages", queries=asked, added=added, total=len(index),
+                            results=lines[:20])
+        if idle[0] >= 3:  # three lists in a row with nothing new: the survey has what there is
+            raise Stuck("the mailbox lists nothing new any more")
+        view = await session.look()  # the page as it is now: its refs are the ones to use for the next folder
+        left[0] = shown(session)
+        return (f"Listed at {session.page.url}:\n" + "\n".join(lines)
+                + f"\nRemembered {added} new row(s), {len(index)} in all so far."
+                + (" Nothing new here." if not added else "")
+                + "\nThese searches are done, also the one the page shows now. If a folder is not listed yet, "
+                "list it the same way with its link as open_ref; otherwise return.\n\nThe page now:\n" + view)
+
+    return list_messages
+
+
+class Assigned(BaseModel):
+    kind: str = Field(description="The record kind's name, exactly as given")
+    rows: list[int] = Field(description="Numbers of the rows that are this record; [] if none is")
+
+
+class Assignment(BaseModel):
+    kinds: list[Assigned]
+
+
+ASSIGN_INSTRUCTIONS = """\
+You get the message list of a company mailbox for one tender (each row with its number and what the list shows:
+sender, subject, date) and the record kinds that are looked for. For each kind, name the rows that are that record
+for exactly the tender reference given.
+- The reference must be exactly this one: with any extra prefix, suffix or digit it is another tender.
+- A record's subject names its topic. Older and newer versions of a record share a subject: name all of them.
+  Do not choose between them and do not judge a row by its date or sender: which version counts is decided after
+  the messages are read, and that needs every version.
+- A request for a record, a reply, a notice, a newsletter or a message on another topic is not the record.
+- A row belongs to one kind at most. When you cannot tell from the row whether it is the record, include it: it
+  is opened and checked afterwards.
+Use only row numbers from the list, and only the kind names given."""
+
+
+async def assign_rows(rows: list[SurveyRow], kinds: list[Kind], reference: str) -> dict[str, list[SurveyRow]]:
+    """Which rows are which record kind, by one model call over the whole list."""
+    if not rows or not kinds:
+        return {}
+    names = {kind.name for kind in kinds}
+    agent = Agent(reader_model(), output_type=Assignment, instructions=ASSIGN_INSTRUCTIONS,
+                  model_settings=llm.settings(thinking=False, timeout=READ_TIMEOUT), retries=3)
+
+    asked_again = [False]
+
+    @agent.output_validator
+    def _known(out: Assignment) -> Assignment:
+        wrong = sorted({a.kind for a in out.kinds} - names)
+        beyond = sorted({n for a in out.kinds for n in a.rows if not 1 <= n <= len(rows)})
+        if wrong or beyond:
+            raise ModelRetry(f"Unknown kind names {wrong} or row numbers {beyond}: use only the kinds "
+                             f"{sorted(names)} and rows 1 to {len(rows)}.")
+        if not asked_again[0]:  # one question back, the answer to it stands
+            named = {n for a in out.kinds for n in a.rows}
+            subjects = [kind.subject.casefold() for kind in kinds if kind.subject.strip()]
+            left = [i for i, row in enumerate(rows, 1) if i not in named and reference.casefold() in row.text.casefold()
+                    and any(subject in row.text.casefold() for subject in subjects)]
+            if left:
+                asked_again[0] = True
+                raise ModelRetry(f"Rows {left} show this reference and a record's subject but are in no kind. Every "
+                                 "version of a record is needed, whatever its date or sender. Add them to their "
+                                 "kinds; leave out only rows of another tender reference or of another topic.")
+        return out
+
+    listing = "\n".join(f"{i}. {row.text}" for i, row in enumerate(rows, 1))
+    wanted = "\n".join(f"- {kind.name}: {kind.what} (subject or topic {kind.subject!r}, sender {kind.sender!r})"
+                       for kind in kinds)
+    out = (await agent.run(f"Tender reference: {reference}\n\nRecord kinds:\n{wanted}\n\nRows:\n{listing}")).output
+    assigned: dict[str, list[SurveyRow]] = {}
+    for a in out.kinds:
+        for n in dict.fromkeys(a.rows):
+            assigned.setdefault(a.kind, []).append(rows[n - 1])
+    return assigned
+
+
+async def survey(session: SiteSession, kinds: list[Kind], reference: str, deadline: float | None = None,
+                 on_assigned=None) -> dict[str, KindResult]:
+    """
+    The mailbox read once for every record kind: record kind name -> what was found for it (kinds without a
+    message are left out, for the caller to search on their own if something refers to them). `on_assigned(names)`
+    is called as soon as the rows are sorted, with the kinds that have a row, so that the others need not wait for
+    the reading. Returns READ_RESERVE before `deadline` at the latest, with what was read by then.
+    """
+    started = time.monotonic()
+    until = started + SURVEY_SECONDS if deadline is None else min(started + SURVEY_SECONDS, deadline - READ_RESERVE)
+    index: list[SurveyRow] = []
+    await _usable(session)
+    topics = ", ".join(dict.fromkeys(repr(kind.subject) for kind in kinds if kind.subject))
+    summary, _ = await run_worker(session, SURVEY_GOAL.format(reference=reference, topics=topics), Summary,
+                                  deadline=until,
+                                  max_steps=SURVEY_STEPS, thinking=False, grounded=False, notes=False,
+                                  loop_guard=True, tools=(list_tool(index),))
+    # complete: the worker said every folder is listed (or was ended listing one a third time); a survey that ran
+    # out of steps or time may have missed a folder, and then nothing may be concluded from a record's absence
+    complete = summary is not None or getattr(session, "stopped", "") == "Stuck"
+    session.trace.event(session.name, "mail_survey", rows=len(index), seconds=round(time.monotonic() - started, 1),
+                        complete=complete, lists=sorted({row.where for row in index})[:12])
+    try:
+        assigned = await assign_rows(index, kinds, reference)
+    except Exception as error:
+        session.trace.event(session.name, "mail_assign_failed", error=f"{type(error).__name__}: {str(error)[:160]}")
+        assigned = {}
+    by_name = {kind.name: kind for kind in kinds}
+    assigned = {name: [row for row in rows if row.url] for name, rows in assigned.items() if name in by_name}
+    assigned = {name: rows for name, rows in assigned.items() if rows}
+    if on_assigned is not None:
+        on_assigned(set(assigned), complete)
+    session.trace.event(session.name, "mail_assigned",
+                        **{name: [row.text[:80] for row in rows] for name, rows in assigned.items() if rows})
+    gate = asyncio.Semaphore(SURVEY_OPEN)
+
+    async def read(kind: Kind, row: SurveyRow) -> tuple[str, MailRecord | None] | None:
+        if not row.url:
+            return None  # a row that is not a link: left to the kind's own search, which can open it
+        view = None
+        async with gate:
+            for attempt in range(MESSAGE_TRIES):
+                try:  # a message page opens in a second or two; one that hangs is opened again in a new tab
+                    view = await asyncio.wait_for(open_message(session, row.url, tries=1), MESSAGE_OPEN_SECONDS)
+                except asyncio.TimeoutError:
+                    session.trace.event(session.name, "mail_message_reopened", record_kind=kind.name,
+                                        attempt=attempt + 1, url=row.url[:120])
+                    continue
+                if view:
+                    break
+        if not view:
+            return None
+        return view, await read_message(view, kind, reference)
+
+    async def bounded(kind: Kind, row: SurveyRow):
+        try:  # one message that hangs must not hold up the others: its kind is then searched on its own
+            return await asyncio.wait_for(read(kind, row), MESSAGE_SECONDS)
+        except asyncio.TimeoutError:
+            session.trace.event(session.name, "mail_message_slow", record_kind=kind.name, url=row.url[:120])
+            return None
+
+    jobs = {(name, i): asyncio.create_task(bounded(by_name[name], row))
+            for name, rows in assigned.items() for i, row in enumerate(rows)}
+    if jobs:
+        limit = None if deadline is None else max(1.0, deadline - 5 - time.monotonic())
+        await asyncio.wait(jobs.values(), timeout=limit)
+    results: dict[str, KindResult] = {}
+    for (name, _), job in jobs.items():
+        if not job.done():
+            job.cancel()
+            continue
+        if job.cancelled() or job.exception() is not None or job.result() is None:
+            continue
+        view, record = job.result()
+        result = results.setdefault(name, KindResult(by_name[name]))
+        result.kept.append(view)
+        if record is not None:
+            result.records.append(record)
+    for name, result in results.items():
+        result.seconds = round(time.monotonic() - started, 1)
+        session.trace.event(session.name, "mail_kind", record_kind=name, seconds=result.seconds,
+                            kept=len(result.kept), read=len(result.records), stopped=False, by="survey",
+                            records=[r.model_dump(mode="json") for r in result.records])
+    return results
 
 
 def kind_budget(now: float, deadline: float | None) -> float:
@@ -512,7 +920,8 @@ async def _search(session: SiteSession, kind: Kind, reference: str, kept: _Readi
     worker = asyncio.create_task(run_worker(
         session, _goal(kind, reference, again), Summary, deadline=until, max_steps=20, thinking=True,
         grounded=False, notes=False,  # kept messages are read for the worker: no note tool, no note steps
-        tools=(paging_tool(Collected()), keep_messages_tool(kept), keep_open_tool(kept))))
+        tools=(find_tool(kept, kind, reference), paging_tool(Collected()), keep_messages_tool(kept),
+               keep_open_tool(kept))))
     stalled, ended = False, False
     progress, moved = (session.stamp, len(kept)), time.monotonic()
     try:
@@ -673,12 +1082,18 @@ def _aware(value: datetime) -> datetime:
 
 
 def sender_ok(record: MailRecord, kind: Kind, domain: str) -> bool:
-    """Rule 21: the sender the brief authorises, in the form the brief states it."""
-    address = _norm(record.sender)
+    """Rule 21: the sender the brief authorises, in the form the brief states it. A brief may write the sender as
+    a name with the address ("Name <address>"): then the address decides, whatever form the plan called it (on
+    one world that spelling made every approval look unauthorised, and a 5 % discount went in as 0)."""
+    # a page, too, may show the sender as "Name <address>": the address in it is the sender's address
+    sent = {_norm(a) for a in EMAIL.findall(record.sender)} or {_norm(record.sender)}
+    stated = {_norm(a) for a in EMAIL.findall(kind.sender)}
+    if stated:
+        return bool(sent & stated)
     if kind.sender_form == "local_part_at_bidder_domain":
-        return bool(domain) and address == _norm(f"{kind.sender}@{domain}")
+        return bool(domain) and _norm(f"{kind.sender}@{domain}") in sent
     if kind.sender_form == "address":
-        return address == _norm(kind.sender)
+        return _norm(kind.sender) in sent
     return _norm(kind.sender) in _norm(f"{record.sender_name} {record.sender}")
 
 
@@ -825,6 +1240,9 @@ def resolve_mail(results: list[KindResult], reference: str, domain: str, scenari
         kind = res.kind
         facts.seconds[kind.name] = res.seconds
         valid = valid_records(res.records, reference, kind, domain, scenario)
+        if res.records and not valid:  # read, and all set aside: said, so that a wrong check shows in the run
+            facts.problems.append(f"{kind.name}: {len(res.records)} message(s) read, none counts (other reference, "
+                                  f"sender not {kind.sender!r}, later than the scenario date, or no record)")
         try:
             used = _apply(facts, kind, valid)
         except ParseError as error:

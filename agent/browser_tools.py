@@ -30,6 +30,8 @@ MAX_VIEW = 14000  # characters of a page shown at once; read_more pages through 
 ATTEMPT_SECONDS = (45, 60, 90, 120)  # budgets of successive attempts (the last repeats)
 START_SECONDS = float(os.environ.get("SESSION_START_SECONDS", "120"))  # no attempt runs longer than this
 RACE_AFTER = 15  # an attempt without a usable page this long races a tab in a fresh context against its own
+RACE_GRACE = 10  # an attempt ends by itself at its budget; one still running this long after it hangs in a browser call
+TAB_SECONDS = 20  # an empty tab opens in milliseconds; a browser call for one that takes this long never returns
 STUCK_SECONDS = 20  # a loaded page that answers no script call this long is dead: its tab is given up
 PROBE_SECONDS = 5  # one check whether the page answers a script call
 HELPER_SECONDS = 15  # one settle helper (sign-in, cookies, ...) on one page
@@ -52,6 +54,7 @@ STATE_WINDOW = int(os.environ.get("AGENT_LOOP_WINDOW", "10"))
 STATE_REPEATS = int(os.environ.get("AGENT_LOOP_REPEATS", "3"))
 LOOP_STOP = int(os.environ.get("AGENT_LOOP_STOP", "3"))
 REF_TOKEN = re.compile(r"\be\d+\b")
+NO_VIEW = ("(the page does not respond", "(page error")  # how look() reports a page it could not read
 
 
 class Stuck(Exception):
@@ -134,6 +137,15 @@ def _budget(attempt: int) -> float:
     return min(START_SECONDS, ATTEMPT_SECONDS[min(attempt, len(ATTEMPT_SECONDS)) - 1])
 
 
+async def _browser_call(call):
+    """Await a browser call that returns at once when the browser is well (a new tab, a script to install): one
+    that has not returned after TAB_SECONDS is given up, so that its caller can try another tab."""
+    try:
+        return await asyncio.wait_for(call, TAB_SECONDS)
+    except asyncio.TimeoutError:
+        raise TimeoutError(f"the browser did not answer within {TAB_SECONDS} s") from None
+
+
 async def _close_context(context: BrowserContext | None) -> None:
     if context is None:
         return
@@ -169,6 +181,9 @@ class SiteSession:
     _start_owner: object = None  # set while start() runs; its own looks (any task under it) must not wait
     _old_context: object = None
     _adopted_by: object = None  # a start contender whose tab won: the session that took its tab over
+    hung: bool = False  # the page answered no script call when it was last settled
+    stopped: str = ""  # why the latest worker run on this tab ended early ("" = it returned by itself)
+    disposable: bool = False  # a tab that only reads: once its page stops answering, a new tab opens the address again
     guard: object = None  # optional: (action kind, current view) -> a hint returned instead of acting, or None
     states: list[str] = field(default_factory=list)  # page-state signatures of this worker run (loop guard)
     loop_hits: int = 0
@@ -293,9 +308,12 @@ class SiteSession:
         raced_at = time.monotonic() + RACE_AFTER
         try:
             while tasks:
-                timeout = (None if racer_context is not None or raced_at == float("inf")
-                           else max(0.0, raced_at - time.monotonic()))
-                done, _ = await asyncio.wait(tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+                # with no second tab to come, the tabs are waited on until their budget is over; a browser call that
+                # never returns (seen: a new tab in a context whose requests hang) must not hold the start beyond it
+                last = racer_context is not None or raced_at == float("inf")
+                wait_until = end + RACE_GRACE if last else raced_at
+                done, _ = await asyncio.wait(tasks, timeout=max(0.0, wait_until - time.monotonic()),
+                                             return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     contender = tasks.pop(task)
                     if task.exception() is None:
@@ -310,6 +328,9 @@ class SiteSession:
                         await contender._close_pages()
                 if done:
                     continue
+                if last:
+                    error = error or TimeoutError(f"no tab answered {RACE_GRACE} s after the attempt's time was up")
+                    break
                 if racer_context is None and end - time.monotonic() > MIN_ATTEMPT:
                     racer_context = await self._fresh_context(why="race")
                     if racer_context is not None:
@@ -368,9 +389,9 @@ class SiteSession:
         """One tab of a start attempt: navigate, then settle and look until the page shows, the browser's error
         page shows, the tab closes, its page stops answering script calls, or `end`."""
         if self.scripted is not self.context:
-            await self.context.add_init_script(AUTO_CLOSE_JS)
+            await _browser_call(self.context.add_init_script(AUTO_CLOSE_JS))
             self.scripted = self.context
-        page = await self.context.new_page()
+        page = await _browser_call(self.context.new_page())
         self._watch(page)
         try:
             await page.goto(self.site["url"], wait_until="domcontentloaded",
@@ -416,7 +437,7 @@ class SiteSession:
                 waiting("look")
                 view = ""
                 continue
-            if not self.view.strip() or self.view.startswith(("(the page does not respond", "(page error")):
+            if not self.view.strip() or self.view.startswith(NO_VIEW):
                 view = ""
                 waiting("render")
                 await asyncio.sleep(1.0)
@@ -495,14 +516,40 @@ class SiteSession:
             await self.settled.wait()
         if any(not page.is_closed() for page in self.pages):
             return
-        page = await self.context.new_page()
+        page = await _browser_call(self.context.new_page())
         self._watch(page)
         self.events.append("the tab was gone; opened the website again")
         self.trace.event(self.name, "helper", action="revive")
         await self._goto(self.site["url"])
 
     async def _goto(self, url: str) -> None:
-        """Open `url` in the tab and settle: at most GOTO_SECONDS plus SETTLE_SECONDS; slow ones are traced."""
+        """Open `url` in the tab and settle: at most GOTO_SECONDS plus SETTLE_SECONDS; slow ones are traced. A
+        `disposable` tab whose page then answers no script call is replaced by a new one that opens the address
+        once more: every further call on the old tab would only wait for its timeout."""
+        await self._navigate(url)
+        if self.hung and self.disposable and await self._replace_tab():
+            await self._navigate(url)
+
+    async def _replace_tab(self) -> bool:
+        """Open an empty tab in the same context (it keeps the sign-in) and close the session's other tabs; False
+        when the browser opens none."""
+        try:
+            page = await _browser_call(self.context.new_page())
+        except Exception as error:
+            self.trace.event(self.name, "helper_error", helper="new_tab", error=str(error)[:160])
+            return False
+        stale, self.pages = self.pages, []
+        self._watch(page)
+        for old in stale:  # closing a tab that stopped answering may not return either
+            try:
+                await asyncio.wait_for(old.close(), 5)
+            except Exception:
+                pass
+        self.events.append("the tab stopped answering; opened the address again in a new tab")
+        self.trace.event(self.name, "helper", action="new_tab", why="the page stopped answering")
+        return True
+
+    async def _navigate(self, url: str) -> None:
         began = time.monotonic()
         try:
             await self.page.goto(url, wait_until="domcontentloaded", timeout=GOTO_SECONDS * 1000)
@@ -532,22 +579,50 @@ class SiteSession:
 
     async def _settle(self) -> None:
         page = self.page
+        self.hung = False
         for _ in range(6):
+            at = time.monotonic()
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                at = self._waited("load", at)
                 await page.wait_for_load_state("networkidle", timeout=2500)
             except Exception:
                 pass
+            at = self._waited("idle", at)
             if not await self._wait_answer(page):  # its helpers would hang on every page call
+                self.hung = True
                 self.trace.event(self.name, "helper_error", helper="settle",
                                  error=f"the page answers no script call ({page.url[:80]})")
                 return
-            if (await self._safely(self._login, page) or await self._safely(self._cookies, page)
-                    or await self._safely(self._error_page, page) or await self._safely(self._human_check, page)):
+            at = self._waited("answer", at)
+            helped = (await self._safely(self._login, page) or await self._safely(self._cookies, page)
+                      or await self._safely(self._error_page, page) or await self._safely(self._human_check, page))
+            self._waited("helpers", at)
+            if helped:
                 page = self.page
                 continue
             break
         await self._collect_closed(page)
+
+    async def front(self) -> None:
+        """
+        Bring the tab to the front of its browser window before something is clicked in it. A browser paints a tab
+        that is behind another one about once a second, and a click first waits until its element has kept still
+        over painted frames: in sandbox runs the same click took 0.7 s in a front tab and 4 to 6 s behind another
+        (a bid position 4 s and 12 s). Fields and selects do not wait for frames. Never an error.
+        """
+        try:
+            await asyncio.wait_for(self.page.bring_to_front(), 3)
+        except Exception:
+            pass
+
+    def _waited(self, part: str, since: float) -> float:
+        """Count the time since `since` as waited for `part` (the run summary adds these up); returns now."""
+        now = time.monotonic()
+        count = getattr(self.trace, "waited", None)
+        if count is not None:
+            count(self.name, part, now - since)
+        return now
 
     async def _safely(self, helper, page: Page) -> bool:
         """A helper that fails (a slow page, a detached element) just did nothing; the model sees the page as is. A
@@ -682,6 +757,11 @@ class SiteSession:
                 notes.append(f"Note: you have arrived on this page {self.visits[page.url]} times; going back and "
                              f"forth between the same pages shows nothing new. Act on what this page offers (open "
                              f"an entry, its menu or its actions) or take another route.")
+        here, home = urlparse(page.url).netloc, urlparse(self.site.get("url", "")).netloc
+        if here and home and here != home and page.url.startswith("http"):
+            # a link led to one of the run's other websites: each has its own worker (one run signed in there too)
+            notes.append(f"Note: this page is on another website ({here}). Your website is {home}: go back to it "
+                         "and do not work on other websites.")
         if self.events:
             notes.append("Since your last action: " + "; ".join(self.events))
             self.events.clear()
@@ -723,12 +803,15 @@ class SiteSession:
                         + await self.look(brief=True))
             started = time.monotonic()
             before = (self.page.url, self.view)
+            if kind == "click":
+                await self.front()
             try:
                 await fn(element)
             except Exception as error:
                 first = str(error).splitlines()[0][:300]
                 self.trace.event(self.name, "action_error", action=kind, ref=ref, error=first)
                 return f"{kind} {ref} failed: {first}\n\n" + await self.look(brief=True)
+            self._waited("act", started)
             await asyncio.sleep(0.25)
             await self.settle()
             self.trace.event(self.name, "action", action=kind, ref=ref, seconds=round(time.monotonic() - started, 2))

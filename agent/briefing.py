@@ -11,10 +11,13 @@ from pydantic_ai import Agent, ModelRetry
 
 
 class Briefing(BaseModel):
-    tender_reference: str = Field(description="The exact reference of the tender to bid on, as the brief writes it")
+    tender_reference: str = Field(description="The reference of the tender to bid on, exactly as the brief writes "
+                                              "it: the identifier alone, without the tender's title or any word "
+                                              "beside it")
     company_name: str = Field(description="The bidder company name to register with, exactly as the brief gives it")
     vat_id: str = Field(description="The bidder's VAT id (USt-IdNr.) as the brief gives it, or '' if none")
-    scenario_date: str = Field(description="The scenario date and time as the brief states it")
+    scenario_date: str = Field(description="The scenario date and time as the brief states it, or '' if the brief "
+                                           "states none")
     bid_site: str = Field(description="siteId of the website where the bid is entered and signed")
     mail_site: str = Field(description="siteId of the bidder's own webmail, where approvals and the signing TAN arrive")
     submission_steps: str = Field(description="The brief's instructions for entering, signing and submitting the "

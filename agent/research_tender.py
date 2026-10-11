@@ -145,6 +145,7 @@ class TenderFacts(BaseModel):
     qa: QaRecords
     seconds: float = 0.0
     problems: list[str] = Field(default_factory=list, description="Records that could not be read (left out)")
+    qa_complete: bool = Field(default=True, description="False when the bidder Q&A could not be read at all")
 
 
 # ---------------------------------------------------------------- the paging helper
@@ -459,17 +460,28 @@ def reader_settings():
 
 
 async def _read(output_type, instructions: str, text: str, prompt: str):
-    agent = Agent(reader_model(), output_type=output_type, instructions=instructions,
-                  model_settings=reader_settings(), retries=3)
+    """One grounded reading. A reading that fails with thinking on (the model can think its whole answer away) is
+    done once more without it: an unread page costs every fact on it."""
+    async def reading(settings):
+        agent = Agent(reader_model(), output_type=output_type, instructions=instructions, model_settings=settings,
+                      retries=3)
 
-    @agent.output_validator
-    def _grounded(records):
-        missing = ungrounded(records, text)
-        if missing:
-            raise ModelRetry(f"These values are not in the pages: {', '.join(missing[:12])}. Copy values exactly.")
-        return records
+        @agent.output_validator
+        def _grounded(records):
+            missing = ungrounded(records, text)
+            if missing:
+                raise ModelRetry(f"These values are not in the pages: {', '.join(missing[:12])}. Copy values "
+                                 "exactly.")
+            return records
 
-    return (await agent.run(f"{prompt}\n\n{text}")).output
+        return (await agent.run(f"{prompt}\n\n{text}")).output
+
+    try:
+        return await reading(reader_settings())
+    except Exception as error:
+        print(f"[tender] a reading failed ({type(error).__name__}: {str(error)[:120]}); once more without thinking",
+              flush=True)
+        return await reading(llm.settings(thinking=False, timeout=READER_TIMEOUT))
 
 
 async def read_positions(text: str, reference: str) -> TenderPositions:
@@ -553,11 +565,15 @@ async def research_tender(session: SiteSession, reference: str, scenario: dateti
             qa = await qa_task
         except Exception as error:
             session.trace.event(session.name, "tender_qa_failed", error=f"{type(error).__name__}: {error}"[:200])
-            qa = QaRecords()
+            qa = None
     finally:
         if not qa_task.done():
             qa_task.cancel()
-    facts = resolve_tender(positions.positions, qa, scenario, fmt)
+    facts = resolve_tender(positions.positions, qa or QaRecords(), scenario, fmt)
+    if qa is None:  # said, never silent: every quantity, key and amendment the Q&A holds is missing below
+        facts.qa_complete = False
+        facts.problems.append("the bidder Q&A could not be read: quantities are the tender's own, and no key, "
+                              "withdrawal or amendment from it is applied")
     facts.seconds = round(time.monotonic() - started, 1)
     session.trace.event(session.name, "tender_facts", seconds=facts.seconds,
                         positions=[p.model_dump(mode="json") for p in facts.positions], problems=facts.problems)

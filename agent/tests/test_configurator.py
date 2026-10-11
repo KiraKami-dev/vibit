@@ -163,6 +163,9 @@ class FillPosition(unittest.TestCase):
             async def settle(self):
                 pass
 
+            async def front(self):
+                pass
+
         async def run():
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(headless=True)

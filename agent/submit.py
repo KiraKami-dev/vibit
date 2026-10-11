@@ -29,7 +29,15 @@ from worker import run_worker
 
 ADDRESS_WAIT = 15  # seconds the bid worker waits for the contact address before it starts without it
 SIGNING_RESERVE = 180  # seconds kept for the review, the TAN round trip and submitting (seen: 25-30 s, 173 s)
+# A page that takes no click or choice in time is still busy with the action before it (the website holds its
+# answer: seen for 30 to 150 s), which is not a form that cannot be filled. Three such timeouts within 14 s once
+# cost a position with all its values known. The position is tried again while the page gets this share of the time
+# the form had left when it first happened; the share is spent once for the whole form, so a control that never
+# takes its action costs it once and is then left to the model as before.
+BUSY_SHARE = 0.5
+BUSY_PAUSE = 2.0  # seconds between two tries (each try waits for the page on its own, too)
 LAST_CHANCE = 45  # seconds a final sign-only pass needs at least
+LAST_PASSES = 4  # such passes at most, each a few steps, while the bid is not in and time is left
 # AGENT_FILL_IN=0 leaves out fill_in(), the several-actions-per-step form tool
 # One configure_position() call goes on with the bid's following positions as long as the form shows them, so the
 # model is asked for the mapping once and then only where a page needs it (measured before: a model call of 3 to
@@ -56,6 +64,9 @@ class SubmissionResult(BaseModel):
     submitted: bool = Field(description="True only when the website confirmed the bid as submitted")
     confirmation: str = Field(description="The website's confirmation or error text, word for word")
     omitted_positions: list[str] = Field(description="Position numbers the summary lists as omitted")
+
+
+TAN_STEPS = 16  # model steps of one TAN lookup
 
 
 class Mailbox:
@@ -93,7 +104,7 @@ class Mailbox:
             async with self.lock:
                 async with self.session.lock:
                     await self.session.revive()
-                    await self.session._goto(self.session.page.url)
+                    await self.session._goto(self.session.site["url"])
             self.session.trace.event(self.session.name, "mailbox_warm", seconds=round(time.monotonic() - started, 1))
         except Exception as error:  # the TAN lookup does the same again and copes with a tab that is down
             self.session.trace.event(self.session.name, "mailbox_warm", error=f"{type(error).__name__}: {str(error)[:160]}")
@@ -128,16 +139,22 @@ class Mailbox:
 
     async def _tan(self, older: str, said: str, answer: str) -> SigningTan | None:
         async with self.lock:
-            async with self.session.lock:  # the list the tab shows predates the request: load it again
+            # the list the tab shows predates the request, and the research may have left the tab on a search, a
+            # message or another folder: open the mailbox as it starts, where new messages are listed
+            async with self.session.lock:
                 await self.session.revive()
-                await self.session._goto(self.session.page.url)
+                await self.session._goto(self.session.site["url"])
             found, _ = await run_worker(
                 self.session, f"A new signing TAN for tender {self.briefing.tender_reference} was just requested."
                 f"{said} Open the newest signing TAN message for exactly this tender reference (the highest "
                 "request number; new TAN messages are usually listed without a search; reload the list once "
                 "if it is not there yet), copy the TAN from its text and return it at once. If a preview pane "
                 f"stays empty, open the message's own page through its link.{older}",
-                SigningTan, context=answer, deadline=self.deadline, max_steps=10, notes=False)
+                # the lookup takes 6 to 8 steps when the message is where the model looks first; with 10 a single
+                # detour ended it, and the bid form had to request another TAN. A model that pages back and forth
+                # is told so (loop_guard) instead of running out of steps.
+                SigningTan, context=answer, deadline=self.deadline, max_steps=TAN_STEPS, notes=False,
+                loop_guard=True)
         if found:
             self.last_tan = found.tan
         return found
@@ -185,6 +202,8 @@ async def fill_in(ctx: RunContext[Deps], actions: list[FormAction]) -> str:
         return f"{hint}\n\n" + await session.look()
     async with session.lock:
         page, url, windows = session.page, session.page.url, len(session.pages)
+        if any(step.action == "click" for step in actions):
+            await session.front()
         for step in actions:
             element = await locate(page, step.ref)
             if element is None:
@@ -220,6 +239,7 @@ class PositionDesk:
         self.entries, self.deadline = entries, deadline
         self.plan = FillPlan()
         self.failures: dict[str, int] = {}
+        self.busy_until: float | None = None  # until when a busy page is waited for (set when one first shows)
         self.entered: set[str] = set()
         self.choices: dict[str, dict[str, str]] = {}
         self.synonyms: dict[tuple[str, str], str] = {}  # (control label, wanted value) -> the option the model named
@@ -232,6 +252,13 @@ class PositionDesk:
     def tools(self) -> tuple:
         return ((self.configure_position, self.net_total, self.position_values, self.position_entered)
                 if self.entries else ())
+
+    def patient(self) -> bool:
+        """Whether a page that took no action in time is still waited for (see BUSY_SHARE)."""
+        now = time.monotonic()
+        if self.busy_until is None:
+            self.busy_until = now + max(0.0, self.deadline - SIGNING_RESERVE - now) * BUSY_SHARE
+        return now < self.busy_until
 
     async def position_values(self, position: str) -> str:
         """
@@ -360,6 +387,7 @@ class PositionDesk:
                                       "that takes such a value (the mapping you gave stays); leave out fields that "
                                       "match none.")
         saved_now: list[str] = []  # the positions this call entered and saved before the one it ends on
+        waiting: float | None = None  # since when this call has waited for a busy page
         async with session.lock:
             while True:
                 log: list[str] = []
@@ -367,6 +395,13 @@ class PositionDesk:
                     error = await fill_position(session, entry, plan, log, self.picks(position, entry, choices))
                 except Exception as exc:  # a slow or changed page: the model decides to retry or omit
                     error = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
+                    if type(exc).__name__ == "TimeoutError" and self.patient():  # busy, not wrongly mapped
+                        if waiting is None:
+                            waiting = time.monotonic()
+                            session.trace.event(session.name, "position_wait", position=position, error=error,
+                                                seconds_left=round(self.busy_until - waiting))
+                        await asyncio.sleep(BUSY_PAUSE)
+                        continue
                 moved, saved = "", False
                 if not error and self.next_button:  # the model named the button; clicking it is the mechanical part
                     view = await session.look()
@@ -376,6 +411,7 @@ class PositionDesk:
                         moved = f" Could not save it: {why}; click the form's next/continue button yourself."
                     else:
                         try:  # e.g. a banner over the button: the model clicks it itself, the bid goes on
+                            await session.front()
                             await target.click(timeout=5000)
                             await session.settle()
                             moved, saved = (f" Saved with {self.next_button!r}; the page below is the form's next "
@@ -384,7 +420,9 @@ class PositionDesk:
                             moved = (f" Could not save it ({type(exc).__name__}: {str(exc).splitlines()[0][:120]}); "
                                      "click the form's next/continue button yourself.")
                 session.trace.event(session.name, "configure_position", position=position, done=log, error=error,
-                                    moved=moved, after=len(saved_now))
+                                    moved=moved, after=len(saved_now),
+                                    waited=round(time.monotonic() - waiting) if waiting is not None else 0)
+                waiting = None
                 view = await session.look()
                 if error:
                     break
@@ -501,6 +539,15 @@ class PositionDesk:
         return f"{german(self.total(dropped))} (positions {', '.join(sorted(self.entered - dropped)) or 'none'})"
 
 
+# A bid that is never submitted counts for nothing, whatever was read. On a form without any option to leave a
+# position out, the worker told to omit every position went back and forth until its steps were used, three passes
+# in a row, and the run ended without an answer. This is the last resort for exactly that form.
+NO_OMIT = ("If the form offers no way to leave a position out and will not go on without entries, enter only what "
+           "it requires to go on: the first offered option of each required choice, the quantity the page states "
+           "for the position, and 0,00 where a price is required (the smallest amount it accepts if it refuses "
+           "that); then go on. A bid that is never submitted counts for nothing.")
+
+
 def _positions(answer: dict | None, desk: PositionDesk, filled: bool, prepared: bool = False) -> str:
     """
     The decision and position part of the requirements: before the form phase, how to enter them; after it, what
@@ -523,8 +570,8 @@ def _positions(answer: dict | None, desk: PositionDesk, filled: bool, prepared: 
     if not desk.entries:
         return head + ("- leave every position out with the form's option to omit a position (where the form shows "
                        "one position per step, omit each in turn); do not configure materials, prices or lead times, "
-                       f"and never use options that add positions;\n- discount {discount} and net total 0,00 (German "
-                       "number format);")
+                       f"and never use options that add positions. {NO_OMIT}\n- discount {discount} and net total "
+                       "0,00 (German number format; the form's own total if positions had to be entered);")
     names = sorted({key for entry in desk.entries.values() for key in entry} - {"position"})
     if desk.plan.fields and desk.next_button:
         mapping = ("- configure_position() already knows which control takes which value and the buttons to apply a "
@@ -552,7 +599,8 @@ def mapping_guide(names) -> str:
     """How to map a position page's controls to value names (configure_position and map_position_form)."""
     return f"""which control takes which value: map each control's label (as your view shows
   it) to one of these value names: {', '.join(names)}. Choices that open further choices (attributes of the
-  material) map to the attribute with the same meaning; the material/catalogue number control to material_number;
+  material) map to the attribute with the same meaning (a catalogue group to catalog_group); the control that takes
+  the material's own number to material_number;
   unit price, base price, surcharge, packaging and the bonus or rebate for the whole position to unit_price,
   base_unit_price, surcharge_per_unit, packaging_per_unit and rebate_total; lead time to lead_time_weeks. Leave out
   controls with no matching value. Also name the button that applies a choice so the next one opens, and the
@@ -706,19 +754,27 @@ Brief's submission steps:
                                      tools=(request_signing_tan,) if at_review else (*tools, request_signing_tan))
     except Exception as error:  # in a run, the platform closes the model token once the bid is in
         bid_session.trace.event(bid_session.name, "stopped", reason=f"{type(error).__name__}: {str(error)[:200]}")
-    if not (result and result.submitted) and deadline - time.monotonic() > LAST_CHANCE:
-        # the signing pass ran out of steps or got stuck: one short pass that only signs what is on screen
+    passes = 0
+    while (not (result and result.submitted) and deadline - time.monotonic() > LAST_CHANCE
+           and passes < LAST_PASSES):
+        # The signing pass ran out of steps or got stuck: a short pass that only signs what is on screen, again
+        # while there is time. One run stood on the signing page with 708 s left when its single pass had used
+        # its steps on the way there, and ended without an answer.
+        passes += 1
         last_goal = f"""Submit the bid for tender {briefing.tender_reference} now, as it stands. Do not change or
 re-check any entry and never go back to earlier steps. If the signing step is not on screen, go forward to it.
+{NO_OMIT}
 Request the signing TAN with request_signing_tan(ref of the TAN request button), enter the TAN it returns at once
 and submit bindingly. Return once the website confirms the submission (or shows why it failed)."""
-        bid_session.trace.event(bid_session.name, "last_chance", seconds_left=round(deadline - time.monotonic()))
+        bid_session.trace.event(bid_session.name, "last_chance", seconds_left=round(deadline - time.monotonic()),
+                                attempt=passes)
         try:
             result, _ = await run_worker(bid_session, last_goal, SubmissionResult, deadline=deadline, max_steps=15,
                                          notes=False, thinking=False, tools=(request_signing_tan,))
-        except Exception as error:
+        except Exception as error:  # e.g. the model token closed because the bid is in: nothing more to try
             bid_session.trace.event(bid_session.name, "stopped",
                                     reason=f"{type(error).__name__}: {str(error)[:200]}")
+            break
     for pending in (address, checking):
         if pending is not None and not pending.done():
             pending.cancel()

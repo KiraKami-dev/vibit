@@ -34,7 +34,7 @@ from briefing import Briefing
 from browser_tools import SiteSession
 from evidence import (EffectiveRequirement, Requirement, effective_requirement, merged_attributes, mismatches,
                       parse_date, to_position_input, wording_differences)
-from research import Erp, ErpResearch, SpecResult, research_spec, reselect, same_revision
+from research import MATERIAL_SECONDS, Erp, ErpResearch, SpecResult, research_spec, reselect, same_revision
 from tracing import Trace
 from verify import VERIFY_SECONDS, confirm_decision, verify_board, wording_check
 
@@ -55,7 +55,11 @@ FORM_SECONDS = float(os.environ.get("AGENT_FORM_SECONDS", "360"))  # the bid for
 # Mail is the longest chain of the research: nine record kinds of 40 to 190 s each took three rounds over 4 tabs
 # and two over 6 (three kinds waited 50 to 90 s for a free tab, and the research ended when they did). With a tab
 # per kind none waits. Each tab is one more sign-in on the webmail; MAIL_TABS lowers it again.
-MAIL_TABS = int(os.environ.get("MAIL_TABS", "9"))
+MAIL_SURVEY = os.environ.get("AGENT_MAIL_SURVEY", "1") != "0"  # read the mailbox once for all kinds first
+# With the survey one tab reads the mailbox for every kind (messages open in short-lived tabs of their own), and
+# the others only search what it did not find: four are enough, and each tab not opened is a sign-in the webmail
+# is spared (in one run five of nine failed to open).
+MAIL_TABS = int(os.environ.get("MAIL_TABS", "") or (4 if MAIL_SURVEY else 9))
 SPEC_STEPS_FAST = int(os.environ.get("SPEC_STEPS_FAST", "25"))  # navigation steps of the fast spec attempt
 SPEC_STEPS_THINKING = int(os.environ.get("SPEC_STEPS_THINKING", "35"))  # and of the careful one, run alongside
 SELECT_SECONDS = 75.0  # the final material choice (a model call per requirement, in parallel)
@@ -64,6 +68,16 @@ KIND_MIN_SECONDS = 120.0  # a mail record kind's search budget: at least this
 KIND_MAX_SECONDS = 240.0  # and at most this, from the mail time left per kind
 MAIL_RETRY_SECONDS = 90.0  # mail time a kind's second try needs
 MAIL_TAB_STAGGER = 4.0  # seconds between the mail tabs' sign-ins
+# A mail search that takes much longer than the others took sits on a tab that hangs (one run: eight kinds done
+# within 118 s, the ninth held the research until 275 s). A tab with nothing left to do then searches that kind
+# too, and the first result ends both. The measure is this run's own searches, not a number from another run.
+STRAGGLER = 1.5  # times the median of the finished searches
+STRAGGLER_AFTER = 3  # finished searches needed before one is called slow
+# Coverage is one more check on the research, and what fails it goes back to its worker instead of being left
+# out: a requirement whose search listed nothing (and was not told "no hits" by the website) or whose materials
+# were not all read is researched again, this often at most and only with time for a search and a material.
+COVERAGE_ROUNDS = 3
+COVERAGE_SECONDS = MATERIAL_SECONDS + 30
 MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "600"))  # from the orchestrator's start (v3: was 540)
 
 # v3: the specification is found by several attempts at once, each with its own strategy, in its own context of
@@ -315,7 +329,14 @@ class Orchestrator:
         self.research_deadline = deadline - SUBMIT_SECONDS
         self.board = Board(trace)
         self.reference = briefing.tender_reference
-        self.scenario = scenario_time(briefing.scenario_date)
+        try:
+            self.scenario = scenario_time(briefing.scenario_date)
+        except Exception:
+            # A brief that names no scenario date means today. Without this the whole research ended here, with
+            # no position, on the first world whose brief had no date (an eval's starter world, 2.3 s in).
+            self.scenario = datetime.now(UTC)
+            self.board.problem("briefing", f"no scenario date in the brief ({briefing.scenario_date!r}); "
+                                           "today is used")
         self.scenario_day: date = self.scenario.date()
         # calc compares two timestamps as instants and anything date-only by day: hand it the brief's own grain.
         self.scenario_stamp: date | datetime = (self.scenario if re.search(r"\d:\d\d", briefing.scenario_date)
@@ -553,7 +574,8 @@ class Orchestrator:
             return
         self.requirements[req.requirement_id] = req
         self.board.post("requirement", req.requirement_id, req.raw or req.model_dump(mode="json"),
-                        Source(site=site, url=url, quote=quote_for(seen, req.requirement_id, str(req.bore))),
+                        Source(site=site, url=url, quote=quote_for(seen, req.requirement_id,
+                                                                    str(req.bore if req.bore is not None else ""))),
                         "specification")
         if erp:
             erp.start(self.effective(req))
@@ -588,9 +610,11 @@ class Orchestrator:
         for req in spec.requirements:
             self._requirement_found(req, site, "", "", erp)
 
-    async def _post_materials(self, site: str) -> None:
+    async def _post_materials(self, site: str, only: set[str] | None = None) -> None:
         assert self.erp is not None
         for research in self.erp.requirements:
+            if only is not None and research.requirement_id not in only:
+                continue
             for problem in research.problems:
                 self.board.problem("materials", f"{research.requirement_id}: {problem}")
             record = self.erp.materials.get(research.selected) if research.selected else None
@@ -623,7 +647,7 @@ class Orchestrator:
             if elsewhere:  # another mail site would be its own job (the plan names every website it needs)
                 board.problem("mails", f"planned on other websites, not searched here: {elsewhere}")
             self.trace.event("mails", "plan", kinds=[f"{k.name}: {k.subject} / {k.sender}" for k in self.mail_kinds])
-            await self._research_mail(self.mail_kinds, starts=starts)
+            await self._research_mail(self.mail_kinds, starts=starts, survey=True)
         except Exception as error:
             board.problem("mails", f"{type(error).__name__}: {str(error)[:200]}")
         finally:
@@ -672,10 +696,13 @@ class Orchestrator:
                     break
         return self.mailbox
 
-    async def _research_mail(self, kinds: list, deadline: float | None = None, starts: list | None = None) -> None:
+    async def _research_mail(self, kinds: list, deadline: float | None = None, starts: list | None = None,
+                             survey: bool = False) -> None:
         """
-        Search the record kinds over the mail tabs (one kind per tab at a time) until the mail deadline, then
-        resolve whatever records were read: a kind still open at the deadline is dropped, the rest go to calc.
+        Read the record kinds from the mailbox until the mail deadline, then resolve whatever records were read: a
+        kind still open at the deadline is dropped, the rest go to calc. With `survey`, the first tab that is up
+        reads the mailbox once for all kinds (research_mail.survey); only the kinds it found no message for are
+        then searched on their own, one kind per tab at a time, and only while something may refer to them.
         Results accumulate, so a rework of some kinds keeps the others. `starts` are tabs still signing in; each
         joins as soon as it is ready (a tab that never opens just leaves the work to the others).
         """
@@ -689,6 +716,108 @@ class Orchestrator:
         deadline = deadline or self.mail_deadline
 
         address: list[asyncio.Task] = []
+        surveyed = asyncio.Event()  # the survey has sorted the rows (or there is none): single searches may start
+        surveying: list[bool] = []
+        listed: list[bool] = []  # set once the survey has listed the mailbox and sorted its rows
+        if not (survey and MAIL_SURVEY and hasattr(research_mail, "survey")):
+            surveyed.set()
+        running: dict[str, list] = {}  # kind name -> [since, kind, the searches for it now running]
+        unneeded: set[str] = set()  # kinds no source refers to: not searched (on), and not counted as open
+        took: list[float] = []  # how long the searches that read a record took
+        helped: set[str] = set()
+
+        def straggler():
+            """The kind longest in search on one tab alone, once that is much longer than the others took."""
+            if len(took) < STRAGGLER_AFTER or deadline - time.monotonic() < MAIL_RETRY_SECONDS:
+                return None
+            slow = STRAGGLER * sorted(took)[len(took) // 2]
+            late = [(since, kind) for name, (since, kind, copies) in running.items()
+                    if name not in helped and name not in unneeded and len(copies) == 1
+                    and time.monotonic() - since > slow]
+            return min(late, key=lambda item: item[0])[1] if late else None
+
+        async def search(session: SiteSession, kind, tries: int, helping: bool = False) -> None:
+            budget = self._kind_seconds(deadline, queue.qsize())
+            options = {"seconds": budget} if "seconds" in KIND_OPTIONS else {}
+            copy = asyncio.ensure_future(research_mail.research_kind(session, kind, self.reference,
+                                                                     deadline=deadline, **options))
+            entry = running.setdefault(kind.name, [time.monotonic(), kind, []])
+            entry[2].append(copy)
+            try:
+                while not copy.done():
+                    await asyncio.wait({copy}, timeout=2.0)
+                    if not copy.done() and self.referred(kind.name) is False:
+                        unneeded.add(kind.name)  # nothing refers to this record: its search has no use
+                        self.trace.event(session.name, "mail_not_needed", record_kind=kind.name,
+                                         after=round(time.monotonic() - entry[0]))
+                        copy.cancel()
+                found = await copy
+            except asyncio.CancelledError:
+                if not copy.cancelled() or asyncio.current_task().cancelling():  # this tab itself was stopped
+                    copy.cancel()
+                    raise
+                return  # the same search on another tab read its record first, or nothing refers to the record
+            except Exception as error:  # one failed kind must not cost the others
+                self.board.problem("mails", f"{kind.name}: {type(error).__name__}: {str(error)[:160]}")
+                return
+            finally:
+                entry[2].remove(copy)
+                if not entry[2]:
+                    running.pop(kind.name, None)
+            if found.records:
+                took.append(found.seconds)
+                for other in entry[2]:  # the same search on another tab is no longer needed
+                    other.cancel()
+            earlier = self.mail_results.get(kind.name)
+            if earlier is not None:  # a second try adds to what the first one read
+                found.records = [*earlier.records, *found.records]
+                found.kept = [*earlier.kept, *found.kept]
+            self.mail_results[kind.name] = found
+            stopped = getattr(found, "stopped", None)
+            if stopped is None:  # out of its budget without reading a message
+                stopped = not found.records and found.seconds >= min(budget, getattr(research_mail, "KIND_SECONDS", budget)) - 5
+            if (stopped and not tries and not helping and not entry[2] and self.referred(kind.name) is not False
+                    and deadline - time.monotonic() > MAIL_RETRY_SECONDS):
+                # Out of its budget: once more at the end of the queue, from a fresh start on this tab.
+                self.board.problem("mails", f"{kind.name}: search stopped at its budget; tried once more")
+                queue.put_nowait((kind, 1))
+
+        async def look_once(session: SiteSession) -> None:
+            """The survey on this tab: afterwards only the kinds it found no message for wait in the queue."""
+            waiting: list = []
+            while not queue.empty():
+                waiting.append(queue.get_nowait())
+            with_rows: set[str] = set()
+
+            def sorted_out(found: set[str], complete: bool = True) -> None:  # the others need not wait for the reading
+                with_rows.update(found)
+                if complete:
+                    listed.append(True)
+                for kind, tries in waiting:
+                    if kind.name not in found:
+                        queue.put_nowait((kind, tries))
+                surveyed.set()
+
+            results: dict = {}
+            try:
+                results = await research_mail.survey(session, [kind for kind, _ in waiting], self.reference,
+                                                     deadline=deadline, on_assigned=sorted_out)
+            except Exception as error:  # the single searches do the work, as before
+                self.board.problem("mails", f"mailbox survey: {type(error).__name__}: {str(error)[:160]}")
+            finally:
+                if not surveyed.is_set():
+                    sorted_out(set(), complete=False)
+            for kind, tries in waiting:
+                found = results.get(kind.name)
+                if found is not None and found.records:
+                    earlier = self.mail_results.get(kind.name)
+                    if earlier is not None:
+                        found.records = [*earlier.records, *found.records]
+                        found.kept = [*earlier.kept, *found.kept]
+                    self.mail_results[kind.name] = found
+                    took.append(found.seconds)
+                elif kind.name in with_rows:
+                    queue.put_nowait((kind, tries))  # rows, but no record read from them: its own search
 
         async def tab(source) -> None:
             if isinstance(source, SiteSession):
@@ -701,29 +830,37 @@ class Orchestrator:
                 self.mail_sessions.append(session)
             if not address:  # the first open tab also looks up the mailbox address, alongside its searches
                 address.append(asyncio.create_task(self._mailbox()))
-            while not queue.empty() and time.monotonic() < deadline - 20:
-                kind, tries = queue.get_nowait()
-                try:
-                    budget = self._kind_seconds(deadline, queue.qsize())
-                    options = {"seconds": budget} if "seconds" in KIND_OPTIONS else {}
-                    found = await research_mail.research_kind(session, kind, self.reference, deadline=deadline,
-                                                               **options)
-                except Exception as error:  # one failed kind must not cost the others
-                    self.board.problem("mails", f"{kind.name}: {type(error).__name__}: {str(error)[:160]}")
+            if not surveyed.is_set() and not surveying:
+                surveying.append(True)
+                await look_once(session)
+            await surveyed.wait()
+            while time.monotonic() < deadline - 20:
+                if not queue.empty():
+                    kind, tries = queue.get_nowait()
+                    need = self.referred(kind.name)
+                    if need is False:
+                        unneeded.add(kind.name)
+                        self.trace.event(session.name, "mail_not_needed", record_kind=kind.name, after=0)
+                        continue
+                    if need is None and listed and self.awaited(kind.name) and kind.name not in self.mail_results:
+                        # The survey listed the tender's messages and none is this record. A search of its own
+                        # waits until something refers to the record: until then nobody knows it is needed at all.
+                        queue.put_nowait((kind, tries))
+                        await asyncio.sleep(1.0)
+                        continue
+                    await search(session, kind, tries)
                     continue
-                earlier = self.mail_results.get(kind.name)
-                if earlier is not None:  # a second try adds to what the first one read
-                    found.records = [*earlier.records, *found.records]
-                    found.kept = [*earlier.kept, *found.kept]
-                self.mail_results[kind.name] = found
-                stopped = getattr(found, "stopped", None)
-                if stopped is None:  # out of its budget without reading a message
-                    stopped = not found.records and found.seconds >= min(budget, getattr(research_mail, "KIND_SECONDS", budget)) - 5
-                if (stopped and not tries
-                        and deadline - time.monotonic() > MAIL_RETRY_SECONDS):
-                    # Out of its budget: once more at the end of the queue, from a fresh start on this tab.
-                    self.board.problem("mails", f"{kind.name}: search stopped at its budget; tried once more")
-                    queue.put_nowait((kind, 1))
+                slow = straggler()  # nothing waits: help a search that hangs on another tab
+                if slow is not None:
+                    helped.add(slow.name)
+                    self.trace.event(session.name, "mail_help", record_kind=slow.name,
+                                     running=round(time.monotonic() - running[slow.name][0]),
+                                     others_took=sorted(took))
+                    await search(session, slow, 1, helping=True)
+                    continue
+                if not running:
+                    break
+                await asyncio.sleep(1.0)
 
         tabs = [asyncio.create_task(tab(s)) for s in (starts or list(self.mail_sessions))]
         _, late = await asyncio.wait(tabs, timeout=max(1.0, deadline - time.monotonic()))
@@ -734,7 +871,7 @@ class Orchestrator:
                 start.cancel()
         if late:
             await asyncio.gather(*late, return_exceptions=True)
-        open_kinds = [k.name for k in kinds if k.name not in self.mail_results]
+        open_kinds = [k.name for k in kinds if k.name not in self.mail_results and k.name not in unneeded]
         if open_kinds:
             self.board.problem("mails", f"mail deadline: {open_kinds} not read; their fields stay blank")
         if not self.mail_sessions:
@@ -851,6 +988,58 @@ class Orchestrator:
         if reworked:
             await verify_board(self.board, self.rules, self.reference, self.briefing.scenario_date)
 
+    def uncovered(self) -> list[str]:
+        """The requirements whose ERP findings are not complete: no findings at all, a search that listed no
+        material without the website saying the group has none, or listed materials that were not all read."""
+        if self.erp is None:
+            return []
+        found = {r.requirement_id: r for r in self.erp.requirements}
+        missing = []
+        for rid in self.requirements:
+            research = found.get(rid)
+            if not getattr(self.requirements[rid], "catalog_group", "x").strip():
+                continue  # no catalogue group named: the ERP has nothing to be asked again
+            if research is None:
+                missing.append(rid)
+            elif not research.no_hits and (not research.inspected
+                                           or any(n not in self.erp.materials for n in research.inspected)):
+                missing.append(rid)
+        return missing
+
+    async def cover(self) -> None:
+        """Send the requirements that fail the coverage check back to the ERP (see COVERAGE_ROUNDS). Nothing
+        happens, and nothing is spent, when every requirement is covered."""
+        erp = self._erp
+        if erp is None or self.erp is None or not hasattr(erp, "so_far"):
+            return
+        sent: set[str] = set()
+        for attempt in range(1, COVERAGE_ROUNDS + 1):
+            missing = self.uncovered()
+            if not missing or self.left() < COVERAGE_SECONDS:
+                break
+            self.trace.event("coverage", "sent_back", round=attempt, requirements=missing,
+                             seconds_left=round(self.left()))
+            sent.update(missing)
+            for number, task in list(erp.materials.items()):  # a material that was not read is read afresh
+                if task.done() and (task.cancelled() or task.exception() is not None or task.result() is None):
+                    del erp.materials[number]
+            tasks = []
+            for rid in missing:
+                earlier = erp.tasks.pop(rid, None)
+                if earlier is not None and not earlier.done():
+                    earlier.cancel()
+                erp.partial.pop(rid, None)
+                tasks.append(erp.start(self.effective(self.requirements[rid])))
+            await asyncio.wait(tasks, timeout=max(1.0, self.left()))
+            for task in [*tasks, *erp.materials.values()]:  # nothing goes on browsing beside the bid form
+                if not task.done():
+                    task.cancel()
+            self.erp = erp.so_far()
+            await self._post_materials(erp.site["siteId"], only=set(missing))
+        if sent:
+            still = self.uncovered()
+            self.trace.event("coverage", "done", covered=sorted(sent - set(still)), still_missing=still)
+
     async def select_materials(self) -> None:
         """The final material choice, once amendments and reserves are on the board (reselect: no browsing)."""
         if self.erp is None or not self.requirements:
@@ -930,6 +1119,9 @@ class Orchestrator:
                 continue
             if material is not None:
                 self.attributes[p.position] = material_attributes(material)
+                group = getattr(self.requirements.get(req_id), "catalog_group", "") if req_id else ""
+                if group:  # a form may ask for the catalogue group before it offers the group's materials
+                    self.attributes[p.position]["catalog_group"] = group
             clause = by_position.get(p.position)
             self._unknown_clauses(p, clause, getattr(clauses, "setup_pool", None),
                                   getattr(clauses, "project_bonus", None))
@@ -987,6 +1179,48 @@ class Orchestrator:
                   "commitment_key": ("commitments", "commitments"),
                   "setup_pool_key": ("setup_pools", "setup_pools"),
                   "bonus_key": ("project_bonus", "project_bonuses")}
+
+    def referred(self, kind: str) -> bool | None:
+        """
+        Whether anything refers to a mail record of this kind: a key the tender's Q&A gave a position, a reserve
+        the specification asks for, an index or exchange-rate key on a material. None while the source that would
+        refer to it is not read to its end; False only once it is and names none. Kinds no key leads to (the
+        approval) are always wanted. A record nothing refers to cannot enter the calculation, so its search is
+        time without a result: one world had mail for the approval only, and seven other searches ran 150 s each,
+        twice.
+        """
+        fields = [field for field, (name, _) in self.REFERENCED.items() if name == kind]
+        if fields:
+            facts = self.tender_facts
+            positions = getattr(facts, "positions", None) or []
+            if any(getattr(p, field, None) for p in positions for field in fields):
+                return True
+            done = self.board.finished("position") and bool(positions) and getattr(facts, "qa_complete", True)
+            return False if done else None
+        if kind == "end_reserves":
+            if any(getattr(r, "reserve_key", None) or getattr(r, "stroke_is_usable", False)
+                   for r in self.requirements.values()):
+                return True
+            return False if self.board.finished("requirement") and self.requirements else None
+        if kind in ("metal_indices", "fx"):
+            records = list(self.erp.materials.values()) if self.erp else []
+            if kind == "metal_indices" and any(getattr(r, "metal_index", None) for r in records):
+                return True
+            if kind == "fx" and any(getattr(c, "fx_key", None) or str(getattr(c, "currency", "EUR")).upper() != "EUR"
+                                    for r in records for c in getattr(r, "conditions", None) or []):
+                return True
+            return False if self.board.finished("material") and records else None
+        return True
+
+    def awaited(self, kind: str) -> bool:
+        """Whether the source that would refer to a record of this kind is still being read (see `referred`)."""
+        if any(name == kind for name, _ in self.REFERENCED.values()):
+            return not self.board.finished("position")
+        if kind == "end_reserves":
+            return not self.board.finished("requirement")
+        if kind in ("metal_indices", "fx"):
+            return not self.board.finished("material")
+        return False
 
     def unresolved_references(self) -> dict[str, set[str]]:
         """
@@ -1154,6 +1388,7 @@ class Orchestrator:
         omitted; with none complete it is still a bid with reference, decision and discount."""
         await self.research()
         # The deadline guard after research: each step runs only in the time the bid form leaves it.
+        await self._bounded(self.cover(), "coverage")
         if not REWORK:
             if VERIFY_LOG:  # for the run log only: nothing waits for it
                 self.verifying = asyncio.create_task(self._bounded(self.verify(), "verify"))

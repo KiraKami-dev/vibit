@@ -22,7 +22,7 @@ MONEY_KEYS = {"unit_price", "base_unit_price", "surcharge_per_unit", "packaging_
 COUNT_KEYS = {"quantity", "lead_time_weeks"}
 REQUIRED_KEYS = ("position", "material_number", "quantity", "unit_price", "lead_time_weeks")
 # the material attributes the form's choices lead through (orchestrator.material_attributes gives these names)
-ATTRIBUTE_KEYS = ("bore", "stroke", "pressure", "mounting", "certification")
+ATTRIBUTE_KEYS = ("bore", "stroke", "pressure", "mounting", "certification", "catalog_group")
 # every value name a position control can take, known before any value is calculated
 VALUE_NAMES = (*REQUIRED_KEYS[1:], "base_unit_price", "surcharge_per_unit", "packaging_per_unit", "rebate_total",
                *ATTRIBUTE_KEYS)
@@ -230,6 +230,7 @@ async def _confirm(session, plan: FillPlan, view: str) -> tuple[str, str | None]
     target = await locate(session.page, button) if button else None
     if target is None:
         return view, why or f"{plan.confirm!r} vanished from the page"
+    await session.front()
     await target.click(timeout=5000)
     await session.settle()
     return await session.look(), None
@@ -293,7 +294,11 @@ async def fill_position(session, entry: dict, plan: FillPlan, log: list[str],
                 shown = " | ".join(o["text"] for o in state["options"] if o["value"])[:600]
                 worded = key not in answer_keys and parse_number(value) is None
                 hint = (f" If one option means the same as {value!r}, call again with choices={{{label!r}: <that "
-                        f"option>}}." if worded else " A number must match exactly: leave this position out.")
+                        f"option>}}." if worded else
+                        f" A number must match exactly. If these options are another kind of value than {key}, the "
+                        "control is mapped wrongly: call again with fields that map it to the value name that fits "
+                        "(and the control that does take this value to this one). Leave the position out only if "
+                        "the right control offers no such option.")
                 return f"{label!r}: {why}. Options: {shown}.{hint}"
             changed = not option.get("selected")
             if changed:

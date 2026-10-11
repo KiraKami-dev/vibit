@@ -176,6 +176,20 @@ class Watchdog(unittest.TestCase):
         self.assertNotIn("stalled", log)
         self.assertLess(seconds, 0.3)
 
+    def test_hedging_is_on_by_default_and_capped(self):
+        with patch.dict(os.environ, {"LLM_HEDGE_AFTER": ""}):
+            self.assertEqual(llm.hedge_seconds(), llm.DEFAULT_HEDGE)
+        with patch.dict(os.environ, {"LLM_HEDGE_AFTER": "0"}):
+            self.assertEqual(llm.hedge_seconds(), 0.0)
+        fake = Fake((None, []), (0, text("ok")))
+        with patch.object(llm, "_hedges", llm.MAX_HEDGES):  # every second copy allowed at one time is out
+            response, _, log = run(fake, LLM_HEDGE_AFTER="0.1")
+        self.assertNotIn("sending a hedge copy", log)
+        self.assertIn("stalled", log)  # the call waits for its first copy and is retried as before
+        self.assertEqual(response.parts[0].content, "ok")
+        run(Fake((None, []), (0, text("ok"))), LLM_HEDGE_AFTER="0.1")
+        self.assertEqual(llm._hedges, 0)  # a finished call gives its second copy back
+
     def test_watchdog_off_keeps_plain_requests(self):
         body = json.dumps({"id": "c1", "object": "chat.completion", "created": 0, "model": "m", "choices": [
             {"index": 0, "message": {"role": "assistant", "content": "plain"}, "finish_reason": "stop"}]}).encode()

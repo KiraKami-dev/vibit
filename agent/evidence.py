@@ -275,12 +275,14 @@ class SpecRevision(BaseModel):
 
 
 class Requirement(BaseModel):
-    """One requirement of the governing specification revision, parsed."""
+    """One requirement of the governing specification revision, parsed. A bore or pressure the specification does
+    not state is None and is then not compared: one value it leaves out must not cost the requirement (on a world
+    whose specification named no pressure, every requirement was dropped and with them every position)."""
     requirement_id: str
     revision: str
-    bore: Decimal
+    bore: Decimal | None = None
     stroke: Decimal = Field(description="As written; the usable travel when stroke_is_usable is set")
-    pressure: Decimal
+    pressure: Decimal | None = None
     mounting: str
     certification: str
     catalog_group: str
@@ -303,21 +305,21 @@ class EffectiveRequirement(BaseModel):
     """The attributes an ERP material must match, after amendments and the usable-travel derivation (rules 14, 20)."""
     requirement_id: str
     catalog_group: str
-    bore: Decimal
+    bore: Decimal | None = Field(default=None, description="None = the specification states none: not compared")
     stroke: Decimal | None = Field(description="Nominal stroke to match; None while a usable-travel reserve is "
                                                "still unknown")
-    pressure: Decimal
+    pressure: Decimal | None = Field(default=None, description="None = the specification states none")
     mounting: str
     certification: str
     pieces_per_set: int | None = Field(default=None, description="After amendments; None = as the spec says")
     pending: list[str] = Field(default_factory=list, description="What is still unresolved")
 
     def attributes(self) -> dict[str, Decimal | str]:
-        attrs: dict[str, Decimal | str] = {"bore": self.bore, "pressure": self.pressure,
-                                           "mounting": norm_text(self.mounting),
+        attrs: dict[str, Decimal | str] = {"mounting": norm_text(self.mounting),
                                            "certification": norm_text(self.certification)}
-        if self.stroke is not None:
-            attrs["stroke"] = self.stroke
+        for key in ("bore", "pressure", "stroke"):
+            if getattr(self, key) is not None:
+                attrs[key] = getattr(self, key)
         return attrs
 
 
@@ -329,8 +331,9 @@ def effective_requirement(req: Requirement, amendments: list[calc.Amendment] | N
     by the caller; revision and requirement scoping and latest-wins happen here) and the per-end reserve values of
     the revision-specific Technikfreigabe, by reserve key. Without a needed reserve the stroke stays open.
     """
-    base: dict[str, Decimal | str] = {"bore": req.bore, "stroke": req.stroke, "pressure": req.pressure,
-                                      "mounting": req.mounting, "certification": req.certification}
+    base: dict[str, Decimal | str] = {"stroke": req.stroke, "mounting": req.mounting,
+                                      "certification": req.certification}
+    base.update({key: value for key, value in (("bore", req.bore), ("pressure", req.pressure)) if value is not None})
     # An amendment names the revision its own way (label word, date or status around the identifier or not).
     scoped = [a.model_copy(update={"revision": req.revision}) if same_revision(a.revision, req.revision) else a
               for a in amendments or []]
@@ -352,8 +355,9 @@ def effective_requirement(req: Requirement, amendments: list[calc.Amendment] | N
         except ParseError as error:
             pending.append(f"amended pieces per set unreadable ({error})")
     return EffectiveRequirement(requirement_id=req.requirement_id, catalog_group=req.catalog_group,
-                                bore=Decimal(str(attrs["bore"])), stroke=stroke,
-                                pressure=Decimal(str(attrs["pressure"])), mounting=str(attrs["mounting"]),
+                                bore=Decimal(str(attrs["bore"])) if "bore" in attrs else None, stroke=stroke,
+                                pressure=Decimal(str(attrs["pressure"])) if "pressure" in attrs else None,
+                                mounting=str(attrs["mounting"]),
                                 certification=str(attrs["certification"]), pieces_per_set=pieces or None,
                                 pending=pending)
 

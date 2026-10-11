@@ -19,6 +19,7 @@ class Trace:
         global CURRENT
         CURRENT = self
         self.key: list[str] = []
+        self.waits: dict[str, list[float]] = {}  # website and what was waited for -> [times, seconds]
         self.started = self.last = time.monotonic()
         directory = directory or os.environ.get("TRACE_DIR", "traces")
         Path(directory).mkdir(parents=True, exist_ok=True)
@@ -41,8 +42,16 @@ class Trace:
         if kind in self.KEY_KINDS:
             self.key.append(f"[{seconds:7.1f}s] {worker:<15} {kind:<12} {brief[:150]}")
 
+    def waited(self, worker: str, part: str, seconds: float) -> None:
+        """Add up a wait on a page (nothing is printed): the summary shows the totals per website."""
+        entry = self.waits.setdefault(f"{worker.split(':')[0]} {part}", [0, 0.0])
+        entry[0] += 1
+        entry[1] += seconds
+
     def summary(self, limit: int = 120) -> None:
         """Print the phase and failure events again in one block: the platform keeps only the last few hundred
         lines of a run's output, so without this the early phases are missing from every run log."""
         lines = self.key if len(self.key) <= limit else self.key[:20] + ["  ..."] + self.key[-(limit - 21):]
+        waits = "; ".join(f"{name} {int(n)}x {seconds:.1f}s" for name, (n, seconds) in sorted(self.waits.items()))
+        lines = lines + ([f"page waits: {waits}"] if waits else [])
         print("===== run summary =====\n" + "\n".join(lines) + "\n===== end of run summary =====", flush=True)

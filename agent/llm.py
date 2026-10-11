@@ -21,8 +21,10 @@ streamed, a call whose first chunk does not arrive within LLM_FIRST_TOKEN_TIMEOU
 that is answering may run on as long as it keeps making progress, up to LLM_MAX_CALL (300 s). The proxy streams
 text and reasoning token by token but holds back tool-call arguments until they are complete, so a request with
 tools may stay silent after its last token for as long as its timeout above; one without tools may pause
-LLM_IDLE_TIMEOUT (15 s). LLM_HEDGE_AFTER sends a second copy of a call that has not started after that many
-seconds and keeps whichever starts first (the losing copy may still be billed).
+LLM_IDLE_TIMEOUT (15 s). A call that has not started after LLM_HEDGE_AFTER seconds (6 by default, 0 = never) gets
+a second copy, and whichever starts first is kept (the losing copy may still be billed): 99 % of calls start
+within 4 s, and one that has not by then usually never does, which cost a worker the whole 20 s before its retry.
+At most MAX_HEDGES second copies are out at a time, so a slow platform is not loaded twice over.
 
 LLM_BACKEND=anthropic runs the same agents on a Claude model with the team's own key instead (LLM_MODEL, default
 claude-haiku-5-5; ANTHROPIC_API_KEY, a team secret in test and scored runs). Its calls go through the run's metering
@@ -36,6 +38,7 @@ import contextvars
 import dataclasses
 import os
 import time
+import weakref
 from contextlib import AsyncExitStack
 
 import httpx2
@@ -95,13 +98,38 @@ def watchdog() -> bool:
     return os.environ.get("LLM_STREAM_WATCHDOG", "1").strip().lower() in ("1", "true", "yes", "on")
 
 
+DEFAULT_HEDGE = 6.0  # measured over five runs: the first chunk came within 4.1 s in 99 % of 344 calls (max 11.3 s)
+MAX_HEDGES = 4  # second copies out at one time; beyond that a call just waits for its first copy
+_hedges = 0  # second copies out now
+
+
 def hedge_seconds() -> float:
-    """After how many seconds without a first chunk a second copy of the call is sent (LLM_HEDGE_AFTER; 0 = never)."""
+    """After how many seconds without a first chunk a second copy of the call is sent (LLM_HEDGE_AFTER, default
+    DEFAULT_HEDGE; 0 = never)."""
+    raw = os.environ.get("LLM_HEDGE_AFTER", "").strip()
     try:
-        value = float(os.environ.get("LLM_HEDGE_AFTER", "") or 0)
+        value = float(raw) if raw else DEFAULT_HEDGE
     except ValueError:
-        return 0.0
+        return DEFAULT_HEDGE
     return max(value, 0.0)
+
+
+DEFAULT_CONCURRENCY = 60  # the hosted model takes 64 calls per team at once (32 until 11 Oct) and queues the rest;
+# four are left for second copies. A call that waits here is not yet a call that does not start, so the watchdog
+# and the hedge judge only calls the model has actually been sent.
+_slots: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()  # event loop -> its semaphore
+
+
+def _slot() -> asyncio.Semaphore:
+    """This run's budget of model calls out at one time (LLM_CONCURRENCY, default DEFAULT_CONCURRENCY)."""
+    loop = asyncio.get_running_loop()
+    if loop not in _slots:
+        try:
+            limit = int(os.environ.get("LLM_CONCURRENCY", "") or DEFAULT_CONCURRENCY)
+        except ValueError:
+            limit = DEFAULT_CONCURRENCY
+        _slots[loop] = asyncio.Semaphore(limit if limit > 0 else DEFAULT_CONCURRENCY)
+    return _slots[loop]
 
 
 def _backoff(attempt: int) -> float:
@@ -197,7 +225,8 @@ class _WatchdogModel(OpenAIChatModel):
     async def request(self, messages: list[ModelMessage], model_settings: ModelSettings | None,
                       model_request_parameters: ModelRequestParameters) -> ModelResponse:
         if not watchdog():
-            return await super().request(messages, model_settings, model_request_parameters)
+            async with _slot():
+                return await super().request(messages, model_settings, model_request_parameters)
         settings = ModelSettings(**(model_settings or {}))
         thinking = bool(((settings.get("extra_body") or {}).get("chat_template_kwargs") or {}).get("enable_thinking"))
         silence = float(settings.get("timeout") or timeout_seconds(thinking))  # type: ignore[arg-type]
@@ -210,7 +239,7 @@ class _WatchdogModel(OpenAIChatModel):
         for attempt in range(1, attempts + 1):
             token = _WATCH.set(limits)
             try:
-                async with asyncio.timeout(cap):
+                async with _slot(), asyncio.timeout(cap):
                     return await self._attempt(messages, settings, model_request_parameters, limits)
             except (Stalled, TimeoutError, httpx2.TransportError) as error:
                 reason = str(error) or f"no answer within {cap:g}s"
@@ -245,8 +274,9 @@ class _WatchdogModel(OpenAIChatModel):
         return stack, streamed
 
     async def _start(self, stack: AsyncExitStack, messages, settings, params, limits: _Limits):
-        """Open the stream (request_stream returns once the first chunk is in). With LLM_HEDGE_AFTER, a second copy
-        goes out when the first has not started by then; the first copy to start wins, the other is dropped."""
+        """Open the stream (request_stream returns once the first chunk is in). A second copy goes out when the
+        first has not started after LLM_HEDGE_AFTER; the first copy to start wins, the other is dropped."""
+        global _hedges
         hedge = hedge_seconds()
         tasks = [asyncio.create_task(self._open(messages, settings, params))]
         first_copy = tasks[0]
@@ -255,11 +285,12 @@ class _WatchdogModel(OpenAIChatModel):
         try:
             if 0 < hedge < limits.first:
                 done, _ = await asyncio.wait(tasks, timeout=hedge)
-                if not done:
+                if not done and _hedges < MAX_HEDGES:
                     print(f"[model] no first chunk after {hedge:g}s: sending a hedge copy", flush=True)
                     tasks.append(asyncio.create_task(self._open(messages, settings, params)))
                     deadline = time.monotonic() + limits.first
                     hedged = True
+                    _hedges += 1
             while tasks:
                 done, _ = await asyncio.wait(tasks, timeout=max(deadline - time.monotonic(), 0),
                                              return_when=asyncio.FIRST_COMPLETED)
@@ -278,6 +309,8 @@ class _WatchdogModel(OpenAIChatModel):
                         raise task.exception()  # type: ignore[misc]
             raise AssertionError("unreachable")
         finally:
+            if hedged:
+                _hedges -= 1
             for task in tasks:  # copies that lost the race or never started
                 task.cancel()
             for result in await asyncio.gather(*tasks, return_exceptions=True):
@@ -562,12 +595,18 @@ def settings(thinking: bool = False, *, timeout: float | None = None) -> ModelSe
     seconds = timeout if timeout is not None else timeout_seconds(thinking)
     if backend() == "anthropic":
         return anthropic_settings(model_name(), thinking, seconds)
-    return ModelSettings(
+    values: dict = dict(
         temperature=0.2,
         parallel_tool_calls=False,  # one tab per worker: actions must run in order
         timeout=seconds,
         extra_body={"chat_template_kwargs": {"enable_thinking": thinking}},
     )
+    if thinking:
+        # Thinking counts against the answer's token limit. With the provider's default a reader thought until
+        # the limit was gone and returned nothing ("token limit exceeded before any response"): a whole Q&A was
+        # lost that way, and two quantity changes with it.
+        values["max_tokens"] = max_tokens()
+    return ModelSettings(**values)  # type: ignore[typeddict-item]
 
 
 # ---------------------------------------------------------------- an optional stronger model (v3)

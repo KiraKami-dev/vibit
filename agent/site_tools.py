@@ -385,19 +385,21 @@ def _hit_notes(text: str, rows: int) -> list[str]:
     return notes
 
 
-async def run_search(session: SiteSession, field_ref: str, query: str, submit_ref: str | None = None) -> str:
-    """Fill the search field, submit, and list every row of the result list that shows."""
+async def search_rows(session: SiteSession, field_ref: str, query: str, submit_ref: str | None = None
+                      ) -> tuple[Listing | None, str]:
+    """Fill the search field, submit, and page through the result list that shows: the listing and its header
+    line, or None and what the page said when the field or the button could not be used."""
     async def typed(element):
         await element.fill(query, timeout=5000)
         if not submit_ref:
             await element.press("Enter")
     view = await session.act("fill", field_ref, typed)
     if view.startswith("No element") or view.startswith("fill "):
-        return view
+        return None, view
     if submit_ref:
         view = await session.act("click", submit_ref, _click)
         if view.startswith("No element") or view.startswith("click "):
-            return view
+            return None, view
     said = _page_text(session)
     listing = await paginate(session)
     listing.notes = _hit_notes(said, len(listing.rows)) + listing.notes
@@ -406,7 +408,18 @@ async def run_search(session: SiteSession, field_ref: str, query: str, submit_re
         {"query": query, "rows": len(listing.rows), "no_hits": not listing.rows and bool(NO_HITS.search(said))})
     header = (f"Search for {query!r}: {len(listing.rows)} rows" + (f" over {listing.pages} pages" if listing.pages > 1
               else "") + f" ({listing.how}). URL: {session.page.url}")
+    return listing, header
+
+
+def format_rows(listing: Listing, header: str) -> str:
+    """A listing as the model reads it: numbered rows with their links' refs and targets, then the notes."""
     return _format(listing, header)
+
+
+async def run_search(session: SiteSession, field_ref: str, query: str, submit_ref: str | None = None) -> str:
+    """Fill the search field, submit, and list every row of the result list that shows."""
+    listing, text = await search_rows(session, field_ref, query, submit_ref)
+    return text if listing is None else _format(listing, text)
 
 
 async def search(ctx: RunContext[Deps], field_ref: str, query: str, submit_ref: str = "") -> str:

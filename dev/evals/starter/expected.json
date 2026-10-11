@@ -1,0 +1,30 @@
+{
+  "tender_reference": "VG-2026-0142",
+  "decision": "bid",
+  "currency": "EUR",
+  "discount_percent": 3.5,
+  "positions": [
+    {
+      "position": "10",
+      "material_number": "HZ-50-200-FL-A",
+      "quantity": 12,
+      "unit_price": 376.25,
+      "lead_time_weeks": 2
+    },
+    {
+      "position": "20",
+      "material_number": "HZ-63-320-GA-0",
+      "quantity": 4,
+      "unit_price": 665.37,
+      "lead_time_weeks": 10
+    },
+    {
+      "position": "30",
+      "material_number": "HZ-80-500-FU-D",
+      "quantity": 24,
+      "unit_price": 1196.6,
+      "lead_time_weeks": 4
+    }
+  ],
+  "total_net": 35894.88
+}

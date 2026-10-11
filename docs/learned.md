@@ -241,3 +241,73 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   or missed by one, minute precision, long version chains, decoy floods, strange ids, foreign number notations, a
   release taken back, ...). Each passes oracle against `calc.py` and a bid-form round trip on 60 seeds; no agent
   run on them yet.
+- A run that sat silent for 328 s (cancelled at 8:14) and an earlier one that took 14:40 and sent a wrong no_bid had
+  the same cause: one ERP tab whose page stopped answering. Nothing bounded it: the sign-in check behind
+  `open_pages` (`locator.count()`) has no timeout of its own, a start whose `new_page()` never returned was waited
+  on without a limit once its racing tab had failed, and a material worker's deadline was the research deadline
+  (590 s for one material that takes 15 to 60 s). The requirement then had no record and the bid turned into a
+  no_bid. Now every such call is bounded, a read-only tab that stops answering is replaced by a new one that opens
+  the address again, a dead tab is not handed to the next worker, and an ERP worker whose tab shows no new view
+  of an answering page for longer than one navigation may take is ended (judged by progress, so a slow website is
+  not cut). The platform's llm-calls list shows such a hang at once: no model call for minutes.
+- Tokens are not what makes a run slow: about 1.0 to 1.2 M prompt tokens a run ($0.11 to $0.15), nearly all in the
+  research (mail searches about a third, ERP about 30 %, bid form 8 %, specification 7 %). A third of the prompt
+  tokens are cache reads; cache writes are always 0 for the hosted model (its cache is implicit and free to write).
+  In the form and signing phases the time goes to model calls that never start (20 s each until the watchdog
+  retries; 5 in one run's form and signing) and to bid pages that take the full 45 s to settle.
+- Model calls start fast or not at all: over five runs the first chunk came within 4.1 s in 99 % of 344 calls (max
+  11.3 s), and the platform's own queue time was over 5 s in 0.6 % of 1,453 calls. A call that never starts cost
+  20 s until the watchdog retried it, which in the one-step-at-a-time phases (bid form, signing, TAN) is 20 s of
+  the run each time. A second copy now goes out after 6 s (`LLM_HEDGE_AFTER`, 0 turns it off), at most four at once.
+- The TAN lookup needs 6 to 8 model steps and had 10: in 2 of 5 runs it ran out while paging back and forth, and the
+  bid form had to request another TAN (22 s and 105 s lost). It has 16 now and the loop guard's warning.
+- A slow bid page is the website holding its answer, not our tab: the recording of one run shows the bid tab loading
+  for 150 s after one click, while the model took three steps of about 47 s each on a page that answered nothing.
+  Nothing was changed for it: a second request in the same session only queues behind the first (seen at starts),
+  and the bid's session cannot move to a fresh context.
+- A run with every value right lost a position in the bid form (72): the website held its answer to one choice for
+  about 30 s, three tries of the next click timed out within 14 s, "failed three times" handed the position to the
+  model, and the model omitted it. A timeout is a busy page, not a form that cannot be filled: the position is now
+  tried again while the page gets half of the time the form had left when it first happened (spent once per form).
+- Branch `research/atira-slides`, from the organisers' slides on their own agent. "Forced to be complete": a
+  requirement whose ERP findings are not complete (a search without a list, a listed material not read) goes back
+  to the ERP up to three times while there is time, instead of costing its positions; mail keys already went back
+  (`resolve_references`). "One ledger": model calls keep to one budget of 28 at a time (the platform queues a
+  team's calls beyond 32 across all its runs), so a call that waits is not taken for one that does not start.
+- From a local run, not the slides: eight mail kinds were read within 118 s and the ninth sat on a tab that hung
+  until 275 s. A tab with nothing left to do now runs a search that has taken 1.5 times the median of the finished
+  ones, and the first record ends both. A shared page store was measured and dropped: only 2 of 71 mail addresses
+  and 5 of 120 ERP addresses were opened by more than one worker.
+- Material workers took 4 to 5 steps each again (12 to 19 s) once the pages they had opened stayed in their
+  history; with the older batch cut to headings, up to three a run wandered to their step limit.
+- Local runs cannot be scored on this machine (`checks/` is not here), and the shared scouting login dropped the
+  bid form's session twice in one run, after which the form worker paged back and forth until its 60 steps were
+  used. The form has no loop guard.
+- Clef does not shorten a step (about 1.0 s a call against 1.3 s for Qwen without thinking, measured again on our
+  own page views), but one call answers any number of yes/no questions in that second, and it runs beside Qwen under
+  its own limit of 16 calls. So its use is a first pass over a whole result list, not a navigation step.
+- The mail worker has a one-step search now (`find_messages`: type, submit, page to the end, all rows back), as the
+  ERP worker had; a mail search took about 12 steps against 5 for an ERP search. Clef then marks the rows that are
+  the wanted record and those are opened at once; the worker still sees every row and keeps what Clef left out, and
+  the reader and the authority rules decide as before. `AGENT_CLEF_ROWS=0` turns the first pass off; `agent.json`
+  lists `clef` so that the run waits for it to be warm.
+- 11 Oct: the platform takes 64 Qwen calls per team at once (was 32) and 12 runs at a time; the call budget is 60.
+  `atira eval` deploys own worlds (up to four sites, a brief, the expected answer) and runs a package on them;
+  `atira eval dev` serves one locally and scores each answer. The starter kit is a small world with other names,
+  labels and rules than public-1.
+- 11 Oct: a mailbox search may combine its words with AND and cut broad searches short, so the reference alone
+  lists only part of a folder (one run read no approval and bid without the discount). The survey now runs one
+  search per record topic in each folder (the model names field, folder and queries; one tool call runs them all),
+  and the model that sorts the rows is asked once about rows with the reference and a record's subject that it left
+  out: sorting by date or sender there dropped the version that counted. Which version counts is decided after
+  reading, in code. Local run: research done at 173 s instead of 292 s.
+- 11 Oct: an action on a page waits at least 0.75 s (0.25 s pause plus network idle); in the sandbox a click on the
+  bid site took 4 to 6 s against 0.7 s locally, and a position 12 s. The run summary now ends with the page waits
+  per website (`page waits: <site> idle 34x 85.0s; ...`), to see which wait it is before changing one.
+- 11 Oct: in the sandbox's browsers a click in a tab behind another tab takes 4 to 6 s instead of 0.7 s (the same
+  two clicks took 3.9 s and 5.6 s in three runs and 0.7 s in two others; a bid position 12 s or 4 s). The slow runs
+  were the ones where research tabs had been opened in the bid site's window after the form tab; a fresh context
+  (own window) and a build that reads over HTTP were fast. Fields and selects were not slower. A tab is now brought
+  to the front before a click (`SiteSession.front`). Headless local runs never show this.
+- 11 Oct: one message page that hangs held the whole mailbox survey for 75 s (its result is returned when every
+  message is read). A message page is now opened again after 15 s, twice at most.

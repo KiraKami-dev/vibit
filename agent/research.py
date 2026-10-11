@@ -37,7 +37,9 @@ import evidence
 import llm
 import site_tools
 from briefing import Briefing
-from browser_tools import Deps, SiteSession, unseen_values
+from browser_tools import (ATTEMPT_SECONDS, GOTO_SECONDS, NO_VIEW, SETTLE_SECONDS, Deps, SiteSession,
+                           unseen_values)
+from extract import FRAME_SECONDS
 from evidence import (
     Candidate,
     EffectiveRequirement,
@@ -323,13 +325,15 @@ class Opened(BaseModel):
 
 class RequirementSeen(BaseModel):
     requirement_id: str = Field(description="The requirement's reference as shown")
-    bore: str = Field(description="Bore in mm, exactly as shown")
+    bore: str = Field(description="Bore in mm, exactly as shown, or '' if the specification states none")
     stroke: str = Field(description="Stroke (travel) in mm, exactly as shown")
-    pressure: str = Field(description="Operating pressure in bar, exactly as shown")
+    pressure: str = Field(description="Operating pressure in bar, exactly as shown, or '' if the specification "
+                                      "states none")
     mounting: str = Field(description="Mounting type as written")
     certification: str = Field(description="Required certification as written, or the words saying none is "
                                            "required")
-    catalog_group: str = Field(description="The Kataloggruppe (catalogue group code) named for the ERP search")
+    catalog_group: str = Field(description="The Kataloggruppe (catalogue group code) named for the ERP search, or "
+                                           "'' if the specification names none")
     pieces_per_set: str = Field("", description="How many pieces one set (Satz) holds, if the text defines a set "
                                                  "(the piece count only, e.g. '4' for '1 set = 4 pieces'), else ''")
     stroke_is_usable_travel: bool = Field(description="True if the stroke is stated as usable travel (nutzbarer "
@@ -532,10 +536,16 @@ def _pieces_per_set(text: str) -> int | None:
         return None
 
 
+def _stated(text: str) -> Decimal | None:
+    """A number the specification states, or None when it states none. A value that is there but cannot be read
+    still raises: that is a reading to repeat, not a requirement without the attribute."""
+    return parse_number(text) if text.strip() else None
+
+
 def _parse_requirement(seen: RequirementSeen, revision: str) -> Requirement:
     return Requirement(
-        requirement_id=seen.requirement_id.strip(), revision=revision, bore=parse_number(seen.bore),
-        stroke=parse_number(seen.stroke), pressure=parse_number(seen.pressure), mounting=seen.mounting.strip(),
+        requirement_id=seen.requirement_id.strip(), revision=revision, bore=_stated(seen.bore),
+        stroke=parse_number(seen.stroke), pressure=_stated(seen.pressure), mounting=seen.mounting.strip(),
         certification=seen.certification.strip(), catalog_group=seen.catalog_group.strip(),
         pieces_per_set=_pieces_per_set(seen.pieces_per_set),
         stroke_is_usable=seen.stroke_is_usable_travel, reserve_key=seen.reserve_key.strip() or None,
@@ -713,8 +723,10 @@ class MaterialSeen(BaseModel):
     status_code: str = Field(description="The material status as shown")
     status_meaning: str = Field(description="What that status means per the page's legend or text")
     active: bool = Field(description="True if the status means released/usable, False if blocked or similar")
-    status_known: bool = Field(default=True, description="False only if no view says what this status code means "
-                                                         "(no legend, tooltip or text): `active` is then a guess")
+    status_known: bool = Field(default=True, description="False only if the status is a code or abbreviation and "
+                                                         "no view says what it means (no legend, tooltip or text): "
+                                                         "`active` is then a guess. A status written as a word "
+                                                         "that says what it is (blocked, released, ...) is known")
     bore: str = ""
     stroke: str = ""
     pressure: str = ""
@@ -740,8 +752,10 @@ returns every hit row with its links in one step. As soon as hits of that group 
 with its link target and the technical attributes (bore, stroke, pressure, mounting, certification) the rows show,
 whether or not they look like a fit: which material fits is decided later from their records, so never refine or
 repeat a search that already lists hits of the group and do not open the hits. If the site refuses the search or
-shows no hits, change the query or the search field it offers. If a sign-in or notice page interrupts, get past
-it."""
+shows no hits, do not send the same search again: change the query or the search field it offers, or take the way
+the page itself names (a value help, a list of groups, a link for this group): a page that lists the group's
+materials is the hit list, however you reached it, and collect() reads it to its end. If a sign-in or notice page
+interrupts, get past it."""
 
 DETAIL_GOAL = """\
 Open the views of ERP material {material} (you start on its record) that show these facts: its status and the
@@ -755,7 +769,10 @@ stock levels, condition records and their sub-views); its result lists the links
 opened yet, so open the ones that matter in one more open_pages call. Never guess addresses, and do not open a
 view twice. If a sign-in, notice or error page interrupts, get past it and open again what it replaced. Every
 view you open is kept for a reader, so you do not need to copy values: return as soon as all of these have been
-opened, listing only facts you could not find (a fact a view shows as absent counts as found).{focus}"""
+opened, listing only facts you could not find (a fact a view shows as absent counts as found). A record may show
+everything on one page, and it may not have some of these facts at all: what neither this record nor a view
+linked from it shows goes into the list, and you return. Stay on this record: never use the search, open another
+material or leave this website to look for a fact.{focus}"""
 
 MATERIAL_INSTRUCTIONS = """\
 You read the ERP views of one material and report its facts exactly as written. Copy numbers as shown with units
@@ -770,8 +787,9 @@ declared number format and all of its quantity scales."""
 
 def _want(req: EffectiveRequirement) -> str:
     stroke = f"stroke {req.stroke} mm" if req.stroke is not None else "stroke not yet known (ignore it)"
-    return (f"bore {req.bore} mm, {stroke}, pressure {req.pressure} bar, mounting {req.mounting}, certification "
-            f"{req.certification}")
+    bore = f"bore {req.bore} mm, " if req.bore is not None else ""
+    pressure = f"pressure {req.pressure} bar, " if req.pressure is not None else ""
+    return f"{bore}{stroke}, {pressure}mounting {req.mounting}, certification {req.certification}"
 
 
 def _num(text: str) -> Decimal | None:
@@ -782,6 +800,10 @@ def _num(text: str) -> Decimal | None:
 
 
 STATUS_UNREAD = "status meaning not read"  # no view said what the status code means: active is a guess
+# A status written out as a word needs no legend. One world showed "gesperrt" in plain text; the reader still called
+# its meaning unread, the blocked material then counted as a reading gap, and a bid went in where the only exact
+# match was blocked (no_bid by rule). A code ("Z3", "03", "FRG") still needs its legend.
+STATUS_WORD = re.compile(r"[^\W\d_]{5,}(?:[ -][^\W\d_]{2,})*")
 
 
 def _material_record(seen: MaterialSeen) -> MaterialRecord:
@@ -811,7 +833,7 @@ def _material_record(seen: MaterialSeen) -> MaterialRecord:
                 price_unit=parse_int(c.price_unit), scales=scales))
         except (ParseError, ValueError) as error:
             problems.append(f"condition {c.valid_from}..{c.valid_to}: {error}")
-    if not seen.status_known:
+    if not seen.status_known and not STATUS_WORD.fullmatch(seen.status_code.strip()):
         problems.append(STATUS_UNREAD)
     return MaterialRecord(
         material_number=seen.material_number.strip(), active=seen.active,
@@ -867,7 +889,15 @@ MAX_INSPECT = int(os.environ.get("ERP_MAX_INSPECT", "10"))
 READ_SECONDS = 35.0
 CHOOSE_SECONDS = 15.0
 MATERIAL_SECONDS = 90.0
+SEARCH_ATTEMPTS = 2  # retry once: the ERP sometimes drops the session mid-search; after that the orchestrator's
+# coverage check sends the requirement back (a search fails in stretches, and one run lost two positions to two
+# failed searches 100 s apart, with nine minutes of research time left)
 STEP_SECONDS = float(os.environ.get("ERP_STEP_SECONDS", "5"))  # one model step and its browser action, under load
+# A worker is judged by progress, not by a time of its own: on a slow website every page still arrives within the
+# limits one navigation has, so a tab that showed no new view for longer than those is hung (seen: one material held
+# its requirement for 590 s). The numbers follow from the browser layer's limits, not from how fast a website was.
+STALL_SECONDS = GOTO_SECONDS + SETTLE_SECONDS + 15
+TAB_SECONDS = ATTEMPT_SECONDS[0] + ATTEMPT_SECONDS[1] + 20  # a new tab gets two start attempts, then the worker's retry
 
 
 UNFINISHED = "materials not all read by the research deadline"
@@ -969,6 +999,32 @@ class Erp:
     def _until(self, reserve: float) -> float | None:
         return None if self.deadline is None else self.deadline - reserve
 
+    async def _work(self, session: SiteSession, *args, **kwargs) -> tuple:
+        """`run_worker` on an ERP tab, ended once the tab has shown no new view for STALL_SECONDS: a hung tab then
+        costs this attempt (the caller's next one gets another tab), not the time left for the research. A worker
+        that keeps getting pages is never cut here, however slow the website is."""
+        worker = asyncio.create_task(run_worker(session, *args, **kwargs))
+        seen, moved = session.stamp, time.monotonic()
+        try:
+            while not worker.done():
+                if session.stamp != seen and not session.view.startswith(NO_VIEW):  # a view of a page that answers
+                    seen, moved = session.stamp, time.monotonic()
+                if time.monotonic() - moved >= STALL_SECONDS:
+                    session.hung = True  # its tab is not handed to the next worker
+                    self.trace.event(session.name, "stalled", seconds=round(time.monotonic() - moved),
+                                     url=session.page.url[:120] if session.pages else "")
+                    break
+                await asyncio.wait({worker}, timeout=2.0)
+        finally:
+            if not worker.done():
+                worker.cancel()
+        try:
+            return await worker
+        except asyncio.CancelledError:
+            if not worker.cancelled() or asyncio.current_task().cancelling():  # this task itself was cancelled
+                raise
+            return None, {}
+
     def warm_up(self) -> asyncio.Task:
         """Sign in and get past entry gates once (a model handles gates the helpers cannot), e.g. while the
         specification is still being read."""
@@ -1003,8 +1059,9 @@ class Erp:
 
     @staticmethod
     async def _signin_form(session: SiteSession) -> bool:
-        try:
-            return bool(await session.page.locator("input[type=password]:visible").count())
+        try:  # bounded: on a page that stopped answering the count never returns
+            return bool(await asyncio.wait_for(session.page.locator("input[type=password]:visible").count(),
+                                               FRAME_SECONDS))
         except Exception:
             return False
 
@@ -1071,6 +1128,7 @@ class Erp:
         trace. With `url`, the tab opens that link target, else the start address."""
         session = SiteSession({**self.site, "siteId": f"{self.site['siteId']}:{tag}"}, self.context, self.trace)
         self._guard_login(session)
+        session.disposable = True  # the ERP is only read: a tab that stops answering is replaced by a new one
         session.recover = lambda: self.recover(session)  # type: ignore[attr-defined]
         page = None
         while self.idle_pages and page is None:
@@ -1135,40 +1193,47 @@ class Erp:
                 page.remove_listener("popup", session._on_popup)
             except Exception:
                 pass
-            if not kept and not page.is_closed() and len(self.idle_pages) < 8:
+            if not kept and not page.is_closed() and not session.hung and len(self.idle_pages) < 8:
                 self.idle_pages.append(page)
                 kept = True
                 continue
-            try:
-                await page.close()
+            try:  # a tab that stopped answering is not handed to the next worker; its close may not return either
+                await asyncio.wait_for(page.close(), 10)
             except Exception:  # already gone
                 continue
 
-    async def _worker_tab(self, tag: str, url: str | None = None) -> SiteSession | None:
-        try:  # a tab that does not open costs this attempt, not the research
-            return await self._tab(tag, url)
+    async def _worker_tab(self, tag: str, url: str | None = None, seconds: float | None = None
+                          ) -> SiteSession | None:
+        try:  # a tab that does not open (within `seconds`, when given) costs this attempt, not the research
+            return await asyncio.wait_for(self._tab(tag, url), seconds)
         except Exception as error:
             self.trace.event("erp", "tab_failed", tag=tag, error=f"{type(error).__name__}: {str(error)[:160]}")
             return None
 
     async def requirement(self, req: EffectiveRequirement) -> RequirementResearch:
         out = RequirementResearch(requirement_id=req.requirement_id)
+        if not req.catalog_group.strip():  # nothing to search for: said once, not searched and not sent back
+            out.problems.append("the specification names no catalogue group for it: no ERP search")
+            return out
         report = None
         searches: list[dict] = []  # what the search worker's site_tools.search calls showed
         until = self._until(MATERIAL_SECONDS)
-        for attempt in range(2):  # retry once: the ERP sometimes drops the session mid-search
+        for attempt in range(SEARCH_ATTEMPTS):
             if self.left() < MATERIAL_SECONDS + 20:
                 break
             async with self._slot():
-                session = await self._worker_tab(req.requirement_id if not attempt else f"{req.requirement_id}+")
+                session = await self._worker_tab(req.requirement_id + "+" * attempt, seconds=TAB_SECONDS)
                 if session is None:
                     continue
                 views = _keep_views(session)
                 try:
-                    report, _ = await run_worker(
+                    report, _ = await self._work(
                         session, SEARCH_GOAL.format(group=req.catalog_group), SearchReport,
                         deadline=until, max_steps=steps(until, 6, 16), tools=(site_tools.search, site_tools.collect),
-                        **_worker_kwargs(notes=False))
+                        # a search form that answers the same refusal again and again is a loop: the worker is
+                        # told so and to use a control it has not used (seen: eight tries of one refused form
+                        # beside the value help that listed the group)
+                        **_worker_kwargs(notes=False, loop_guard=True))
                     if report is None:  # stopped (steps, time): the hit list it ended on may still be there
                         report = await _salvage_search(session, views, req.catalog_group)
                 finally:
@@ -1247,7 +1312,8 @@ class Erp:
                 break  # a second pass only with time for it; the first record stays either way
             coverage = None
             async with self._slot():
-                session = await self._worker_tab(number if not attempt else f"{number}+", link or None)
+                session = await self._worker_tab(number if not attempt else f"{number}+", link or None,
+                                                 seconds=TAB_SECONDS)
                 if session is None:
                     continue
                 name = session.name
@@ -1256,7 +1322,7 @@ class Erp:
                     if link and session.view:  # the record view it opened on, kept for the reader too
                         views[session.page.url] = _strip_refs(session.view)
                     until = self._until(READ_SECONDS)
-                    coverage, _ = await run_worker(session, DETAIL_GOAL.format(material=number, focus=focus),
+                    coverage, _ = await self._work(session, DETAIL_GOAL.format(material=number, focus=focus),
                                                    Coverage, deadline=until, max_steps=steps(until, 6, 18),
                                                    tools=(open_pages,), **_worker_kwargs(notes=False, grounded=False))
                 finally:
@@ -1274,6 +1340,11 @@ class Erp:
             record = _material_record(seen)
             missing = incomplete(record)
             if not missing:
+                break
+            if views and getattr(session, "stopped", "") == "UsageLimitExceeded":
+                # every step it had went into this record and its views are read: the facts still missing are
+                # not there, and a second pass would spend the same steps again (seen: 40 to 90 s a material)
+                record.problems.append(f"not on the record's views: {', '.join(missing)}")
                 break
             record.problems.append(f"missing after pass {attempt + 1}: {', '.join(missing)}")
             focus = f"\nStill missing from the views read so far: {', '.join(missing)}. Open the views for these."
@@ -1341,10 +1412,10 @@ class MaterialChoice(BaseModel):
 
 
 CHOOSE_MATERIAL = """\
-You choose the ERP material for one tender requirement. Only an active (released) material qualifies, and its
-bore, stroke, pressure, mounting and certification must all equal the requirement exactly (numbers as numbers;
-no certification required means the material must name none). Blocked materials never qualify. If none
-qualifies, answer ''."""
+You choose the ERP material for one tender requirement. Only an active (released) material qualifies, and every
+attribute the requirement states (bore, stroke, pressure, mounting, certification) must equal the material's
+exactly (numbers as numbers; no certification required means the material must name none). Blocked materials
+never qualify. If none qualifies, answer ''."""
 
 # The choice is a short decision over records already read, and `evidence.check_choice` sends a wrong one back with
 # the reason, so it runs thinking off with a short timeout (RESEARCH_CHOOSE_THINKING=1 turns thinking on).

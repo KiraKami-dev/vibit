@@ -289,15 +289,15 @@ class SecondReadingBeforeNoBid(unittest.TestCase):
 
 
 class OldLongResultsLeaveTheHistory(unittest.TestCase):
-    def history(self):
+    def history(self, tool: str = "read_pages"):
         from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart
         view = "URL: https://erp.test/m/1\nTitle: Material\n\n" + "record line\n" * 50
         batch = lambda n: "\n\n".join(f"=== /view/{n}{k}\n" + "value line\n" * 120 for k in "ab") + \
             f"\n\nLinks on these views you have not opened yet: /view/{n}c"
         return [ModelRequest(parts=[UserPromptPart(content="Goal\n\nCurrent view:\n" + view)]),
-                ModelRequest(parts=[ToolReturnPart(tool_name="open_pages", content=batch(1), tool_call_id="1")]),
-                ModelRequest(parts=[ToolReturnPart(tool_name="open_pages", content=batch(2), tool_call_id="2")]),
-                ModelRequest(parts=[ToolReturnPart(tool_name="open_pages", content="already opened", tool_call_id="3")])]
+                ModelRequest(parts=[ToolReturnPart(tool_name=tool, content=batch(1), tool_call_id="1")]),
+                ModelRequest(parts=[ToolReturnPart(tool_name=tool, content=batch(2), tool_call_id="2")]),
+                ModelRequest(parts=[ToolReturnPart(tool_name=tool, content="already opened", tool_call_id="3")])]
 
     def test_only_the_newest_long_result_stays_whole(self):
         import worker
@@ -309,6 +309,12 @@ class OldLongResultsLeaveTheHistory(unittest.TestCase):
         self.assertIn("/view/1c", first)  # what it said was still to open
         self.assertIn("value line", second)  # the newest batch is whole
         self.assertEqual(third, "already opened")
+
+    def test_pages_the_worker_reports_on_stay_whole(self):
+        import worker
+        history = self.history("open_pages")  # the worker must still say which facts these pages did not show
+        self.assertEqual([m.parts[0].content for m in worker._forget_old_views(history)],
+                         [m.parts[0].content for m in history])
 
     def test_a_single_long_result_is_left_alone(self):
         import worker
