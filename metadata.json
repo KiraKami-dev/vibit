@@ -3,8 +3,12 @@
   "checkpoint_id": "01M4MFET4XTYY2JAGG8SMP773G",
   "strategy": "manual-commit",
   "branch": "sim-portals",
-  "checkpoints_count": 2,
-  "files_touched": null,
+  "checkpoints_count": 5,
+  "files_touched": [
+    "sim/mirror.py",
+    "sim/refresh.py",
+    "sim/tests/test_mirror.py"
+  ],
   "sessions": [
     {
       "metadata": "/0/metadata.json",
@@ -12,13 +16,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 92,
-    "cache_creation_tokens": 364244,
-    "cache_read_tokens": 8258215,
-    "output_tokens": 97129,
-    "api_call_count": 44
+    "input_tokens": 136,
+    "cache_creation_tokens": 392084,
+    "cache_read_tokens": 18235636,
+    "output_tokens": 115869,
+    "api_call_count": 67
   }
 }
