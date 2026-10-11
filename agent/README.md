@@ -98,6 +98,11 @@ Both pack this directory without what `.gitignore` excludes.
 | `CDP_URL`, `CDP_URLS` | runs | the sandbox's browsers; locally the kit starts its own Chromium |
 | `QWEN_BASE_URL`, `QWEN_API_KEY` | runs, `atira scout --env` | the hosted Qwen |
 | `CLEF_BASE_URL`, `CLEF_API_KEY` | runs, `atira scout --env`, when Clef is hosted | the hosted Clef |
+| `LLM_BACKEND`, `LLM_MODEL`, `LLM_EFFORT` | you (`agent/.env` locally) | `anthropic` runs the agents on Claude (default `claude-haiku-5-5`) instead of Qwen; see `llm.py` |
+| `ANTHROPIC_API_KEY` | team secret; `agent/.env` locally | the team's own Anthropic key; without it the run uses Qwen |
+| `ANTHROPIC_BASE_URL` | runs (`$LLM_PROXY_URL/anthropic`) | the metering proxy for Anthropic calls |
+
+Locally, `agent/.env` (gitignored, see `.env.example`) is loaded at start; variables already set win.
 
 ## Docs
 

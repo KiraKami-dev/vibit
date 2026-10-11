@@ -21,6 +21,11 @@ NUMBER_OPTION = re.compile(r"^\s*([+-]?\d[\d.,]*)\s*[^\d]*$")
 MONEY_KEYS = {"unit_price", "base_unit_price", "surcharge_per_unit", "packaging_per_unit", "rebate_total"}
 COUNT_KEYS = {"quantity", "lead_time_weeks"}
 REQUIRED_KEYS = ("position", "material_number", "quantity", "unit_price", "lead_time_weeks")
+# the material attributes the form's choices lead through (orchestrator.material_attributes gives these names)
+ATTRIBUTE_KEYS = ("bore", "stroke", "pressure", "mounting", "certification")
+# every value name a position control can take, known before any value is calculated
+VALUE_NAMES = (*REQUIRED_KEYS[1:], "base_unit_price", "surcharge_per_unit", "packaging_per_unit", "rebate_total",
+               *ATTRIBUTE_KEYS)
 
 
 def clean(text: str) -> str:
@@ -114,6 +119,29 @@ def find_control(view: str, label: str, kinds: tuple[str, ...] = ()) -> tuple[st
     return None, f"no control labelled {label!r} on the page"
 
 
+def mapping_problems(view: str, fields: dict[str, str], known: set[str], buttons: tuple[str, ...] = ()) -> list[str]:
+    """
+    What is wrong with a control mapping (label -> value name) for the form in `view`: unknown value names, labels
+    that name no control (or several), required values left unmapped, buttons not on the page. [] when usable.
+    """
+    problems = []
+    unknown = sorted({name for name in fields.values() if name not in known})
+    if unknown:
+        problems.append(f"unknown value names {unknown}; use only: {', '.join(sorted(known))}")
+    for label in fields:
+        ref, why = find_control(view, label, ("select", "textbox", "textarea"))
+        if ref is None:
+            problems.append(why)
+    unmapped = sorted(set(REQUIRED_KEYS[1:]) - set(fields.values()))
+    if unmapped:
+        problems.append(f"no control mapped for {', '.join(unmapped)}")
+    for button in filter(None, buttons):
+        ref, why = find_control(view, button, ("button",))
+        if ref is None:
+            problems.append(why)
+    return problems
+
+
 def position_on_page(view: str, position: str) -> bool:
     """
     Whether the page is about this position: its number, as a whole token (01.04 is not 01.041 or 101.04), in a
@@ -124,6 +152,43 @@ def position_on_page(view: str, position: str) -> bool:
     head = view[:first.start()] if first else view
     head += "\n" + "\n".join(line for line in view.splitlines() if line.startswith("#"))
     return re.search(r"(?<![\w.])" + re.escape(position.strip()) + r"(?![\w]|\.\d)", head) is not None
+
+
+def unmapped(view: str, entry: dict, fields: dict[str, str]) -> tuple[list[str], list[str]]:
+    """
+    Answer values of `entry` that no control is mapped to, and the labels of the page's fields (text boxes, lists)
+    that no mapping names. Both non-empty means the model probably skipped part of the form (a live run left every
+    price breakdown field empty that way).
+    """
+    mapped = {clean(label) for label in fields}
+    names = set(fields.values())
+    values = sorted(k for k in entry if k in MONEY_KEYS | COUNT_KEYS | {"material_number"} and k not in names)
+    labels = [label for _, kind, label in controls(view)
+              if kind in ("select", "textbox", "textarea") and clean(label) not in mapped]
+    return values, labels
+
+
+def resolve_position(given: str, numbers, view: str) -> tuple[str | None, list[str]]:
+    """
+    Which of the bid's position `numbers` to enter now, and the bid's positions the page shows. The page decides:
+    forms show positions in their own order, and a model that expects the bid's order names the next position of
+    its list while the page shows another one (live runs omitted correct positions that way). So: the position
+    `given` names (also inside a longer label such as "Position 01.04") when the page shows it, else the one bid
+    position the page shows, else `given` itself if it is a bid position (the caller reports it is not on the page),
+    else None (the page shows none of the bid's positions, or several).
+    """
+    numbers = [str(n).strip() for n in numbers]
+    shown = [n for n in numbers if position_on_page(view, n)]
+    given = ZERO_WIDTH.sub("", given or "").strip()
+    named = [given] if given in numbers else [
+        n for n in numbers if re.search(r"(?<![\w.])" + re.escape(n) + r"(?![\w]|\.\d)", given)]
+    if len(named) == 1 and named[0] in shown:
+        return named[0], shown
+    if len(shown) == 1:
+        return shown[0], shown
+    if len(named) == 1 and not shown:
+        return named[0], shown
+    return None, shown
 
 
 def complete_positions(answer: dict, attributes: dict[str, dict[str, str]] | None = None) -> dict[str, dict]:
@@ -200,6 +265,11 @@ async def fill_position(session, entry: dict, plan: FillPlan, log: list[str],
         for attempt in range(2):
             ref, why = find_control(view, label, ("select", "textbox", "textarea"))
             element = await locate(session.page, ref) if ref else None
+            if element is None and ref is None and key not in REQUIRED_KEYS:
+                # a label the model guessed for a value the form has no control for (live: "Druck" for the
+                # pressure, which the form shows only inside the catalogue option): skip it, never fail the
+                # position over it; the required values still need their controls
+                break
             if element is None:
                 return why or f"{label!r} vanished from the page"
             if not await element.evaluate("e => e.disabled || e.readOnly === true"):
@@ -211,6 +281,9 @@ async def fill_position(session, entry: dict, plan: FillPlan, log: list[str],
             view, error = await _confirm(session, plan, view)
             if error:
                 return error
+        if element is None:
+            log.append(f"{label}: no such control on this page; skipped")
+            continue
         if await element.evaluate("e => e.tagName") == "SELECT":
             state = await _select_state(element)
             option, why = match_option(state["options"], value)

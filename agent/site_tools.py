@@ -401,6 +401,9 @@ async def run_search(session: SiteSession, field_ref: str, query: str, submit_re
     said = _page_text(session)
     listing = await paginate(session)
     listing.notes = _hit_notes(said, len(listing.rows)) + listing.notes
+    # what each search showed, for the caller: an empty result counts only with the site's own no-hits notice
+    session.__dict__.setdefault("searches", []).append(
+        {"query": query, "rows": len(listing.rows), "no_hits": not listing.rows and bool(NO_HITS.search(said))})
     header = (f"Search for {query!r}: {len(listing.rows)} rows" + (f" over {listing.pages} pages" if listing.pages > 1
               else "") + f" ({listing.how}). URL: {session.page.url}")
     return _format(listing, header)

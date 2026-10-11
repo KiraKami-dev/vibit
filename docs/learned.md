@@ -181,3 +181,43 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - The 7:33 submission is a promoted soak run of main: the same code took 7:33, 11:39 and 14:00 in other runs, so
   run time swings by a factor of two with the platform's speed.
 
+- sub_63a81b12d47a68b9 (promoted from soak run run_262c91398cd64598): quality 100 in 7:33 for $0.110, rank #2.
+  Final candidate since 22:17 UTC; exact code is 8c7ab8f (branch submitted/sub_63a81b12). Same code over 6 soak
+  runs: 100, 100, 100, 100, 59, 37.1.
+- ERP reliability, local read-only checks (shared scouting login, so session drops from other users are frequent):
+  base ERP stage 288 s with three detail workers at the 12-step limit and a 95 s reselect (one thinking-on call
+  hung to its 90 s timeout); with search/collect for the group search, open_pages that lists unopened links and
+  skips views already read, reused tabs, serialised sign-ins and one gate pass per drop: 209 s, searches in 3 to 5
+  steps, details in 4, reselect 4.5 s (choices that still pass check_choice stand without a model call). Same
+  materials and records as the hand derivation.
+- The ERP search worker looped when its hit did not fit the requirement it was shown (A-2 before the amendment and
+  reserve: 507 vs 500): it refined and re-ran the search for 16 steps and the position was omitted (test run 51.2).
+  The search goal now only asks for every hit of the group (no requirement shown), and a stopped search worker's
+  hit list is read from its kept views. Gate recovery runs only on a sign-in form or a known gate path, since some
+  views redirect and looked like a dropped session.
+- Partial runs of 8c7ab8f (37, 59, 51 and soak 19, 31, 10): the bid form shows positions in its own order, and the
+  thinking-off form model named the next position of its sorted list; configure_position said "not on the page"
+  and the model clicked "omit" on the shown position, which had values (3 of 6 runs; reproduced live). It now
+  enters the bid position the page shows and lists the ones still to enter; early returns are traced.
+- Other causes in those runs: a spec model copied "1 set = 5 pieces" and parse_int took the 1 (a set position bid
+  at a fifth of its pieces, shifting setup pool, bonus and packaging of the other members); a guessed control label
+  for an attribute the form has no control for failed whole positions; one live run mapped no price breakdown
+  fields at all; under model load (p50 11 s, p95 91 s) every 30 s try of the mail plan timed out and no mail kind
+  was searched. All fixed on branch worktree-agent-a525dcbc767c5a2b1.
+- Bid form overlapped with the research (BidFlow): an early pass enters bidder data and the main offer and maps
+  the first position page's controls (~30-50 s, during research), then waits. Sandbox run 07b5 (quality 100):
+  form 91 s after research (132-185 s before), signing 30 s, signed at ~620 s. The wizard keeps its step through
+  a 180 s idle tab and through in-page fetches of the start page; locally the session drops every 1-3 min while
+  other runs sign in with the shared scouting login (wizard back to step 1), which the form then redoes.
+  Keepalive must run inside the tab: context.request resolves no hosts in the sandbox (EAI_AGAIN).
+- confirm_decision after calc could never change a decision (calc returns no bid with missing materials) and
+  cost ~8 s before the form; now skipped. A grounded FormReady quoting our own "5,00" was refused four times
+  (30 s) and the model then went back a step; form status results are no longer grounded.
+- Hung starts (run_9f6e6e23f55952fc, quality 30.6; the Haiku run lost 210 s the same way): in one browser context the
+  webmail's requests never completed (first a goto that never committed, then a sign-in post), while a fresh context
+  opened it in under 1 s. Playwright page calls (locator.count, evaluate) on a tab whose navigation has not
+  committed wait for ever, so every settle hit its 45 s cap and the attempt waited 210 s on a dead tab. Starts now
+  race a tab in a fresh context after 15 s without a usable page, give up a page that answers no script call for
+  20 s, retry at once in a fresh context with 45/60/90/120 s budgets, and accept a rendered page whose settle never
+  ends. Test runs of 86b4f27: 100 (7:33) and 100 (11:33), all starts in 2.4 to 4.6 s; the second still had three
+  mail gotos mid-research that never committed, now bounded (30 s goto + about 22 s settle) and traced as slow_page.

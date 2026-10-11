@@ -265,13 +265,14 @@ identifies that sender, the website that holds it, and the content it provides. 
 tender's own documents and Q&A, the specification and the ERP's material data."""
 
 
-async def plan_searches(brief: str, sites: dict[str, str], findings: str = "") -> list[Kind]:
+async def plan_searches(brief: str, sites: dict[str, str], findings: str = "",
+                        timeout: float = PLAN_TIMEOUT) -> list[Kind]:
     """The record kinds to look up and where, as a model reads them from the brief (and, if given, findings).
     `sites` maps each siteId of the run to its URL."""
     choices = "\n".join(f"- {s.name}: {s.holds}" for s in SCHEMAS.values())
     # Thinking off: the brief states the kinds outright, and a long thinking answer outlasts the client timeout.
     agent = Agent(llm.model(), output_type=SearchPlan, instructions=PLAN_INSTRUCTIONS,
-                  model_settings=llm.settings(thinking=False, timeout=PLAN_TIMEOUT), retries=3)
+                  model_settings=llm.settings(thinking=False, timeout=timeout), retries=3)
     raw = " ".join(brief.split())
     flat = raw.casefold()
 

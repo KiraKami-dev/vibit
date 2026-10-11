@@ -19,6 +19,7 @@ effective_requirement` takes them, and `reselect` lets the model choose again on
 ERP stage inspects every hit of the group.
 """
 import asyncio
+import contextlib
 import inspect
 import os
 import re
@@ -27,12 +28,13 @@ from decimal import Decimal
 from typing import TypeVar
 from urllib.parse import urljoin, urlparse
 
-from playwright.async_api import BrowserContext
+from playwright.async_api import BrowserContext, Page
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, RunContext
 
 import calc
 import llm
+import site_tools
 from briefing import Briefing
 from browser_tools import Deps, SiteSession, unseen_values
 from evidence import (
@@ -45,12 +47,15 @@ from evidence import (
     SpecResult,
     SpecRevision,
     check_choice,
+    group_without_hits,
     merged_attributes,
     number_format,
+    parse_currency,
     parse_date,
     parse_int,
     parse_mass_kg,
     parse_number,
+    parse_pieces_per_set,
     parse_weeks,
 )
 from tracing import Trace
@@ -80,6 +85,7 @@ def _read_settings(thinking: bool):
 # Readers copy values from pages a worker chose, under a grounding check; thinking makes each call ~30 s instead of
 # ~5 s for little gain there. Judgement calls (which revision governs) always think.
 READ_THINKING = os.environ.get("RESEARCH_READ_THINKING", "0") == "1"
+PAGE_WAIT = 2.0  # seconds read_document waits once more when a next-page click left the page unchanged
 
 
 async def _grounded_read(output_type: type[T], instructions: str, prompt: str, source: str, *,
@@ -167,13 +173,29 @@ def _common_edges(texts: list[str]) -> tuple[int, int]:
     return head, tail
 
 
+_LINK = re.compile(r"-> (\S+?)\]")
+
+
 async def open_pages(ctx: RunContext[Deps], paths: list[str]) -> str:
     """Read several pages of this website in one step, e.g. the tabs, sub-views or records of what you are
-    investigating. Give link targets exactly as pages you have seen show them (at most 8). The texts come back
-    without refs; you end up on the last one (read_more(offset=0) shows its refs)."""
+    investigating. Give link targets exactly as pages you have seen show them (at most 10). The texts come back
+    without refs, followed by the links on them you have not opened yet; you end up on the last one
+    (read_more(offset=0) shows its refs)."""
     session = ctx.deps.session
+    opened: set[str] = session.__dict__.setdefault("opened", set())  # link targets read in this session
     texts, names = [], []
-    for path in paths[:8]:
+
+    async def goto(target: str) -> str:
+        async with session.lock:
+            await session._goto(target)
+            session.trace.event(session.name, "action", action="open_pages", url=target)
+            return await session.look()
+
+    def landed_on(target: str) -> bool:
+        landed, wanted = urlparse(session.page.url), urlparse(target)
+        return (landed.path, landed.query) == (wanted.path, wanted.query)
+
+    for path in list(dict.fromkeys(paths))[:10]:
         parsed = urlparse(path)
         rel = parsed.path + (f"?{parsed.query}" if parsed.query else "")
         if path not in session.seen and rel not in session.seen:
@@ -185,29 +207,43 @@ async def open_pages(ctx: RunContext[Deps], paths: list[str]) -> str:
             texts.append("not opened: not on this website")
             names.append(path)
             continue
-        async with session.lock:
-            await session._goto(target)
-            session.trace.event(session.name, "action", action="open_pages", url=target)
-            view = await session.look()
-        landed = urlparse(session.page.url)
-        wanted = urlparse(target)
-        if (landed.path, landed.query) != (wanted.path, wanted.query):
+        if target in opened:
+            texts.append("already opened and kept for the reader")
+            names.append(path)
+            continue
+        view = await goto(target)
+        recover = getattr(session, "recover", None)
+        if not landed_on(target) and recover is not None:  # the session dropped: one tab gets past the gate
+            await recover()
+            view = await goto(target)
+        if not landed_on(target):
             texts.append(f"did not open: the site showed {session.page.url} instead (handle that page, then open "
                          f"this view again)\n" + _strip_refs(view.split("\n\n", 1)[-1])[:3000])
             names.append(path)
             continue
+        opened.add(target)
         texts.append(_strip_refs(view.split("\n\n", 1)[-1])[:8000])
         names.append(path)
-    def opened(text: str) -> bool:
-        return not text.startswith(("not opened", "did not open"))
 
-    head, tail = _common_edges([t for t in texts if opened(t)])
-    out = []
+    def was_opened(text: str) -> bool:
+        return not text.startswith(("not opened", "did not open", "already opened"))
+
+    head, tail = _common_edges([t for t in texts if was_opened(t)])
+    out, more = [], {}
     for i, (name, text) in enumerate(zip(names, texts)):
-        if i and opened(text) and (head or tail):
+        if was_opened(text):
+            lines = text.splitlines()
+            body = "\n".join(lines[head:len(lines) - tail]) if len(texts) > 1 else text  # not the site chrome
+            for link in _LINK.findall(body):
+                target = urljoin(session.page.url, link)
+                if urlparse(target).netloc == urlparse(session.site["url"]).netloc and target not in opened:
+                    more.setdefault(link, None)
+        if i and was_opened(text) and (head or tail):
             lines = text.splitlines()
             text = "\n".join(lines[head:len(lines) - tail]) + "\n[page frame as in the first page]"
         out.append(f"=== {name}\n{text}")
+    if more:
+        out.append("Links on these views you have not opened yet: " + " ".join(list(more)[:40]))
     return "\n\n".join(out)
 
 
@@ -243,6 +279,11 @@ async def read_document(ctx: RunContext[Deps], next_ref: str = "") -> str:
                 break
             await session.act("click", refs[min(nth, len(refs) - 1)], _click)
             text = _strip_refs(session.view)
+            if text in seen:  # a slow site may still be loading the next page (a local run lost pages 3 to 5)
+                await asyncio.sleep(PAGE_WAIT)
+                await session.settle()
+                await session.look()
+                text = _strip_refs(session.view)
             if text in seen:  # past the end some sites repeat the last page
                 break
             seen.add(text)
@@ -288,7 +329,8 @@ class RequirementSeen(BaseModel):
     certification: str = Field(description="Required certification as written, or the words saying none is "
                                            "required")
     catalog_group: str = Field(description="The Kataloggruppe (catalogue group code) named for the ERP search")
-    pieces_per_set: str = Field("", description="Pieces per set (Satz) if the text defines a set, else ''")
+    pieces_per_set: str = Field("", description="How many pieces one set (Satz) holds, if the text defines a set "
+                                                 "(the piece count only, e.g. '4' for '1 set = 4 pieces'), else ''")
     stroke_is_usable_travel: bool = Field(description="True if the stroke is stated as usable travel (nutzbarer "
                                                       "Weg) to which a reserve must be added for the ERP stroke")
     reserve_key: str = Field("", description="The key of that end reserve, if named, else ''")
@@ -340,7 +382,9 @@ _COMPARED = ("bore", "stroke", "pressure", "mounting", "certification", "catalog
 def _reading_differences(first: SpecPage, second: SpecPage) -> list[str]:
     """Where two readings of one page differ: requirements only one has, and fields with other values."""
     def flat(value) -> str:
-        return " ".join(str(value).split()).casefold()
+        text = " ".join(str(value).split())
+        tagged = re.fullmatch(r"(\d+) ?\([A-Za-z]{2}[-_][A-Za-z]{2}\)", text)  # "100 (en-US)" reads as "100":
+        return (tagged.group(1) if tagged else text).casefold()  # without separators a locale tag changes nothing
 
     a = {flat(r.requirement_id): r for r in first.requirements}
     b = {flat(r.requirement_id): r for r in second.requirements}
@@ -479,12 +523,20 @@ def _record_views(session: SiteSession) -> dict[str, str]:
     return views
 
 
+def _pieces_per_set(text: str) -> int | None:
+    """None when the spec gives no set size or words it unclearly (a set position is then left out, not mispriced)."""
+    try:
+        return parse_pieces_per_set(text) if text.strip() else None
+    except ParseError:
+        return None
+
+
 def _parse_requirement(seen: RequirementSeen, revision: str) -> Requirement:
     return Requirement(
         requirement_id=seen.requirement_id.strip(), revision=revision, bore=parse_number(seen.bore),
         stroke=parse_number(seen.stroke), pressure=parse_number(seen.pressure), mounting=seen.mounting.strip(),
         certification=seen.certification.strip(), catalog_group=seen.catalog_group.strip(),
-        pieces_per_set=parse_int(seen.pieces_per_set) if seen.pieces_per_set.strip() else None,
+        pieces_per_set=_pieces_per_set(seen.pieces_per_set),
         stroke_is_usable=seen.stroke_is_usable_travel, reserve_key=seen.reserve_key.strip() or None,
         raw={k: str(v) for k, v in seen.model_dump().items()})
 
@@ -679,11 +731,14 @@ class MaterialSeen(BaseModel):
 
 
 SEARCH_GOAL = """\
-List the ERP materials of catalogue group {group}: use the ERP's material search (search help) with exactly that
-group as the search term. As soon as the hit list shows, return every hit of that group with its link target and
-the technical attributes (bore, stroke, pressure, mounting, certification) the list shows; do not refine a search
-that already lists hits. Only if the list shows no attributes, open the hits to read them. The materials are
-compared with the requirement later ({want})."""
+List the ERP materials of catalogue group {group}. Open the ERP's material search (search help) and call
+search(field_ref, query, submit_ref) on its search field with that group as the query: it types, submits and
+returns every hit row with its links in one step. As soon as hits of that group show, return every one of them
+with its link target and the technical attributes (bore, stroke, pressure, mounting, certification) the rows show,
+whether or not they look like a fit: which material fits is decided later from their records, so never refine or
+repeat a search that already lists hits of the group and do not open the hits. If the site refuses the search or
+shows no hits, change the query or the search field it offers. If a sign-in or notice page interrupts, get past
+it."""
 
 DETAIL_GOAL = """\
 Open the views of ERP material {material} (you start on its record) that show these facts: its status and the
@@ -691,11 +746,13 @@ meaning of that status (a legend may sit in a tooltip); its technical data; its 
 separates freely usable from blocked or inspection stock; lead time from stock and production lead time; pieces
 per carton, allocation weight, surcharge mass and metal/price index code; and EVERY price condition record with
 its validity, currency, exchange-rate key, price unit and quantity scales (records may be paged one per page, and
-scales may sit in a separate view of each record; a record list that says it has one record has no others). Use
-open_pages to open several views you have seen links to in one step, then follow the further links those views
-show; never guess addresses. If a sign-in, notice or error page interrupts, get past it and open again what it
-replaced. Every view you open is kept for a reader, so you do not need to copy values: return as soon as all of
-these have been opened, listing only facts you could not find.{focus}"""
+scales may sit in a separate view of each record; a record list that says it has one record has no others).
+Work in few steps: first call open_pages with every link of this record that leads to such a view (its tabs,
+stock levels, condition records and their sub-views); its result lists the links on those views that you have not
+opened yet, so open the ones that matter in one more open_pages call. Never guess addresses, and do not open a
+view twice. If a sign-in, notice or error page interrupts, get past it and open again what it replaced. Every
+view you open is kept for a reader, so you do not need to copy values: return as soon as all of these have been
+opened, listing only facts you could not find (a fact a view shows as absent counts as found).{focus}"""
 
 MATERIAL_INSTRUCTIONS = """\
 You read the ERP views of one material and report its facts exactly as written. Copy numbers as shown with units
@@ -744,7 +801,7 @@ def _material_record(seen: MaterialSeen) -> MaterialRecord:
                                       price=parse_number(s.price, fmt)) for s in c.scales]
             conditions.append(calc.PriceCondition(
                 valid_from=parse_date(c.valid_from), valid_to=parse_date(c.valid_to) if c.valid_to.strip() else None,
-                currency=c.currency.strip().upper()[:3] or "EUR", fx_key=c.fx_key.strip() or None,
+                currency=parse_currency(c.currency) or "EUR", fx_key=c.fx_key.strip() or None,
                 price_unit=parse_int(c.price_unit), scales=scales))
         except (ParseError, ValueError) as error:
             problems.append(f"condition {c.valid_from}..{c.valid_to}: {error}")
@@ -795,22 +852,31 @@ async def _read_material(number: str, corpus: str, trace: Trace, name: str) -> M
 
 
 MAX_INSPECT = int(os.environ.get("ERP_MAX_INSPECT", "10"))
-# v3, off unless AGENT_ERP_RACE=1: next to the search the brief prescribes, a second worker looks for the same
-# catalogue group's materials by another route. The prescribed search always finishes and its hits come first;
-# the second one only adds. Off by default: in two sandbox runs where it started (slow first searches) it never
-# returned a list before the restarted first search did, and only added load.
-ERP_SEARCH_RACE = os.environ.get("AGENT_ERP_RACE", "0") == "1"
-ERP_ALT_TABS = int(os.environ.get("AGENT_ERP_ALT_TABS", "3"))  # second searches at once, of the ERP's tabs
-# The second search starts once the first has run this long (measured: a first search that works returns within
-# 12 to 34 s), or at once when the first returns without hits; so it costs nothing while the first one works.
-ERP_SECOND_AFTER = float(os.environ.get("AGENT_ERP_SECOND_AFTER", "40"))
 
-SEARCH_ALT_HINT = """\
-Strategy for this attempt: another worker is already using the material search help with the group as the term.
-Reach the same list by another route this system offers: another search field or search help variant, a list or
-report of materials that can be restricted to a catalogue group, or the menu. If a search shows nothing or says
-it is too broad or empty, read what it asks for and adjust how the group is entered accordingly (never leave the
-group out). Return the hits of exactly that group; if no route lists them, return an empty list."""
+# Time the ERP stage keeps before the research deadline, so that what it started finishes and counts: a material's
+# reader call after its worker stops (READ_SECONDS), the model's choice over the records (CHOOSE_SECONDS); a search
+# starts only with time for a material after it (MATERIAL_SECONDS).
+READ_SECONDS = 35.0
+CHOOSE_SECONDS = 15.0
+MATERIAL_SECONDS = 90.0
+STEP_SECONDS = float(os.environ.get("ERP_STEP_SECONDS", "5"))  # one model step and its browser action, under load
+
+
+UNFINISHED = "materials not all read by the research deadline"
+
+
+def steps(until: float | None, floor: int, cap: int) -> int:
+    """A worker's step limit: what the time until `until` allows at about STEP_SECONDS a step, between `floor`
+    and `cap` (the cap only stops loops; the deadline stops the worker anyway)."""
+    if until is None:
+        return cap
+    return int(max(floor, min(cap, (until - time.monotonic()) / STEP_SECONDS)))
+
+
+GATE_GOAL = """\
+Get past the sign-in, notice or confirmation page this system shows (copy any number it asks you to transfer
+exactly) and return as soon as a page of the system itself shows (a main menu, transaction or material screen).
+Open nothing else."""
 
 
 def incomplete(record: MaterialRecord) -> list[str]:
@@ -832,22 +898,64 @@ class ErpResearch(BaseModel):
     seconds: float = 0
 
 
+SALVAGE_SEARCH = """\
+You read the page a browsing worker ended on in an ERP. If it lists material hits of a search for catalogue group
+{group}, report the search term shown and every listed hit of that group with its link target and the technical
+attributes the list shows, exactly as written. If it shows no such hit list, return an empty list of candidates."""
+
+
+async def _salvage_search(session: SiteSession, views: dict[str, str], group: str) -> SearchReport | None:
+    """The hits on the latest page of a stopped search worker that lists the group with links (one grounded reader
+    call), or None."""
+    text = next((t for t in reversed(views.values()) if group in t and "->" in t), "")
+    if not text:
+        return None
+    try:
+        report = await asyncio.wait_for(_grounded_read(
+            SearchReport, SALVAGE_SEARCH.format(group=group), f"Page:\n{text[:16000]}", text, trace=session.trace,
+            name=session.name, what="search salvage"), 60)
+    except Exception as error:
+        session.trace.event(session.name, "search_salvage_failed", error=f"{type(error).__name__}: {str(error)[:160]}")
+        return None
+    return report if report.candidates else None
+
+
 class Erp:
-    """The ERP website: one signed-in context, a tab per worker, so requirements and materials run in parallel."""
+    """
+    The ERP website: one signed-in context and a few reused tabs, so requirements and materials run in parallel.
+
+    The ERP drops its session after some idle minutes and when several tabs sign in at once. Sign-ins are therefore
+    serialised over the tabs, and a tab that lands somewhere other than the view it asked for (a sign-in, an entry
+    gate) gets one model worker past the gate (`recover`, one tab at a time) and opens its view again.
+    """
 
     def __init__(self, site: dict, context: BrowserContext, trace: Trace, deadline: float | None = None):
         self.site, self.context, self.trace, self.deadline = site, context, trace, deadline
         self.ready: asyncio.Task | None = None
         self.materials: dict[str, asyncio.Task] = {}
-        self.active_at = 0.0  # last time a worker was using the ERP
-        self.busy = 0
-        self.lock = asyncio.Lock()
-        self.idle_limit = float(os.environ.get("ERP_IDLE_SECONDS", "200"))
         self.tasks: dict[str, asyncio.Task] = {}
-        # a few tabs at once: when the ERP drops its session, every open tab signs in again at the same moment
-        self.tabs = asyncio.Semaphore(int(os.environ.get("ERP_TABS", "8")))
-        self.alt_tabs = asyncio.Semaphore(ERP_ALT_TABS)
+        # a few tabs at once: every tab is one more page load on a site that slows down under load
+        self.tabs = asyncio.Semaphore(int(os.environ.get("ERP_TABS", "6")))
+        self.idle_pages: list[Page] = []  # open tabs a finished worker left, reused instead of a fresh start
+        self.opening = asyncio.Lock()  # fresh tabs sign in one after another
+        self.signin = asyncio.Lock()  # one sign-in at a time
+        self.signins = 0
+        self.checking = asyncio.Lock()  # one idle check at a time
+        self.gate = asyncio.Lock()  # one tab gets past an entry gate at a time
+        self.passes = 0  # gates passed; a tab that waited for another one's pass just opens its view again
+        self.gate_paths: set[str] = set()  # paths of the sign-in / notice gates seen
+        self.home = ""  # the path the start address lands on while signed in and past the gate
+        self.busy = 0  # workers using the ERP now
+        self.active_at = 0.0  # last time a worker used it
+        self.idle_limit = float(os.environ.get("ERP_IDLE_SECONDS", "120"))  # the ERP drops idle sessions
+        self.partial: dict[str, RequirementResearch] = {}  # requirement -> research whose search has finished
         self.started_at: float | None = None
+
+    def left(self) -> float:
+        return float("inf") if self.deadline is None else self.deadline - time.monotonic()
+
+    def _until(self, reserve: float) -> float | None:
+        return None if self.deadline is None else self.deadline - reserve
 
     def warm_up(self) -> asyncio.Task:
         """Sign in and get past entry gates once (a model handles gates the helpers cannot), e.g. while the
@@ -857,170 +965,259 @@ class Erp:
         return self.ready
 
     async def _warm_up(self) -> None:
-        session = await self._tab("start")
-        await run_worker(session, "Get to the system's main menu or start screen, past any notice or confirmation "
-                         "it asks for first, then return.", Ready, deadline=self.deadline, max_steps=12,
+        async with self.gate:
+            session = await self._worker_tab("start")
+            if session is None:  # the workers' own tabs try again
+                return
+            try:
+                await self._pass_gate(session)
+            finally:
+                await self._close(session)
+
+    async def _pass_gate(self, session: SiteSession) -> None:
+        """A model gets the tab past the sign-in / notice gate; then the start address shows where a signed-in
+        tab lands (`home`). Called with `gate` held."""
+        if not await self._at_home(session):  # the page it is on is a gate (a later drop may land there again)
+            self.gate_paths.add(urlparse(session.page.url).path or "/")
+        await run_worker(session, GATE_GOAL, Ready, deadline=self._until(0), max_steps=8,
                          **_worker_kwargs(notes=False, grounded=False))
-        await self._close(session)
+        self.passes += 1
+        async with session.lock:
+            await session._goto(self.site["url"])
+        await session.look()
+        if not session.view.startswith("(") and not await self._signin_form(session):
+            self.home = urlparse(session.page.url).path or "/"
         self.active_at = time.monotonic()
 
-    async def _enter(self) -> None:
-        """Before a worker starts: a tab slot, and the session signed in and not about to time out. When it sat
-        idle for long (the ERP logs out after a few minutes), one tab signs in again before the others pile in.
-        Safe to cancel: the shared sign-in goes on for the other workers, and the tab slot is given back."""
-        await asyncio.shield(self.warm_up())
-        await self.tabs.acquire()
+    @staticmethod
+    async def _signin_form(session: SiteSession) -> bool:
         try:
-            async with self.lock:
-                if not self.busy and time.monotonic() - self.active_at > self.idle_limit:
-                    self.ready = None
-                    await asyncio.shield(self.warm_up())
-                self.busy += 1
-        except BaseException:
-            self.tabs.release()
-            raise
+            return bool(await session.page.locator("input[type=password]:visible").count())
+        except Exception:
+            return False
 
-    def _leave(self) -> None:
-        self.tabs.release()
-        self.busy -= 1
-        self.active_at = time.monotonic()
+    async def _at_home(self, session: SiteSession) -> bool:
+        return bool(self.home) and (urlparse(session.page.url).path or "/") == self.home \
+            and not await self._signin_form(session)
+
+    async def _at_gate(self, session: SiteSession) -> bool:
+        return (urlparse(session.page.url).path or "/") in self.gate_paths or await self._signin_form(session)
+
+    async def recover(self, session: SiteSession) -> None:
+        """The tab did not reach its view (session dropped, entry gate): get past the gate once for all tabs."""
+        if not await self._at_gate(session):  # e.g. a view that redirects elsewhere: not a dropped session
+            return
+        passes = self.passes
+        async with self.gate:
+            if self.passes != passes:  # another tab passed the gate while this one waited
+                return
+            self.trace.event(session.name, "erp_recover", url=session.page.url)
+            await self._pass_gate(session)
+
+    async def ensure(self) -> None:
+        """Before a worker starts: the session signed in. After the ERP sat idle (it drops idle sessions), one tab
+        checks it and passes the gate again if needed, before the other workers pile in and sign in at once."""
+        await self.warm_up()
+        if self.busy or time.monotonic() - self.active_at < self.idle_limit:
+            return
+        async with self.checking:
+            if self.busy or time.monotonic() - self.active_at < self.idle_limit:
+                return  # another worker checked meanwhile
+            session = await self._worker_tab("check")  # a tab that does not land at home passes the gate again
+            if session is not None:
+                await self._close(session)
+            self.active_at = time.monotonic()
+
+    def _guard_login(self, session: SiteSession) -> None:
+        """Sign-ins one tab at a time; a tab that waited while another signed in first reloads, since the shared
+        context may already be signed in again."""
+        login = session._login
+
+        async def serialised(page: Page) -> bool:
+            if not await page.locator("input[type=password]:visible").count():
+                return False
+            signins = self.signins
+            async with self.signin:
+                if self.signins != signins:
+                    try:
+                        await page.reload(wait_until="domcontentloaded", timeout=30000)
+                    except Exception:
+                        pass
+                    if not await page.locator("input[type=password]:visible").count():
+                        session.events.append("another tab signed in; reloaded")
+                        return True
+                done = await login(page)
+                if done:
+                    self.signins += 1
+                    await asyncio.sleep(1.0)  # let the sign-in land before the next tab acts
+                return done
+
+        session._login = serialised  # type: ignore[method-assign]
 
     async def _tab(self, tag: str, url: str | None = None) -> SiteSession:
-        """A new tab in the shared context; `tag` only names it in the trace."""
+        """A tab in the shared context (a reused one when a finished worker left it); `tag` names it in the
+        trace. With `url`, the tab opens that link target, else the start address."""
         session = SiteSession({**self.site, "siteId": f"{self.site['siteId']}:{tag}"}, self.context, self.trace)
-        await session.start()
+        self._guard_login(session)
+        session.recover = lambda: self.recover(session)  # type: ignore[attr-defined]
+        page = None
+        while self.idle_pages and page is None:
+            candidate = self.idle_pages.pop()
+            page = None if candidate.is_closed() else candidate
+        if page is not None:
+            session.scripted = True  # the context already has the popup closer
+            session._watch(page)
+            if not url:
+                async with session.lock:
+                    await session._goto(self.site["url"])
+                await session.look()
+        else:
+            async with self.opening:
+                await session.start()
         if url:
             await self.open(session, url)
+        elif self.home and not await self._at_home(session):  # dropped: one tab passes the gate for all
+            await self.recover(session)
+            async with session.lock:
+                await session._goto(self.site["url"])
+            await session.look()
         return session
 
+    @contextlib.asynccontextmanager
+    async def _slot(self):
+        """A tab slot for one worker, with the session checked first."""
+        await self.ensure()
+        async with self.tabs:
+            self.busy += 1
+            try:
+                yield
+            finally:
+                self.busy -= 1
+                self.active_at = time.monotonic()
+
     async def open(self, session: SiteSession, url: str) -> bool:
-        """Open a link target a model reported, with the same rule as the goto tool: only on this website."""
+        """Open a link target a model reported, with the same rule as the goto tool: only on this website. A tab
+        that lands elsewhere (sign-in, entry gate) recovers once and opens it again."""
         target = on_site(self.site, url)
         if target is None:
             self.trace.event(session.name, "link_refused", url=url)
             return False
-        async with session.lock:
-            await session._goto(target)
-        await session.look()
-        return True
+        for attempt in range(2):
+            async with session.lock:
+                await session._goto(target)
+            await session.look()
+            landed, wanted = urlparse(session.page.url), urlparse(target)
+            if (landed.path, landed.query) == (wanted.path, wanted.query):
+                session.__dict__.setdefault("opened", set()).add(target)
+                return True
+            if not attempt:
+                await self.recover(session)
+        return False
 
-    @staticmethod
-    async def _close(session: SiteSession) -> None:
+    async def _close(self, session: SiteSession) -> None:
+        """Hand the worker's tab back for reuse (popups it opened are closed)."""
+        kept = False
         for page in session.pages:
+            try:
+                page.remove_listener("dialog", session._on_dialog)
+                page.remove_listener("popup", session._on_popup)
+            except Exception:
+                pass
+            if not kept and not page.is_closed() and len(self.idle_pages) < 8:
+                self.idle_pages.append(page)
+                kept = True
+                continue
             try:
                 await page.close()
             except Exception:  # already gone
                 continue
 
-    async def _search(self, req: EffectiveRequirement, tag: str, *, hint: str = "", thinking: bool = False,
-                      stop_on_loop: bool = False, tries: int = 2, delay: float = 0.0) -> SearchReport | None:
-        """One search for a requirement's candidates, in its own tab; None when the worker returned nothing."""
-        if delay:
-            await asyncio.sleep(delay)
-        goal = SEARCH_GOAL.format(group=req.catalog_group, want=_want(req)) + (f"\n\n{hint}" if hint else "")
-        report = None
-        for attempt in range(tries):  # the ERP sometimes drops the session mid-search
-            await self._enter()
-            try:
-                try:  # a tab that does not open (SiteSession.start gave up) costs this attempt, not the research
-                    session = await self._tab(tag if not attempt else f"{tag}+")
-                except Exception:
-                    continue
-                try:
-                    report, _ = await run_worker(session, goal, SearchReport, deadline=self.deadline, max_steps=14,
-                                                 **_worker_kwargs(notes=False, thinking=thinking, loop_guard=True,
-                                                                  stop_on_loop=stop_on_loop))
-                finally:  # also when a faster search made this one unnecessary
-                    await self._close(session)
-            finally:
-                self._leave()
-            if report is not None:
-                break
-        return report
-
-    async def _second_search(self, req: EffectiveRequirement, start: asyncio.Event) -> SearchReport | None:
-        """The search by another route: begins when `start` is set, or after ERP_SECOND_AFTER seconds."""
-        try:
-            await asyncio.wait_for(start.wait(), ERP_SECOND_AFTER)
-        except asyncio.TimeoutError:
-            pass
-        self.trace.event("erp", "second_search_start", requirement=req.requirement_id)
-        async with self.alt_tabs:  # a few at once, so second searches never crowd out the prescribed ones
-            return await self._search(req, f"{req.requirement_id}~alt", hint=SEARCH_ALT_HINT, thinking=True,
-                                      stop_on_loop=True, tries=1)
-
-    def _inspect(self, report: SearchReport | None) -> None:
-        """Start the detail workers of a search's hits (shared per material), without waiting for them."""
-        for c in (report.candidates if report else [])[:MAX_INSPECT]:
-            self.material(c.material_number.strip(), c.link.strip())
-
-    async def _candidates(self, req: EffectiveRequirement) -> tuple[SearchReport | None, SearchReport | None]:
-        """
-        The prescribed search and, alongside it, a second one by another route: (first, second) reports.
-        The prescribed search is never cut short. With hits, it settles the matter and a second search still
-        running (or not yet begun) is stopped. A second search that is faster gets its hits inspected at once;
-        when the prescribed search found nothing, the second begins at once if it has not, and is waited for.
-        """
-        start = asyncio.Event()
-        first = asyncio.create_task(self._search(req, req.requirement_id))
-        second = asyncio.create_task(self._second_search(req, start)) if ERP_SEARCH_RACE else None
-
-        def result(task: asyncio.Task | None) -> SearchReport | None:
-            if task is None or not task.done() or task.cancelled() or task.exception() is not None:
-                return None
-            return task.result()
-
-        try:
-            if second is not None:
-                await asyncio.wait({first, second}, return_when=asyncio.FIRST_COMPLETED)
-                if not first.done():  # the second search is in first: a head start for its hits
-                    early = result(second)
-                    self.trace.event("erp", "second_search_first", requirement=req.requirement_id,
-                                     hits=len(early.candidates) if early else 0)
-                    self._inspect(early)
-            await asyncio.wait({first})
-            report = result(first)
-            if second is not None and not (report and report.candidates) and not second.done():
-                start.set()
-                self.trace.event("erp", "waiting_for_second_search", requirement=req.requirement_id)
-                await asyncio.wait({second})
-            return report, result(second)
-        finally:
-            for task in (first, second):
-                if task is not None and not task.done():
-                    task.cancel()
+    async def _worker_tab(self, tag: str, url: str | None = None) -> SiteSession | None:
+        try:  # a tab that does not open costs this attempt, not the research
+            return await self._tab(tag, url)
+        except Exception as error:
+            self.trace.event("erp", "tab_failed", tag=tag, error=f"{type(error).__name__}: {str(error)[:160]}")
+            return None
 
     async def requirement(self, req: EffectiveRequirement) -> RequirementResearch:
         out = RequirementResearch(requirement_id=req.requirement_id)
-        report, other = await self._candidates(req)
-        if report is None and other is None:
+        report = None
+        searches: list[dict] = []  # what the search worker's site_tools.search calls showed
+        until = self._until(MATERIAL_SECONDS)
+        for attempt in range(2):  # retry once: the ERP sometimes drops the session mid-search
+            if self.left() < MATERIAL_SECONDS + 20:
+                break
+            async with self._slot():
+                session = await self._worker_tab(req.requirement_id if not attempt else f"{req.requirement_id}+")
+                if session is None:
+                    continue
+                views = _keep_views(session)
+                try:
+                    report, _ = await run_worker(
+                        session, SEARCH_GOAL.format(group=req.catalog_group), SearchReport,
+                        deadline=until, max_steps=steps(until, 6, 16), tools=(site_tools.search, site_tools.collect),
+                        **_worker_kwargs(notes=False))
+                    if report is None:  # stopped (steps, time): the hit list it ended on may still be there
+                        report = await _salvage_search(session, views, req.catalog_group)
+                finally:
+                    searches = session.__dict__.get("searches", [])
+                    await self._close(session)
+            if report is not None:
+                break
+        if report is not None and not report.candidates and group_without_hits(searches, req.catalog_group):
+            out.search_term, out.no_hits = report.search_term, True  # searched, no match (rule 3), not a gap
+            self.trace.event("erp", "group_without_hits", requirement=req.requirement_id, searches=searches)
+            return out
+        if report is None:
             out.problems.append("search worker returned no result")
             return out
-        out.search_term = (report or other).search_term
-        if other is not None and other.candidates:
-            extra = {c.material_number.strip() for c in other.candidates} - {
-                c.material_number.strip() for c in (report.candidates if report else [])}
-            self.trace.event("erp", "second_search", requirement=req.requirement_id, term=other.search_term,
-                             hits=len(other.candidates), added=sorted(extra))
-        by_number: dict[str, CandidateSeen] = {}
-        for found in (report, other):  # the prescribed search's hits first; the second search only adds
-            for c in (found.candidates if found else []):
-                by_number.setdefault(c.material_number.strip(), c)
-        out.candidates = [Candidate(material_number=number, link=c.link.strip(),
+        out.search_term = report.search_term
+        out.candidates = [Candidate(material_number=c.material_number.strip(), link=c.link.strip(),
                                     bore=_num(c.bore), stroke=_num(c.stroke), pressure=_num(c.pressure),
                                     mounting=c.mounting, certification=c.certification)
-                          for number, c in by_number.items()]
+                          for c in report.candidates]
         # every hit of the model's search is inspected (the rules cap a usable search at 20 hits); which one fits is
         # the model's choice below, once the details are known
-        out.inspected = [c.material_number for c in out.candidates][:MAX_INSPECT]
+        out.inspected = list(dict.fromkeys(c.material_number for c in out.candidates))[:MAX_INSPECT]
         if len(out.candidates) > MAX_INSPECT:
             out.problems.append(f"{len(out.candidates)} hits, inspected the first {MAX_INSPECT}")
+        # until the choice below is made, the research stands with its hits marked unfinished (so_far): a later
+        # choice can still find the exact match among the materials read, and no match omits the position
+        out.problems.append(UNFINISHED)
+        self.partial[req.requirement_id] = out
         links = {c.material_number: c.link for c in out.candidates}
-        records = await asyncio.gather(*(self.material(number, links.get(number, "")) for number in out.inspected))
-        materials = {r.material_number: r for r in records if r is not None}
-        out.selected, problems = await choose_material(req, out, materials, self.trace)
-        out.problems += problems
+        tasks = [self.material(number, links.get(number, "")) for number in out.inspected]
+        # material workers stop early enough for their reader; a record still open at the deadline is left out
+        # and the choice is made over the ones that are complete
+        done = set()
+        if tasks:
+            done, _ = await asyncio.wait(tasks, timeout=max(1.0, self.left() - CHOOSE_SECONDS))
+        materials = {}
+        for task in tasks:
+            if task in done and not task.cancelled() and task.exception() is None and task.result() is not None:
+                materials[task.result().material_number] = task.result()
+        if len(materials) < len(out.inspected):
+            out.problems.append(f"{len(out.inspected) - len(materials)} of {len(out.inspected)} materials not read")
+        try:
+            out.selected, problems = await asyncio.wait_for(choose_material(req, out, materials, self.trace),
+                                                            max(1.0, self.left() - 2))
+        except asyncio.TimeoutError:
+            out.selected, problems = None, [f"{req.requirement_id}: no choice before the research deadline"]
+        out.problems = [p for p in out.problems if p != UNFINISHED] + problems
         return out
+
+    def so_far(self) -> ErpResearch:
+        """What the ERP stage has at the deadline: finished requirements, the ones whose search finished (hits
+        marked unfinished), and every finished material record."""
+        results = []
+        for k in sorted(self.tasks, key=calc.position_key):
+            task = self.tasks[k]
+            if task.done() and not task.cancelled() and task.exception() is None:
+                results.append(task.result())
+            elif k in self.partial:
+                results.append(self.partial[k])
+        return ErpResearch(requirements=results, materials=self.records(),
+                           seconds=round(time.monotonic() - (self.started_at or time.monotonic()), 1))
 
     def material(self, number: str, link: str = "") -> asyncio.Task:
         """One detail worker per material, shared when several requirements inspect the same one."""
@@ -1032,29 +1229,34 @@ class Erp:
         views: dict[str, str] = {}
         record = None
         focus = ""
+        name = f"{self.site['siteId']}:{number}"
         for attempt in range(2):  # a second pass, keeping what was read, when facts are missing
-            await self._enter()
-            try:
-                try:  # a tab that does not open costs this attempt, not the research
-                    session = await self._tab(number if not attempt else f"{number}+")
-                except Exception:
+            if self.left() < (READ_SECONDS + 30 if not attempt else MATERIAL_SECONDS + 30):
+                break  # a second pass only with time for it; the first record stays either way
+            coverage = None
+            async with self._slot():
+                session = await self._worker_tab(number if not attempt else f"{number}+", link or None)
+                if session is None:
                     continue
-                _keep_views(session, views)
-                if link:
-                    await self.open(session, link)
-                coverage, _ = await run_worker(session, DETAIL_GOAL.format(material=number, focus=focus), Coverage,
-                                               deadline=self.deadline, max_steps=12, tools=(open_pages,),
-                                               **_worker_kwargs(notes=False, grounded=False))
-                await self._close(session)
-            finally:
-                self._leave()
+                name = session.name
+                try:
+                    _keep_views(session, views)
+                    if link and session.view:  # the record view it opened on, kept for the reader too
+                        views[session.page.url] = _strip_refs(session.view)
+                    until = self._until(READ_SECONDS)
+                    coverage, _ = await run_worker(session, DETAIL_GOAL.format(material=number, focus=focus),
+                                                   Coverage, deadline=until, max_steps=steps(until, 6, 18),
+                                                   tools=(open_pages,), **_worker_kwargs(notes=False, grounded=False))
+                finally:
+                    await self._close(session)
             corpus = _corpus(views)
-            self.trace.event(session.name, "material_read", views=len(views), chars=len(corpus),
+            self.trace.event(name, "material_read", views=len(views), chars=len(corpus),
                              not_found=coverage.not_found if coverage else "worker stopped")
             try:
-                seen = await _read_material(number, corpus, self.trace, session.name)
+                seen = await asyncio.wait_for(_read_material(number, corpus, self.trace, name),
+                                              max(5.0, self.left() - CHOOSE_SECONDS))
             except Exception as error:
-                self.trace.event(session.name, "material_failed", error=f"{type(error).__name__}: {str(error)[:200]}")
+                self.trace.event(name, "material_failed", error=f"{type(error).__name__}: {str(error)[:200]}")
                 continue
             record = _material_record(seen)
             missing = incomplete(record)
@@ -1075,7 +1277,7 @@ class Erp:
         return self.tasks[req.requirement_id]
 
     async def collect(self) -> ErpResearch:
-        """Wait for every started requirement and the materials they inspect."""
+        """Wait for every started requirement and the materials they inspect (each ends by the deadline)."""
         results = []
         for k in sorted(self.tasks, key=calc.position_key):
             try:
@@ -1083,17 +1285,20 @@ class Erp:
             except Exception as error:  # one failed requirement must not cost the others
                 results.append(RequirementResearch(requirement_id=k, problems=[
                     f"research failed: {type(error).__name__}: {str(error)[:160]}"]))
-        materials = {}
-        for number, task in self.materials.items():
-            try:
-                record = await task
-            except Exception as error:
-                self.trace.event("erp", "material_failed", material=number, error=f"{type(error).__name__}")
-                continue
-            if record is not None:
-                materials[number] = record
-        return ErpResearch(requirements=results, materials=materials,
+        return ErpResearch(requirements=results, materials=self.records(),
                            seconds=round(time.monotonic() - (self.started_at or time.monotonic()), 1))
+
+    def records(self) -> dict[str, MaterialRecord]:
+        """Every material record finished so far."""
+        out = {}
+        for number, task in self.materials.items():
+            if not task.done() or task.cancelled():
+                continue
+            if task.exception() is not None:
+                self.trace.event("erp", "material_failed", material=number, error=type(task.exception()).__name__)
+            elif task.result() is not None:
+                out[number] = task.result()
+        return out
 
     async def research(self, requirements: list[EffectiveRequirement]) -> ErpResearch:
         for req in requirements:
@@ -1112,6 +1317,10 @@ bore, stroke, pressure, mounting and certification must all equal the requiremen
 no certification required means the material must name none). Blocked materials never qualify. If none
 qualifies, answer ''."""
 
+# The choice is a short decision over records already read, and `evidence.check_choice` sends a wrong one back with
+# the reason, so it runs thinking off with a short timeout (RESEARCH_CHOOSE_THINKING=1 turns thinking on).
+CHOOSE_THINKING = os.environ.get("RESEARCH_CHOOSE_THINKING", "0") == "1"
+
 
 def _describe(number: str, record: MaterialRecord, research: RequirementResearch) -> str:
     attrs = merged_attributes(record, research)
@@ -1123,14 +1332,15 @@ def _describe(number: str, record: MaterialRecord, research: RequirementResearch
 async def choose_material(req: EffectiveRequirement, research: RequirementResearch,
                           materials: dict[str, MaterialRecord], trace: Trace | None = None
                           ) -> tuple[str | None, list[str]]:
-    """The model picks the material from the inspected candidates (thinking on); `evidence.check_choice` validates
-    the exact match and status and sends a wrong choice back with the reason."""
+    """The model picks the material from the inspected candidates; `evidence.check_choice` validates the exact
+    match and status and sends a wrong choice back with the reason."""
     if req.stroke is None:
         return None, [f"{req.requirement_id}: stroke pending ({'; '.join(req.pending)})"]
     if not materials:
         return None, [f"{req.requirement_id}: no material could be inspected"]
     agent = Agent(llm.model(), output_type=MaterialChoice, instructions=CHOOSE_MATERIAL,
-                  model_settings=_read_settings(True), retries=3)
+                  model_settings=llm.settings(CHOOSE_THINKING, timeout=llm.env_seconds("LLM_CHOOSE_TIMEOUT", 30.0)),
+                  retries=3)
 
     @agent.output_validator
     def _valid(out: MaterialChoice) -> MaterialChoice:
@@ -1155,18 +1365,53 @@ async def choose_material(req: EffectiveRequirement, research: RequirementResear
     return choice.material_number.strip() or None, []
 
 
-async def reselect(requirements: list[EffectiveRequirement], erp: ErpResearch,
-                   trace: Trace | None = None) -> dict[str, str | None]:
-    """Choose again once reserves or amendments have resolved the requirements (the ERP stage inspected every hit,
-    so no further browsing is needed)."""
-    by_id = {r.requirement_id: r for r in erp.requirements}
+RESELECT_SECONDS = float(os.environ.get("RESELECT_SECONDS", "50"))  # below the orchestrator's own cap
 
-    async def one(req: EffectiveRequirement) -> str | None:
+
+async def reselect(requirements: list[EffectiveRequirement], erp: ErpResearch, trace: Trace | None = None,
+                   budget: float = RESELECT_SECONDS) -> dict[str, str | None]:
+    """
+    Choose again once reserves or amendments have resolved the requirements (the ERP stage inspected every hit,
+    so no further browsing is needed). A choice the ERP stage's model made that still passes `check_choice` for the
+    final requirement stands without another call; the others are asked in parallel within `budget` seconds. A
+    requirement whose choice fails or runs out of time gets None and a problem on its research, so its position is
+    left out rather than taken for "no material" (no_bid); the choices made by then are kept.
+    """
+    by_id = {r.requirement_id: r for r in erp.requirements}
+    chosen: dict[str, str | None] = {}
+    asked: list[str] = []
+
+    async def one(req: EffectiveRequirement) -> None:
         research = by_id.get(req.requirement_id)
         if research is None:
-            return None
+            return
+        if research.no_hits and not research.inspected:  # the group is empty: nothing to choose from
+            chosen[req.requirement_id] = None
+            return
         materials = {n: erp.materials[n] for n in research.inspected if n in erp.materials}
-        return (await choose_material(req, research, materials, trace))[0]
+        if (req.stroke is not None and research.selected in materials
+                and check_choice(req, research, materials, research.selected) is None):
+            chosen[req.requirement_id] = research.selected
+            return
+        if req.stroke is not None:  # a stroke that was pending in the ERP stage is known now
+            research.problems = [p for p in research.problems if "stroke pending" not in p]
+        asked.append(req.requirement_id)
+        number, problems = await choose_material(req, research, materials, trace)
+        research.problems += [p for p in problems if p not in research.problems]
+        chosen[req.requirement_id] = number
 
-    chosen = await asyncio.gather(*(one(r) for r in requirements))
-    return {r.requirement_id: c for r, c in zip(requirements, chosen)}
+    started = time.monotonic()
+    tasks = [asyncio.create_task(one(r)) for r in requirements]
+    if tasks:
+        _, pending = await asyncio.wait(tasks, timeout=budget)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    for req in requirements:
+        research = by_id.get(req.requirement_id)
+        if research is not None and req.requirement_id not in chosen:
+            research.problems.append(f"{req.requirement_id}: final material choice not made in time")
+            chosen[req.requirement_id] = None
+    if trace:
+        trace.event("choose", "reselect", seconds=round(time.monotonic() - started, 1), asked=asked, chosen=chosen)
+    return chosen
