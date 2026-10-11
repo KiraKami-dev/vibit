@@ -462,3 +462,17 @@ go, start a test run with the latest changes, i need things to be below 4 minute
 ---
 
 it failed, re-run
+
+---
+
+<task-notification>
+<task-id>bmcz169fz</task-id>
+<tool-use-id>toolu_011MSzKemEUVR82byQ4DM1Cx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-gaurav-Downloads-ehl-final-error404ai-ehl-finals/591a1b26-dcf8-4b46-b17d-b3eb0358462d/tasks/bmcz169fz.output</output-file>
+<status>completed</status>
+<summary>Background command "Start the test run from the clean export of my commit (retrying if the queue is full) and wait for its score" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+also before starting with a new run, look at the leaderboard, i need the time to go down, and the cost, we are currently tinkering with the new and a better model than qwen which is faster, but until then check this https://ehl-challenge.atira.ai/challenges/rfq/stage.
