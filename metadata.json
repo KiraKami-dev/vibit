@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4MB5QZAM966XN5A984NGZ68",
+  "strategy": "manual-commit",
+  "branch": "research/agent-architecture",
+  "checkpoints_count": 7,
+  "files_touched": [
+    ".gitignore",
+    "CLAUDE.md",
+    "docs/learned.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1186,
+    "cache_creation_tokens": 1348018,
+    "cache_read_tokens": 156577191,
+    "output_tokens": 662692,
+    "api_call_count": 513,
+    "subagent_tokens": {
+      "input_tokens": 58,
+      "cache_creation_tokens": 639987,
+      "cache_read_tokens": 3041982,
+      "output_tokens": 4409,
+      "api_call_count": 29
+    }
+  }
+}
