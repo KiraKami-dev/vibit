@@ -1,0 +1,55 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4MMMFDMA586FVJ8CH1X2BHM",
+  "strategy": "manual-commit",
+  "branch": "worktree-agent-a2bc308e1974aaf80",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "evals/err404-nobid/.atira/eval.json",
+    "evals/err404-nobid/.gitignore",
+    "evals/err404-nobid/BRIEF.md",
+    "evals/err404-nobid/README.md",
+    "evals/err404-nobid/atira-eval.json",
+    "evals/err404-nobid/atira-kit.js",
+    "evals/err404-nobid/expected.json",
+    "evals/err404-nobid/package.json",
+    "evals/err404-nobid/server.js",
+    "evals/err404-nobid/sites/customer-portal.js",
+    "evals/err404-nobid/sites/erp.js",
+    "evals/err404-nobid/sites/html.js",
+    "evals/err404-nobid/sites/mail.js",
+    "evals/err404-nobid/sites/tender-portal.js",
+    "evals/err404-nobid/world.js",
+    "evals/err404-traps/.atira/eval.json",
+    "evals/err404-traps/.gitignore",
+    "evals/err404-traps/BRIEF.md",
+    "evals/err404-traps/README.md",
+    "evals/err404-traps/atira-eval.json",
+    "evals/err404-traps/atira-kit.js",
+    "evals/err404-traps/expected.json",
+    "evals/err404-traps/package.json",
+    "evals/err404-traps/server.js",
+    "evals/err404-traps/sites/customer-portal.js",
+    "evals/err404-traps/sites/erp.js",
+    "evals/err404-traps/sites/html.js",
+    "evals/err404-traps/sites/mail.js",
+    "evals/err404-traps/sites/tender-portal.js",
+    "evals/err404-traps/world.js"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5771,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 885760,
+    "output_tokens": 3976,
+    "api_call_count": 7
+  }
+}
