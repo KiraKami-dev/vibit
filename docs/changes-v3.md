@@ -51,7 +51,7 @@ of the positions next to it), and the form worker clicked past one position's pa
 
 | Variable | Default | What |
 | --- | --- | --- |
-| `AGENT_SPEC_VARIANTS` | `fast,search,explore` | Which attempts race; `fast,thinking` = main's pair |
+| `AGENT_SPEC_VARIANTS` | `fast,search` | Which attempts race (`explore` is a third, overview-first one: it never won in five runs and is off to save cost); `fast,thinking` = main's pair |
 | `AGENT_SPEC_RACE_SECONDS` | 330 | Cutoff for the race, from the orchestrator's start |
 | `SPEC_STEPS_FAST` / `SPEC_STEPS_THINKING` | 25 / 35 | Navigation steps of the fast and the thinking attempts |
 | `AGENT_LOOP_WINDOW` / `AGENT_LOOP_REPEATS` / `AGENT_LOOP_STOP` | 10 / 3 / 3 | Loop guard |

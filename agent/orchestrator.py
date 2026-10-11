@@ -71,7 +71,7 @@ MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "600"))  # from the or
 SPEC_RACE_SECONDS = float(os.environ.get("AGENT_SPEC_RACE_SECONDS", "330"))
 SPEC_GRACE = 5.0  # seconds after the cutoff an attempt may still take to return what it has
 SPEC_STAGGER = 3.0  # seconds between the attempts' sign-ins (simultaneous sign-ins to one site hung locally)
-SPEC_VARIANTS = [v.strip() for v in os.environ.get("AGENT_SPEC_VARIANTS", "fast,search,explore").split(",")
+SPEC_VARIANTS = [v.strip() for v in os.environ.get("AGENT_SPEC_VARIANTS", "fast,search").split(",")
                  if v.strip()]
 SPEC_STRATEGIES = {
     "fast": {"thinking": False, "strong": False, "steps": SPEC_STEPS_FAST, "hint": ""},
