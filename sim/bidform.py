@@ -112,6 +112,7 @@ class BidForm:
         self.tree: dict[tuple, list] = {}  # choices made so far -> the choices of the next level
         self.tags: dict[str, dict] = {name: {} for name in (*LEVELS, "material")}
         self.receipt = ""
+        self.walked: set[tuple] = set()  # the choices some recorded page shows as made
         self.tails: dict[bool, str] = {}  # what follows the add button, with and without the remove button
         for e in pages:
             text = rec.text(e)
@@ -139,6 +140,7 @@ class BidForm:
                     if not chosen:
                         break
                     made += (chosen,)
+                    self.walked.add(made)
             if not ALERT.search(text) or kind not in self.templates:
                 if kind == "review" and ("<tbody></tbody>" in text or re.search(r"TAN anfordern</button>\s*<p>", text)):
                     self.templates.setdefault("review", text)  # the plainest review page serves as the pattern

@@ -52,10 +52,17 @@ def gaps(site_id: str, rec: mirror.Recording) -> dict[str, list[str]]:
     form = bidform.find(rec)
     skip = {"/login", "/consent", rec.entry, form.path if form else None, *rec.checks.values()}
     known = set(rec.pages) | set(rec.absent)
+    tan = bidform.find_tan_mail({site_id: rec})[2]
+
+    def moving(target: str) -> bool:
+        """The TAN mails: their list grows with every request on the website; the mirror makes its own."""
+        path, query = key(target)
+        return bool(tan) and (path.startswith("/messages/" + tan.prefix) or dict(query).get("message", "").startswith(tan.prefix))
     linked = set()
     for found in rec.pages.values():
         if found[-1].body.endswith(".html"):
-            linked |= {t for t in links(rec.text(found[-1])) if key(t) not in known and key(t)[0] not in skip}
+            linked |= {t for t in links(rec.text(found[-1])) if key(t) not in known and key(t)[0] not in skip
+                       and not moving(t)}
     asked = set()
     log = mirror.CAPTURED / "_missing.log"
     for line in log.read_text(encoding="utf-8").splitlines() if log.exists() else []:
@@ -66,7 +73,7 @@ def gaps(site_id: str, rec: mirror.Recording) -> dict[str, list[str]]:
     if form:
         for made, choices in form.tree.items():
             if len(made) < len(bidform.LEVELS):
-                unwalked += [" > ".join((*made, value)) for value, _ in choices if (*made, value) not in form.tree]
+                unwalked += [" > ".join((*made, value)) for value, _ in choices if (*made, value) not in form.walked]
     return {"linked": sorted(linked), "asked": sorted(asked), "unwalked": unwalked}
 
 
@@ -88,9 +95,18 @@ class Live:
         body = None
         if form is not None:
             body, headers["Content-Type"] = urlencode(form), "application/x-www-form-urlencoded"
-        connection.request(method, target, body, headers)
-        response = connection.getresponse()
-        data = response.read()
+        for attempt in range(4):  # a slow or dropped answer is asked for again
+            try:
+                connection.request(method, target, body, headers)
+                response = connection.getresponse()
+                data = response.read()
+                break
+            except (OSError, http.client.HTTPException):
+                connection.close()
+                if attempt == 3:
+                    raise
+                time.sleep(3)
+                connection = http.client.HTTPSConnection(self.host, timeout=30)
         for name, value in response.getheaders():
             if name.lower() == "set-cookie":
                 cookie = value.split(";")[0]
@@ -163,7 +179,7 @@ def refresh_pages(live: Live, rec: mirror.Recording, site_id: str) -> dict:
     skip = {"/login", "/consent", rec.entry, form.path if form else None, *rec.checks.values()}
     found = gaps(site_id, rec)
     queue = [target_of(*k) for k in rec.pages if k[0] not in skip] + found["linked"] + found["asked"]
-    seen, report = set(), {"same": 0, "changed": [], "new": [], "gone": []}
+    seen, report = set(), {"same": 0, "changed": [], "varies": [], "new": [], "gone": []}
     origin = live.access["url"].rstrip("/")
     while queue:
         target = queue.pop(0)
@@ -191,14 +207,19 @@ def refresh_pages(live: Live, rec: mirror.Recording, site_id: str) -> dict:
             report["same"] += 1
             continue
         else:
-            report["changed"].append(target)
+            again = live.get(target)  # some pages differ on every load: shuffled links, a date in another format
+            if text is not None and again[0] == 200 and mirror.plain(live.recorder.scrub(again[2].decode("utf-8"))) != mirror.plain(text):
+                report["varies"].append(target)
+                live.recorder.store("GET", origin + target, "", again[0], again[1], again[2])
+            else:
+                report["changed"].append(target)
         live.recorder.store("GET", origin + target, "", status, headers, body)
         if text is not None and len(seen) < 3000:
             queue += [t for t in links(text) if key(t) not in seen]
     return report
 
 
-def walk_form(live: Live, rec: mirror.Recording, limit: int = 600) -> dict:
+def walk_form(live: Live, rec: mirror.Recording, limit: int = 4000) -> dict:
     """Walk every choice of the bid form's dependent selects on one position page. Never signs, never submits."""
     form = bidform.find(rec)
     tree = dict(form.tree)
@@ -227,30 +248,50 @@ def walk_form(live: Live, rec: mirror.Recording, limit: int = 600) -> dict:
 
     text = start()
     pending = [(*made, value) for made in todo if len(made) < len(bidform.LEVELS)
-               for value, _ in tree[made] if (*made, value) not in tree]
+               for value, _ in tree[made] if (*made, value) not in form.walked]
+    pending.sort()  # neighbours share their first choices, which saves round trips
+
+    def chosen(page: str) -> tuple:
+        made = ()
+        for level in bidform.LEVELS:
+            value = bidform.options_of(page, level)[1]
+            if not value:
+                break
+            made += (value,)
+        return made
+
     while pending and done < limit:
         made = pending.pop(0)
         if made in tree:
             continue
-        fields = {level: (made[i] if i < len(made) else "") for i, level in enumerate(bidform.LEVELS)}
         try:
             if bidform.kind_of(text) != "position":  # the website ended the session and shows another page
                 raise TimeoutError
-            common = {"csrf": live.token(text), "revision": re.search(r'name="revision" value="(\d+)"', text).group(1)}
-            text = live.post(form.path, {**common, **fields, "action": "configure", **{k: "" for k in (*bidform.TYPED, "lead")}})
+            now = chosen(text)
+            same = next((i for i, (a, b) in enumerate(zip(now, made)) if a != b), min(len(now), len(made)))
+            for depth in range(same + 1, len(made) + 1):  # the form takes one further choice per round trip
+                fields = {level: (made[i] if i < depth else "") for i, level in enumerate(bidform.LEVELS)}
+                common = {"csrf": live.token(text), "revision": re.search(r'name="revision" value="(\d+)"', text).group(1)}
+                text = live.post(form.path, {**common, **fields, "action": "configure",
+                                             **{k: "" for k in (*bidform.TYPED, "lead")}})
+                done += 1
+                if bidform.kind_of(text) != "position":
+                    raise TimeoutError
         except TimeoutError:
-            if sessions > 40:
+            if sessions > 60:
                 break
             live.enter()
             sessions += 1
             text = start()
             pending.insert(0, made)
             continue
-        done += 1
+        if chosen(text) != made:
+            tree[made] = []  # the website did not take this choice
+            continue
         choices = bidform.options_of(text, levels[len(made)])[0]
         tree[made] = choices
         if len(made) < len(bidform.LEVELS):
-            pending += [(*made, value) for value, _ in choices if (*made, value) not in tree]
+            pending = [(*made, value) for value, _ in choices if (*made, value) not in tree] + pending
     return {"walked": done, "left": len(pending), "sessions_restarted": sessions}
 
 
@@ -293,11 +334,15 @@ def main() -> None:
             report["form"] = walk_form(live, mirror.Recording(mirror.CAPTURED / site_id))
         report["requests"] = live.requests
         summary["sites"][site_id] = report
-        print(f"{site_id}: {report['same']} unchanged, {len(report['changed'])} changed, {len(report['new'])} new, "
+        print(f"{site_id}: {report['same']} unchanged, {len(report['varies'])} vary on every load, "
+              f"{len(report['changed'])} changed, {len(report['new'])} new, "
               f"{len(report['gone'])} gone" + (f", form {report['form']}" if "form" in report else ""), flush=True)
         for name in ("changed", "new", "gone"):
             for target in report[name][:6]:
                 print(f"   {name}: {target}")
+    known = mirror.varying()  # pages once seen to vary keep varying on the mirror
+    for site_id, report in summary["sites"].items():
+        report["varies"] = sorted(set(report["varies"]) | set(known.get(site_id, [])))
     (mirror.CAPTURED / "_refresh.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
     missing = mirror.CAPTURED / "_missing.log"
     if missing.exists():

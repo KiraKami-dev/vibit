@@ -31,7 +31,14 @@ def same(mirrored: str, website: str, source: str) -> bool:
     """The same lines in any order (some lists are shuffled on every page). A line only the mirror's view has is
     fine if the recorded page contains its text: a notice a script reveals a moment after loading."""
     def tidy(text: str) -> list[str]:
-        return sorted(RANDOM.sub("[img]", line) for line in _plain(text).splitlines())
+        def line_of(line: str) -> str:  # look-alike controls on one line come in a new order on every load
+            controls = re.findall(r"\[[^\]]*\]", line)
+            return (re.sub(r"\[[^\]]*\]", "", line).strip() + " " + " ".join(sorted(controls))).strip()
+        def date(m):  # the same date is written day first on one load and month first on the next
+            day, month = (m.group(1), m.group(2)) if m.group(3).startswith("TT") else (m.group(2), m.group(1))
+            return f"{day}.{month}."
+        text = re.sub(r"(\d\d)/(\d\d) \((TT/MM|MM/TT)\)", date, text)
+        return sorted(line_of(RANDOM.sub("[img]", line)) for line in _plain(text).splitlines())
     ours, theirs = tidy(mirrored), tidy(website)
     late = [line for line in ours if line not in theirs]
     return all(line in ours for line in theirs) and all(line in source for line in late)
@@ -81,8 +88,10 @@ async def check(playwright, site: mirror.Site, trace: Trace) -> tuple[int, int, 
     compared, differing, examples = 0, 0, []
     for url, record in list(latest.items()):
         parts = urlsplit(url)
-        if compared >= PER_SITE or url.startswith(skip) or (site.id == site.world.mail_site and "q=" not in url):
+        if compared >= PER_SITE or url.startswith(skip):
             continue
+        if site.id == site.world.mail_site and not dict(mirror.canon(parts.query)).get("q"):
+            continue  # the TAN list: it grows on the website with every request, the recorded view is of another day
         if (parts.path or "/", mirror.canon(parts.query)) not in site.rec.pages:
             continue  # only ever the answer to a form, not an address to open
         await session._goto(site.origin + url)

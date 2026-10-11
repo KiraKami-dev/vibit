@@ -63,7 +63,7 @@ class Visitor:
 class MirrorTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        mirror.BASE_PORT = 8851
+        mirror.BASE_PORT, mirror.LOG_MISSING = 8851, False
         cls.world = mirror.World("test")
         cls.servers = cls.world.serve()
 
@@ -94,10 +94,12 @@ class MirrorTest(unittest.TestCase):
                     continue  # the TAN list changes with the TANs handed out
                 target = path + ("?" + urlencode(query) if query else "")
                 status, text, _ = visitor.request("GET", target, follow=False)
-                want = site.render(site.rec.text(site.rec.page(path, query, without=next(
-                    (f'action="{f}"' for c, f in site.rec.checks.items() if path == c), ""))), None)
+                gate = next((f'action="{f}"' for c, f in site.rec.checks.items() if path == c), "")
+                want = {plain(site.render(site.rec.text(e), None)) for e in found[-4:]  # a varying page: any recent form
+                        if not gate or gate not in site.rec.text(e)} if (path, query) in site.varies else {
+                    plain(site.render(site.rec.text(site.rec.page(path, query, without=gate)), None))}
                 checked += 1
-                differing += status != 200 or plain(text) != plain(want)
+                differing += status != 200 or plain(text) not in want
             self.assertGreater(checked, 5, site.id)
             self.assertEqual(differing, 0, f"{site.id}: {differing} of {checked} pages differ")
 
@@ -105,7 +107,7 @@ class MirrorTest(unittest.TestCase):
         site = next(iter(self.world.sites.values()))
         visitor = Visitor(site)
         visitor.enter()
-        status, text, _ = visitor.request("GET", "/no-such-page-was-recorded")
+        status, text, _ = visitor.request("GET", "/never-recorded-" + mirror.secrets.token_hex(6))
         self.assertEqual(status, 404)
         self.assertIn("Not recorded", text)
 

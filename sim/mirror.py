@@ -36,6 +36,7 @@ import bidform  # noqa: E402
 CAPTURED = Path(__file__).resolve().parent / "captured"
 BASE_PORT = int(os.environ.get("SIM_PORT", "8801"))
 SESSION_SECONDS = float(os.environ.get("SIM_SESSION_SECONDS", "0"))  # 0: sessions do not time out
+LOG_MISSING = True  # tests switch this off: what they ask for is not something to record
 AUTOLOGIN = os.environ.get("SIM_AUTOLOGIN") == "1"  # sign visitors in without the form
 FLAKY = float(os.environ.get("SIM_FLAKY", "0"))  # share of pages answered with the recorded error page first
 CSRF = re.compile(r'name="csrf" value="([^"]+)"')
@@ -60,6 +61,15 @@ def plain(text: str) -> str:
     for pattern, with_ in VOLATILE:
         text = pattern.sub(with_, text)
     return text
+
+
+def varying() -> dict[str, list[str]]:
+    """Per website, the addresses the last refresh saw answer differently on every load."""
+    try:
+        sites = json.loads((CAPTURED / "_refresh.json").read_text(encoding="utf-8"))["sites"]
+    except (OSError, ValueError, KeyError):
+        return {}
+    return {site_id: report.get("varies", []) for site_id, report in sites.items()}
 
 
 def canon(query: str) -> tuple:
@@ -179,6 +189,7 @@ class Site:
         self.lock = threading.RLock()
         self.random = random.Random(world.seed + site_id)
         self.bidform = bidform.find(self.rec)
+        self.varies = {(urlsplit(t).path or "/", canon(urlsplit(t).query)) for t in varying().get(site_id, [])}
 
     # -- what is sent -------------------------------------------------------------------------------------------
 
@@ -197,8 +208,9 @@ class Site:
         return Reply(e.status, self.rec.raw(e), e.kind)
 
     def missing(self, what: str) -> Reply:
-        with (CAPTURED / "_missing.log").open("a", encoding="utf-8") as log:
-            log.write(f"{self.id} {what}\n")
+        if LOG_MISSING:
+            with (CAPTURED / "_missing.log").open("a", encoding="utf-8") as log:
+                log.write(f"{self.id} {what}\n")
         return Reply(404, MISSING.format(what=what.replace("<", "&lt;")))
 
     def check_page(self, session: Session, form_path: str, e: Exchange) -> Reply:
@@ -296,6 +308,9 @@ class Site:
                 f'href="{error.path}"', f'href="{here}"'), session), error.kind)
         without = next((f'action="{f}"' for c, f in rec.checks.items() if path == c), "")
         found = rec.page(path, query, without=without) or self.loosely(path, query)
+        if found and (path, query) in self.varies:  # a page that differs on every load: one of its recent forms
+            recent = [e for e in rec.pages[(path, query)][-4:] if not without or without not in rec.text(e)]
+            found = self.random.choice(recent or [found])
         found = found or self.rec.absent.get((path, query))  # the website's own "no such page", where recorded
         return self.recorded(found, session) if found else self.missing(f"GET {here}")
 
