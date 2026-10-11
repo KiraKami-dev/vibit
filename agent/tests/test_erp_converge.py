@@ -76,6 +76,26 @@ class SearchToolTest(unittest.TestCase):
         _, empty = search(False, "GR-9")
         self.assertIsNone(research.search_recipe(empty, "GR-9"))  # no hits: no recipe
 
+    def test_the_model_chooses_each_repeated_query_in_one_call(self):
+        erp = research.Erp({"siteId": "erp", "url": "http://localhost/"}, None,
+                           SimpleNamespace(event=lambda *a, **k: None), deadline=None)
+        erp.recipe, erp.recipe_owner = {"field_label": "Term", "query": "GR-1", "group": "GR-1"}, "A-1"
+        erp.groups = {"A-1": "GR-1", "A-2": "GR-2", "A-3": "GR-3"}
+        calls = []
+
+        async def plan(recipe, groups):
+            calls.append(sorted(groups))
+            return {"A-2": "GR-2"}  # the model gave no query for A-3
+        original = research.plan_group_queries
+        research.plan_group_queries = plan
+        try:
+            async def go():
+                return await erp._query("A-2"), await erp._query("A-3")
+            self.assertEqual(asyncio.run(go()), ("GR-2", None))
+        finally:
+            research.plan_group_queries = original
+        self.assertEqual(calls, [["A-2", "A-3"]])  # one call, the first group's own requirement left out
+
     def test_labelled_ref_needs_one_exact_control(self):
         view = '[e1 textbox "Term" value=""] [e2 button "Suchen"] [e3 button "Suchen"]'
         self.assertEqual(research._labelled_ref(view, "Term", ("textbox",))[0], "e1")
