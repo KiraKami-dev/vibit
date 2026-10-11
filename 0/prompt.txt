@@ -384,3 +384,7 @@ Can you try running one of the coding one either through the one local instance 
 ---
 
 Who has access to the coding tool? Like of the different agents / steps?
+
+---
+
+How are the coding experiments going? Can we really just let it run anything like in the context repo I provided? Just testing it. Maybe also allowing it to copy over html or whatever? And in a stateful kernel or so?
