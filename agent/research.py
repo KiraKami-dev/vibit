@@ -934,8 +934,9 @@ class Erp:
         self.ready: asyncio.Task | None = None
         self.materials: dict[str, asyncio.Task] = {}
         self.tasks: dict[str, asyncio.Task] = {}
-        # a few tabs at once: every tab is one more page load on a site that slows down under load
-        self.tabs = asyncio.Semaphore(int(os.environ.get("ERP_TABS", "6")))
+        # every tab is one more page load on a site that slows down under load; 10 lets the materials of five
+        # requirements be read in one round (with 6 they took two, 80 s, and ended after the mail research)
+        self.tabs = asyncio.Semaphore(int(os.environ.get("ERP_TABS", "10")))
         self.idle_pages: list[Page] = []  # open tabs a finished worker left, reused instead of a fresh start
         self.opening = asyncio.Lock()  # fresh tabs sign in one after another
         self.signin = asyncio.Lock()  # one sign-in at a time

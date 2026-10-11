@@ -52,9 +52,10 @@ SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "390"))
 # v3: 360 (was 300). submit.py stops entering positions SIGNING_RESERVE (180) before the end, so a form that
 # starts at the last moment has 180 s for its steps and positions (measured: 193 s, and 352 s on a slow bid site).
 FORM_SECONDS = float(os.environ.get("AGENT_FORM_SECONDS", "360"))  # the bid form and signing need this much
-# Mail is the longest chain of the research (measured: nine record kinds of 40 to 190 s each took three rounds
-# over 4 tabs). 6 tabs make it two rounds.
-MAIL_TABS = int(os.environ.get("MAIL_TABS", "6"))
+# Mail is the longest chain of the research: nine record kinds of 40 to 190 s each took three rounds over 4 tabs
+# and two over 6 (three kinds waited 50 to 90 s for a free tab, and the research ended when they did). With a tab
+# per kind none waits. Each tab is one more sign-in on the webmail; MAIL_TABS lowers it again.
+MAIL_TABS = int(os.environ.get("MAIL_TABS", "9"))
 SPEC_STEPS_FAST = int(os.environ.get("SPEC_STEPS_FAST", "25"))  # navigation steps of the fast spec attempt
 SPEC_STEPS_THINKING = int(os.environ.get("SPEC_STEPS_THINKING", "35"))  # and of the careful one, run alongside
 SELECT_SECONDS = 75.0  # the final material choice (a model call per requirement, in parallel)
