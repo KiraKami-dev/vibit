@@ -222,3 +222,8 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   link's target on its own when the tab shows no next control (a test run showed followed=1); later views are read
   too; an unfinished Q&A is a gap; and before a no_bid for unmatched requirements the Q&A is re-read once for their
   amendments. Test runs of 2e0ef68: 100 (7:17), 100 (7:14), 100 (9:16).
+- Dead tabs (runs ec4e, d253): a page that stopped answering script calls cost every later call its full timeout
+  (ec4e: the bid form 8 min, unsigned, quality 0; d253: an ERP worker 578 s on one tool call, a false no_bid). Now
+  settle/look reopen such a tab (same URL in a new tab, keeping the site session and the wizard step; else a fresh
+  start) and every worker tool call is cut off after STUCK_SECONDS without an answer. Test runs 565c and 8c1e: 100
+  and 100; in 565c a hung mail tab was reopened in about 1 s.
