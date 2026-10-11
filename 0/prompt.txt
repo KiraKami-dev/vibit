@@ -1,0 +1,9 @@
+Could we get the same model we got provided but via openrouter / fireworks so it faster? So the qwen flash one?
+
+---
+
+Please don't edit in the main repo but a branch. And for qwen via the router how is speed / cost vs the provided ones from atira. And is fireworks an option?
+
+---
+
+Maybe on another port?
