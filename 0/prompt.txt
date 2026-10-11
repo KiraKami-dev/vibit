@@ -1,0 +1,386 @@
+Can you (only make changes in a subtree or so) analyze how we can drive down cost and time? With the decision model cleft provided? Somehow else? Also check the CLAUDE.md
+
+---
+
+Can you dig deeper, maybe with subagents, analyzing other teams, our commits. And then give us a real good overview.
+
+---
+
+"Two Haiku runs and four GLM runs lost substantial quality" maybe also as we itereated only on one model and it kind of adapted? But others on the leaderboard also seem to use Qwen still
+
+---
+
+So to clarify: we are talking time and tokens
+
+---
+
+Can you (in a subtree) do changes to trim cost? Then you can also submit etc. as test runs to show it works. And what about the Clef model that isnot an option?
+
+---
+
+It is possible for up to 10 test runs per team. Just other team mates / other seesions may use some. But you can use more
+
+---
+
+could we maybe also a subagent or so to really explore something novel? Or like think of it? Maybe we are missing something? Leave out stuff, automate, some store, smaller models for summary, any methods anything really novel to improve (and also to pitch)
+
+---
+
+What if we build like a coding tool? Like letting the agent run code e.g. against the html in a sandbox? So maybe like isolated ones or so? (Or not). Let it run code against the page to e.g. find do analysis etc.?
+Or something else of what ChatGPT proposed?
+
+You are actually in a much better position than “not going well” sounds: **100/100 quality and currently 4th**. The gap is almost purely efficiency. Your present cost×time is roughly **21× the leader’s**, so this is now an architecture-optimization problem, not a reasoning problem. [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+The challenge rules give you a fairly large loophole—in the good sense: the **model has to choose what to investigate**, but once it has selected a page/result set/document, helpers may **extract it, paginate it, calculate, validate, retry and fill forms**. And you get **four browsers in parallel**. [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+### I would try this architecture
+
+**1. Turn the agent into a tiny “control plane,” not the worker.**
+
+Right now, if you're doing browser-agent loops like:
+
+> screenshot → LLM → click → screenshot → LLM → click → ...
+
+kill as much of that as possible.
+
+Have the LLM make **one semantic decision** such as:
+
+> “This is the latest applicable specification revision; extract its requirements.”
+
+Then deterministic code takes over: DOM extraction, table pagination, ZIP/PDF parsing, etc. This is explicitly permitted after a model-selected target. [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+Think:
+
+**LLM selects → code exhausts selected thing → LLM selects next semantic thing.**
+
+Not:
+
+**LLM drives every mouse movement.**
+
+That could be the single biggest improvement.
+
+---
+
+### 2. Use all four browsers as a dependency DAG
+
+You do **not** need to process the four sites sequentially; Atira explicitly says sites and positions can be investigated in parallel. [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+I would roughly do:
+
+| Browser | Job |
+|---|---|
+| A | Tender + reference + positions + Q&A |
+| B | Supplier portal + identify current spec + extract requirements |
+| C | Mail: approvals / commercial records |
+| D | ERP, immediately once Kataloggruppe + attributes arrive |
+
+But don't make them four autonomous expensive agents.
+
+Make them **four workers controlled by one central state object**.
+
+As soon as Browser A finds the tender reference, emit it to C.  
+As soon as B extracts requirement 10, emit it to D.  
+As soon as A gets the final quantity for position 10, update pricing.  
+
+You then overlap almost everything rather than waiting for “phase 1 complete.”
+
+Your 7:33 is particularly suspicious here because the winner is doing the whole thing in **1:38**. They almost certainly aren't doing a long serial ReAct trajectory. [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+---
+
+### 3. Do **zero LLM arithmetic**
+
+This challenge is almost begging for a deterministic pricing engine.
+
+Use `Decimal(..., ROUND_HALF_UP)` and encode all rules in code:
+
+- quantity conversion
+- price scales
+- FX
+- conditional discounts
+- pooled stock
+- carton rounding
+- shared setup allocation
+- marginal project bonus
+- largest-remainder allocation
+- metal-index date windows
+- final unit price
+- total
+
+The LLM should merely produce facts such as:
+
+```text
+condition_group = KG2
+discount_scope = base_and_surcharge
+current_revision = REV_C
+packaging_tariff = VP4
+```
+
+Your program calculates the answer.
+
+The challenge specifically permits calculation helpers, and the numerical rules are completely specified. [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+This is also **more private-set robust** than letting Qwen repeatedly reason through pricing prose.
+
+---
+
+## The slightly more evil optimizations
+
+### 4. Build a “semantic compiler”
+
+Instead of asking an LLM to reason about all gathered evidence at the end, compile each selected document immediately into your own normalized IR:
+
+```text
+TenderState
+  reference
+  scenario_date
+  positions[]
+
+Position
+  id
+  qty
+  kataloggruppe
+  bore
+  stroke
+  pressure
+  mounting
+  certification
+  condition_group
+  packaging_key
+  commitment_key
+  ...
+```
+
+Mail becomes:
+
+```text
+AuthorityRecord {
+   kind,
+   tender_ref,
+   effective_date,
+   payload
+}
+```
+
+ERP becomes:
+
+```text
+Material {
+   id,
+   attributes,
+   stock,
+   scale_prices,
+   production_lead,
+   ...
+}
+```
+
+Once that IR exists, **there is no agent anymore**. The rest is a compiler.
+
+I think this is a strong “elegant system” story too, which matters because private performance is followed by public performance and then **system elegance** in the final judging. [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+---
+
+### 5. Ask models questions that can be answered in ~5 tokens
+
+Qwen output costs considerably more than cached input: **$0.47/M output vs $0.016/M cached input**. [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+Don't ask:
+
+> Analyze the page and explain which document is most likely...
+
+Ask:
+
+```text
+Return one:
+REV_A
+REV_B
+REV_C
+```
+
+Or use structured/tool responses:
+
+```json
+{"selected":2}
+```
+
+Likewise for navigation:
+
+```json
+{"action":"open","candidate":3}
+```
+
+No prose, no thoughts, no summaries.
+
+You don't care whether Qwen can eloquently explain why `REV_C` is current.
+
+---
+
+### 6. Exploit prompt caching deliberately
+
+Qwen cached input is almost **10× cheaper** than uncached input ($0.016/M vs $0.15/M). [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+Make the beginning of every Qwen request **byte-identical**:
+
+```text
+SYSTEM
+challenge rules...
+navigation policy...
+schemas...
+```
+
+Then put the changing state at the very end.
+
+Do **not** continually rewrite your giant system prompt/state summary.
+
+Potentially:
+
+```text
+[STATIC 15k-token challenge/navigation prefix]
+[DYNAMIC 500-token observation]
+```
+
+rather than repeatedly paying for a changing 15k context.
+
+---
+
+### 7. DOM-first, screenshot-last
+
+Everything here is business software. Most of the information is text/tables/forms.
+
+If your agent is feeding full 1280×800 screenshots into Qwen all the time, that's probably murder on both latency and cost.
+
+Preferred hierarchy:
+
+**DOM/accessibility text → selected element text → cropped screenshot → full screenshot**
+
+Use vision only for genuinely awkward UI state: popup ambiguity, nested viewer controls, etc.
+
+Clef is explicitly intended for cheap little decisions such as “which link?” / “is this the right document?” [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+---
+
+### 8. Make Clef your reflex layer
+
+Interesting possible hybrid:
+
+**Clef = reflexes**  
+**Qwen = semantics**
+
+For example:
+
+- “Which of these four buttons opens search?” → Clef
+- “Is this page the current revision?” → Clef
+- “Which one of these three mail results is about this tender?” → Clef
+
+But:
+
+- “Interpret this commercial clause.” → Qwen
+- “Which technical amendment applies?” → Qwen
+
+Clef output isn't priced, while Qwen output is. [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+I would benchmark it rather than blindly replacing everything, though—the input rate for Clef is actually higher than Qwen's.
+
+---
+
+## One especially promising idea: **LLM fan-out, not agent fan-out**
+
+You have Qwen concurrency of **32 simultaneous calls**. [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+Suppose you have eight ERP candidates.
+
+Don't do:
+
+```text
+agent considers candidate 1
+agent considers candidate 2
+...
+```
+
+Once the model has legitimately selected that ERP result set, your helper can extract it.
+
+Then either **code compares exact structured attributes**—ideal—or fire tiny Qwen classification calls concurrently where interpretation remains necessary:
+
+```text
+candidate 1 match? Y/N
+candidate 2 match? Y/N
+...
+```
+
+Eight 300 ms-ish tasks in parallel rather than eight sequential reasoning turns.
+
+Same for positions.
+
+---
+
+## And one thing I would *not* do
+
+Don't overfit harder to the public websites to chase #1.
+
+The private run changes:
+
+- websites,
+- software,
+- layouts,
+- navigation,
+- site names,
+- content,
+- where information is split.
+
+And **private-set performance matters most**. [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+So hardcoding selectors like “click the third sidebar item” might get you 50 seconds publicly and kill the actual competition.
+
+The winning abstraction is likely:
+
+> **generic model-guided semantic navigation + extremely aggressive deterministic execution once the model has chosen the target.**
+
+That both obeys the rules and transfers.
+
+### If I were error404.ai right now
+
+I would spend the remaining optimization effort in this order:
+
+1. **Move every calculation out of the LLM.**
+2. **Run 4 browsers concurrently.**
+3. **Replace per-click LLM loops with model-select → helper-extract.**
+4. **Emit structured events immediately between browser workers.**
+5. **Cut Qwen responses to tiny enums/JSON.**
+6. **DOM/text instead of screenshots.**
+7. **Parallelize per-position work.**
+8. **Test Clef for trivial navigation decisions.**
+9. **Optimize prompt caching.**
+10. Only then experiment with smaller/fewer models.
+
+Getting you from **7:33 → ~2:00–3:00** looks much more plausible than trying to squeeze your current sequential agent down incrementally. And because cost usually falls simultaneously when you remove agent turns, that attacks **both axes at once**—exactly what this leaderboard rewards. [Atira EHL Challenge](https://ehl-challenge.atira.ai/challenges/rfq)
+
+If your current implementation is roughly a browser-use/Playwright + Qwen loop, the **“semantic compiler” approach is probably the most interesting pivot I'd try tonight.**
+
+---
+
+Maybe also not just read only but like real coding kernel, such as in my thesis (although it is on other data there). And we may would need multiple one for subagents but not sure /Users/jonasstenglein/MasterThesis/Hancas
+
+---
+
+"arbitrary Python execution into this challenge sandbox yet" why not?
+
+---
+
+I mean letting a subagent try this more radical design approach could be nice
+
+---
+
+And you or other subagents can do more conservative stuff still
+
+---
+
+We got interrupted by a rate limit. But everything is now fine. CAn you check that you and the subagents keep on running?
+
+---
+
+Can you try running one of the coding one either through the one local instance we can do or better through a sandbox? Or ask a subagent to do so?
+
+---
+
+Who has access to the coding tool? Like of the different agents / steps?
