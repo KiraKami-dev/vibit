@@ -384,5 +384,48 @@ class PositionsInOneCall(unittest.TestCase):
         self.assertTrue(answers[0].endswith(position_page("01.02")))
 
 
+class ListPagesShownByHand(unittest.TestCase):
+    """collect_pages starts where the worker is: pages of the list it paged through by hand are read too."""
+
+    def page(self, n: int, last: bool = False) -> str:
+        pager = "" if last else '\n[e9 button "Next page"]'
+        return f"# Questions and answers, page {n}\n[e3 link \"Answer {n}01\"]{pager}"
+
+    def test_pages_before_the_collection_started_are_added(self):
+        import research_tender as rt
+        collected = rt.Collected(pages=[self.page(3), self.page(4, last=True)], control=("button", "Next page"))
+        views = ["# Tender overview\n[e2 link \"Questions\"]", self.page(1), self.page(2), self.page(3)]
+        pages = rt.pages_to_read(collected, views, "everything seen")
+        self.assertEqual(pages, [self.page(3), self.page(4, last=True), self.page(1), self.page(2)])
+
+    def test_refs_do_not_make_a_page_new_and_other_pages_stay_out(self):
+        import research_tender as rt
+        collected = rt.Collected(pages=[self.page(1)], control=("button", "Next page"))
+        same_with_other_refs = self.page(1).replace("[e3 ", "[e31 ").replace("[e9 ", "[e97 ")
+        self.assertEqual(rt.pages_to_read(collected, [same_with_other_refs, "# Start\n[e1 link \"Tenders\"]"], ""),
+                         [self.page(1)])
+
+    def test_without_a_collection_everything_seen_is_read(self):
+        import research_tender as rt
+        self.assertEqual(rt.pages_to_read(rt.Collected(), [self.page(1)], "everything seen"), ["everything seen"])
+
+    def test_views_are_recorded_once_each(self):
+        import research_tender as rt
+        shown = iter([self.page(1), self.page(1).replace("[e3 ", "[e5 "), self.page(2)])
+        session = SimpleNamespace(view="")
+
+        async def look(offset: int = 0, **options) -> str:
+            session.view = next(shown)
+            return session.view
+        session.look = look
+
+        async def run():
+            views = rt.record_views(session)
+            for _ in range(3):
+                await session.look()
+            return views
+        self.assertEqual(asyncio.run(run()), [self.page(1), self.page(2)])
+
+
 if __name__ == "__main__":
     unittest.main()

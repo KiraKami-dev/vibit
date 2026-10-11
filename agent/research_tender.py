@@ -164,6 +164,7 @@ def _normal(view: str) -> str:
 @dataclass
 class Collected:
     pages: list[str] = field(default_factory=list)
+    control: tuple[str, str] | None = None  # (kind, name) of the list's paging control, once collect_pages ran
 
     def add(self, view: str) -> bool:
         """Keep a page view; False when it adds nothing new (past the end a list repeats a page it showed)."""
@@ -189,6 +190,38 @@ def _control(view: str, ref: str) -> tuple[str, str] | None:
     return None
 
 
+def record_views(session: SiteSession) -> list[str]:
+    """Every distinct page text the session shows from now on, in order."""
+    views: list[str] = []
+    known: set[str] = set()
+    look = session.look
+
+    async def recording_look(offset: int = 0, **options) -> str:
+        out = await look(offset, **options)
+        if offset == 0 and session.view and _normal(session.view) not in known:
+            known.add(_normal(session.view))
+            views.append(session.view)
+        return out
+
+    session.look = recording_look  # type: ignore[method-assign]
+    return views
+
+
+def pages_to_read(collected: Collected, views: list[str], seen: str) -> list[str]:
+    """
+    The list pages to read: the collected ones first, then every other page of the same list the worker showed
+    (a view with the list's paging control). collect_pages starts on the page the worker is on: in one sandbox run
+    the worker had clicked "next" twice by hand before calling it, the first two pages were never read, and the
+    amendment on them was lost (one position without a matching material, so the whole bid went in as no bid).
+    """
+    if not collected.pages:
+        return [seen]
+    have = {_normal(p) for p in collected.pages}
+    extra = [v for v in views if _normal(v) not in have and collected.control is not None
+             and any((k, n) == collected.control for _, k, n in REF_LINE.findall(v))]
+    return [*collected.pages, *extra]
+
+
 def paging_tool(collected: Collected):
     """A tool that pages through the result set the model is looking at, by repeating the control it names."""
 
@@ -201,6 +234,7 @@ def paging_tool(collected: Collected):
         if control is None:
             return f"No control {next_ref} in the latest view; use a ref from the latest view."
         kind, name = control
+        collected.control = control
         collected.add(session.view)
         ref, pages = next_ref, 1
         for _ in range(MAX_PAGES):
@@ -476,10 +510,15 @@ async def research_tender(session: SiteSession, reference: str, scenario: dateti
         return await read_positions("\n\n".join(documents or [session.seen]), reference)
 
     async def qa_part() -> QaRecords:
+        views = record_views(qa_session)
         await run_worker(qa_session, _qa_goal(reference), Summary, deadline=deadline,
                          max_steps=steps_for(14, deadline), thinking=False, grounded=False,
                          tools=(paging_tool(collected),))
-        return await read_qa(collected.pages or [qa_session.seen], reference)
+        pages = pages_to_read(collected, views, qa_session.seen)
+        if len(pages) > max(1, len(collected.pages)):
+            qa_session.trace.event(qa_session.name, "list_pages_added", collected=len(collected.pages),
+                                   added=len(pages) - len(collected.pages))
+        return await read_qa(pages, reference)
 
     qa_task = asyncio.create_task(qa_part())
     try:
