@@ -51,7 +51,9 @@ except ImportError:  # pragma: no cover
 # research ends this long before the end: the form needs up to ~185 s and signing ~30 s (173 s with a bad TAN)
 SUBMIT_SECONDS = float(os.environ.get("AGENT_SUBMIT_SECONDS", "390"))
 FORM_SECONDS = float(os.environ.get("AGENT_FORM_SECONDS", "300"))  # the bid form and signing need this much
-MAIL_TABS = int(os.environ.get("MAIL_TABS", "4"))
+# Mail tabs in the webmail's one browser: about nine record kinds took three rounds over four tabs, and the mail is the
+# last research to finish; six tabs take them in two rounds (tabs are free, the work and its cost stay the same).
+MAIL_TABS = int(os.environ.get("MAIL_TABS", "6"))
 SPEC_STEPS_FAST = int(os.environ.get("SPEC_STEPS_FAST", "25"))  # navigation steps of the fast spec attempt
 SPEC_STEPS_THINKING = int(os.environ.get("SPEC_STEPS_THINKING", "35"))  # and of the careful one, run alongside
 SELECT_SECONDS = 75.0  # the final material choice (a model call per requirement, in parallel)
