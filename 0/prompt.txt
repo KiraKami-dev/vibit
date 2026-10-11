@@ -388,3 +388,7 @@ Who has access to the coding tool? Like of the different agents / steps?
 ---
 
 How are the coding experiments going? Can we really just let it run anything like in the context repo I provided? Just testing it. Maybe also allowing it to copy over html or whatever? And in a stateful kernel or so?
+
+---
+
+If you or a subagent named anything "hancas' in this repo. Please don't and rename.
