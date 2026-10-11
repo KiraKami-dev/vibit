@@ -626,7 +626,10 @@ def settings(thinking: bool = False, *, timeout: float | None = None) -> ModelSe
         body: dict = {"reasoning": openrouter_reasoning(thinking), "usage": {"include": True}}
         if (provider := openrouter_provider()) is not None:
             body["provider"] = provider
-        return ModelSettings(temperature=0.2, parallel_tool_calls=False, timeout=seconds, extra_body=body)
+        # No temperature: the model's default (GLM 5.3 Flash: 1.0) instead of Qwen's 0.2, under which retries of a
+        # call that ran away repeat it. max_tokens bounds a runaway answer: the sandbox showed the same requests
+        # hanging until the proxy's 5-minute cut, retry after retry.
+        return ModelSettings(parallel_tool_calls=False, timeout=seconds, max_tokens=max_tokens(), extra_body=body)
     return ModelSettings(
         temperature=0.2,
         parallel_tool_calls=False,  # one tab per worker: actions must run in order

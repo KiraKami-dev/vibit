@@ -98,6 +98,8 @@ class Thinking(unittest.TestCase):
             self.assertEqual(settings["extra_body"]["provider"], {"order": ["fireworks"], "allow_fallbacks": False})
             self.assertNotIn("chat_template_kwargs", settings["extra_body"])
             self.assertFalse(settings["parallel_tool_calls"])
+            self.assertNotIn("temperature", settings)
+            self.assertEqual(settings["max_tokens"], llm.DEFAULT_MAX_TOKENS)
         self.assertEqual((off["timeout"], on["timeout"]), (25.0, 80.0))
         self.assertFalse(llm.settings_thinking(off))
         self.assertTrue(llm.settings_thinking(on))
@@ -160,6 +162,8 @@ class Request(unittest.TestCase):
             self.assertEqual(body["provider"], {"order": ["fireworks"], "allow_fallbacks": False})
             self.assertEqual(body["usage"], {"include": True})
             self.assertFalse(body["parallel_tool_calls"])
+            self.assertNotIn("temperature", body)
+            self.assertEqual(body.get("max_completion_tokens", body.get("max_tokens")), llm.DEFAULT_MAX_TOKENS)
             self.assertTrue(body["tools"])
 
 
