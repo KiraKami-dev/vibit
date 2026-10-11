@@ -318,6 +318,7 @@ class PositionDebug(BaseModel):
     pooled_demand: int
     scale_min_quantity: int
     scale_price: Decimal
+    price_unit: int = 1
     currency: str
     fx_rate: Decimal
     base_eur: Decimal
@@ -580,6 +581,29 @@ def _base_eur(pos: PositionInput, pieces: int, bid: BidInput) -> tuple[Decimal, 
     raise CalcError(f"no FX rate for {key}")
 
 
+# A converted base price this far from the ERP's per-piece price (EUR per currency unit) comes from a misread rate
+# or price, not from a currency: no currency is worth 100 EUR, and 1/1000 still admits yen- or forint-like ones.
+FX_FACTOR_MAX = HUNDRED
+FX_FACTOR_MIN = Decimal("0.001")
+
+
+def implausible_prices(result: "BidResult") -> dict[str, str]:
+    """
+    Positions whose base price is wildly out of line with the ERP scale price it came from (after price unit and
+    FX), with why. A soak run read a fixing of 1.0873 as 10873 and bid base prices ten thousand times the ERP's.
+    """
+    out = {}
+    for d in result.debug:
+        per_piece = d.scale_price / Decimal(d.price_unit)
+        if per_piece <= 0 or d.base_eur <= 0:
+            continue
+        factor = d.base_eur / per_piece
+        if not FX_FACTOR_MIN <= factor <= FX_FACTOR_MAX:
+            out[d.position] = (f"base price {d.base_eur} EUR is {factor:.4g} x the ERP scale price {per_piece} "
+                               f"{d.currency} per piece (FX rate {d.fx_rate} implausible)")
+    return out
+
+
 def _metal_rate(material: Material, bid: BidInput) -> Decimal:
     if material.surcharge_mass == 0:
         return Decimal(0)
@@ -700,7 +724,7 @@ def calculate(bid: BidInput) -> BidResult:
             rebate_total=money(credit)))
         debug.append(PositionDebug(
             position=k, pieces=n, pooled_demand=pooled[material.material_number], scale_min_quantity=scale.min_quantity,
-            scale_price=scale.price, currency=cond.currency, fx_rate=fx, base_eur=base_eur, metal_rate=rates[k],
+            scale_price=scale.price, price_unit=cond.price_unit, currency=cond.currency, fx_rate=fx, base_eur=base_eur, metal_rate=rates[k],
             mass_surcharge=surcharge[k], discount_factor_base=f_base, discount_factor_surcharge=f_sur,
             setup_fee=p.setup_fee, pool_allocation=pool.get(k, Decimal(0)), cartons=cartons, carton_cost=carton_cost,
             bonus=credit, unit_price_exact=exact))

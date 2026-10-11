@@ -85,6 +85,22 @@ class ConversionTest(unittest.TestCase):
         self.assertEqual(facts.fx_per_eur, {"FX-A": Decimal("1.08")})
         self.assertEqual(facts.fx_rates, {"FX-B": Decimal("0.93"), "FX-C": Decimal("0.0062")})
 
+    def test_fx_decimal_point_in_a_de_message(self):
+        # the message is "de" (as most of its figures) but quotes the rate with a decimal point: 1.2345, not 12345
+        facts = self.resolve("fx", rm.FxContent(entries=[
+            rm.FxRate(key="FX-D", currency="USD", rate="1.2345", direction="eur_per_currency")]))
+        self.assertEqual(facts.fx_rates, {"FX-D": Decimal("1.2345")})
+        clauses = rm.bid_clauses(SimpleNamespace(positions=[]), facts)
+        condition = calc.PriceCondition(valid_from=datetime(2030, 1, 1, tzinfo=UTC), currency="USD", fx_key="FX-D",
+                                        price_unit=100, scales=[calc.PriceScale(min_quantity=1,
+                                                                                price=Decimal("60000"))])
+        material = calc.Material(material_number="M-1", stock_lead_time_weeks=1, production_lead_time_weeks=2)
+        result = calc.calculate(calc.BidInput(
+            tender_reference="T-1", scenario_date=SCENARIO, fx_rates=clauses.fx_rates, fx_per_eur=clauses.fx_per_eur,
+            positions=[calc.PositionInput(position="1", quantity=1, material=material, conditions=[condition])]))
+        self.assertEqual(result.positions[0].base_unit_price, Decimal("740.70"))  # 600.00 x 1.2345
+        self.assertEqual(calc.implausible_prices(result), {})
+
     def test_metal_index_per_tonne_becomes_per_kg(self):
         facts = self.resolve("metal_indices", rm.MetalIndexContent(rates=[
             rm.IndexRate(code="IDX-1", rate="4.250,00", per="tonne"),

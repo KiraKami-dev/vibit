@@ -256,3 +256,7 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   (AGENT_ERP_BATCH): ERP search calls 20-22 -> 4. Detail workers end once open_pages finds no link of their record
   left (ERP_DETAIL_STOP): detail calls 29-39 -> 22-27. Test runs of 4f94f35: 100, 100, 100 at $0.086-0.103.
 - Mail search and mail readers are now about half the cost (42-55 %); the next cuts are there.
+- A record-level number format comes from a model and does not bind every figure: a soak run (80.1) read an FX
+  fixing tagged "de" whose rate was written with a decimal point, parsed it as ten thousand times the rate and bid
+  three USD positions at millions of EUR. A separator that cannot group thousands is now the decimal mark, and a
+  base price more than 100x (or under 1/1000) its ERP per-piece price is blanked and sends FX to the gap pass.
