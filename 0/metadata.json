@@ -1,0 +1,68 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4MRRE3KV328G1AWNKV7ZEYM",
+  "session_id": "01a128bc-5ae3-7c50-a7e3-606359b5b93f",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-11T06:00:18.510346Z",
+  "branch": "worktree-agent-a51f616182df6dc45",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "experiments/runs.jsonl"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6.1-sol",
+  "turn_id": "f945b9adc5f6",
+  "checkpoint_transcript_start": 6005,
+  "transcript_lines_at_start": 6005,
+  "compact_transcript_start": 737,
+  "token_usage": {
+    "input_tokens": 15821,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 475136,
+    "output_tokens": 2199,
+    "api_call_count": 5,
+    "subagent_tokens": {
+      "input_tokens": 7824,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 561920,
+      "output_tokens": 706,
+      "api_call_count": 4
+    },
+    "subagent_tokens_complete": true
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-11T06:00:18.35358Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 16,
+    "human_removed": 9,
+    "total_committed": 9,
+    "total_lines_changed": 27,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 198,
+      "user_lines_removed": 1,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 11,
+        ".claude/skills/entire-search/SKILL.md": 1,
+        ".codex/hooks.json": 88,
+        "docs/cost-time-analysis.md": 92,
+        "experiments/runs.jsonl": 6
+      },
+      "user_removed_per_file": {
+        ".claude/skills/entire-search/SKILL.md": 1
+      }
+    }
+  ]
+}
