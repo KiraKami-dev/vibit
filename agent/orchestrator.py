@@ -220,13 +220,18 @@ def safe_calculate(bid: calc.BidInput) -> tuple[calc.BidResult | None, dict[str,
     return None, blank, problems
 
 
-def material_attributes(material) -> dict[str, str]:
-    """The chosen material's attributes as the ERP shows them (the bid form's cascading choices lead to it)."""
+def material_attributes(material, requirement=None) -> dict[str, str]:
+    """
+    The chosen material's attributes as the ERP shows them, completed by the requirement's (its catalogue group
+    and whatever the ERP did not show): the bid form's cascading choices lead through any of them to the material.
+    """
     out = {}
-    for key in ("bore", "stroke", "pressure", "mounting", "certification"):
-        value = getattr(material, key, None)
-        if value not in (None, ""):
-            out[key] = format(value, "f") if isinstance(value, Decimal) else str(value)
+    for key in ("catalog_group", "bore", "stroke", "pressure", "mounting", "certification"):
+        for source in (material, requirement):
+            value = getattr(source, key, None)
+            if value not in (None, ""):
+                out[key] = format(value, "f") if isinstance(value, Decimal) else str(value)
+                break
     return out
 
 
@@ -948,7 +953,11 @@ class Orchestrator:
                 problems.append(f"position {p.position}: record of {number} not read; position omitted")
                 continue
             if material is not None:
-                self.attributes[p.position] = material_attributes(material)
+                try:  # after amendments and the usable-travel derivation
+                    wanted = self.effective(self.requirements[req_id])
+                except Exception:
+                    wanted = None
+                self.attributes[p.position] = material_attributes(material, wanted)
             clause = by_position.get(p.position)
             self._unknown_clauses(p, clause, getattr(clauses, "setup_pool", None),
                                   getattr(clauses, "project_bonus", None))

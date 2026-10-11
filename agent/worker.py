@@ -168,4 +168,16 @@ async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, c
                             seconds=round(time.monotonic() - started, 1), requests=usage.requests,
                             input_tokens=usage.input_tokens, cached_tokens=usage.cache_read_tokens,
                             output_tokens=usage.output_tokens)
+    if usage.requests:
+        PACE.append((time.monotonic() - started, usage.requests))
     return output, deps.notes
+
+
+PACE: list[tuple[float, int]] = []  # (seconds, model requests) of finished worker runs, for time budgets
+
+
+def seconds_per_step(default: float = 10.0, recent: int = 8) -> float:
+    """Seconds one worker step (a model request and its tools) took lately; `default` before any run."""
+    runs = PACE[-recent:]
+    steps = sum(requests for _, requests in runs)
+    return sum(seconds for seconds, _ in runs) / steps if steps else default

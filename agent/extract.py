@@ -99,15 +99,47 @@ WALK_JS = r"""
         return `[${r} slider "${labelOf(el)}" value=${el.value} min=${el.min || 0} max=${el.max || 100}${dis}]`;
       if (t === 'submit' || t === 'button' || t === 'reset' || t === 'image')
         return `[${r} button "${clean(el.value) || labelOf(el)}"${dis}]`;
-      const kind = t === 'password' ? 'password' : 'textbox';
+      const kind = t === 'password' ? 'password' : el.getAttribute('role') === 'combobox' ? 'combobox' : 'textbox';
       const value = t === 'password' ? (el.value ? '***' : '') : clean(el.value);
       const ph = el.placeholder ? ` placeholder="${clean(el.placeholder)}"` : '';
       return `[${r} ${kind} "${labelOf(el)}" value="${value}"${ph}${el.required ? ' required' : ''}${dis}]`;
     }
     const role = el.getAttribute('role') || tag.toLowerCase();
+    if (role === 'combobox') {  // a custom dropdown: its label, and the choice it shows as its value
+      const label = labelOf(el);
+      if (label) {
+        const state = el.getAttribute('aria-expanded') ? ` expanded=${el.getAttribute('aria-expanded')}` : '';
+        const off = dis || (el.getAttribute('aria-disabled') === 'true' ? ' disabled' : '');
+        return `[${r} combobox "${label}" value="${clean(el.innerText)}"${state}${off}]`;
+      }
+    }
     const name = clean(el.innerText) || labelOf(el);
     const state = el.getAttribute('aria-expanded') ? ` expanded=${el.getAttribute('aria-expanded')}` : '';
     return `[${r} ${role} "${name}"${state}${dis}]`;
+  }
+
+  function groupOf(el) {  // a radio group (fieldset or role) or a listbox as one choice control, else ''
+    const role = el.getAttribute('role');
+    let items, label, on;
+    if (role === 'listbox') {
+      items = Array.from(el.querySelectorAll('[role=option]'));
+      label = labelOf(el);
+      on = o => o.getAttribute('aria-selected') === 'true';
+    } else if (role === 'radiogroup' || el.tagName === 'FIELDSET') {
+      items = Array.from(el.querySelectorAll('input[type=radio], [role=radio]'));
+      const legend = el.tagName === 'FIELDSET' && Array.from(el.children).find(c => c.tagName === 'LEGEND');
+      label = legend ? clean(textOnly(legend)) : labelOf(el);
+      on = o => o.checked === true || o.getAttribute('aria-checked') === 'true';
+    } else return '';
+    if (!items.length || (el.tagName === 'FIELDSET' && role !== 'radiogroup' &&
+                          el.querySelectorAll('input:not([type=radio]):not([type=hidden]),select,textarea').length))
+      return '';
+    const text = o => (o.tagName === 'INPUT' ? labelOf(o) : clean(o.innerText) || labelOf(o));
+    const r = ref(el);
+    const sel = items.filter(on).map(text).join(', ');
+    const off = el.disabled || el.getAttribute('aria-disabled') === 'true' ? ' disabled' : '';
+    const kind = role === 'listbox' ? 'listbox' : 'radiogroup';
+    return `[${r} ${kind} "${label}" selected="${sel}"${off} options: ${items.map(text).join(' | ')}]`;
   }
 
   function walkDoc(doc, win) {
@@ -160,7 +192,11 @@ WALK_JS = r"""
       if (block) emit('\n');
       if (/^H[1-6]$/.test(tag)) emit('#'.repeat(+tag[1]) + ' ');
       if (cs.display === 'list-item') emit('- ');
-      if (isInteractive(el)) {
+      const group = groupOf(el);
+      if (group) {
+        emit(' ' + group + ' ');
+        walk(el, win);
+      } else if (isInteractive(el)) {
         emit(' ' + describe(el) + ' ');
         // a label or summary may wrap further controls; walk those, not the text again
         el.querySelectorAll('input,select,textarea,button').forEach(inner => {
