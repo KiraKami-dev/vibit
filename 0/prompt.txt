@@ -3706,3 +3706,77 @@ If this event is something the user would act on now, send a PushNotification. R
 <event>02:35 run_ea5f131511f5ad90 2686f6c quality=100 8.1min $0.155 no bid</event>
 If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>adcffa74ad0d0b028</task-id>
+<tool-use-id>toolu_01TeiQjNdrXApTxjTh4Md5ny</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/adcffa74ad0d0b028.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix A-2 ERP search loop" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The search on a group with a single hit now finishes in 4–5 model steps (16–25 s), down from running to the 16-step cap. No detail worker reached a cap in either test run. Both sandbox runs scored quality 100. The branch is at `86b3868`, merged with main `2686f6c`; all 247 unit tests pass. Nothing is pushed.
+
+**Cause.** The run logs only show the browser actions, so I reproduced the workers locally against the ERP with a probe that printed every model call and tool result. Two things went wrong:
+- **The model did not trust a one-row result.** It called `collect` on it, searched the same group again, then shortened the query (`GR-515` in `run_9f6e…`) and paged through that wider list. The search tool output never said the list was finished.
+- **The ERP's "Wartungshinweis" maintenance pop-up sometimes wiped the query.** When it re-rendered the form, the query went out empty (`q=` in the URL) and the tool returned the page footer as "rows". The model then saw "1 row", then "2 rows", then "1 row" again for the same query, and kept retrying.
+
+**Detail workers.** Locally every detail worker finished in 4–5 steps. I could not see the steps of the sandbox cases that hit 18, so that fix is a guard rather than a fix of an observed cause.
+
+**Changes** (all generic; nothing from the sites in code):
+- **Search tool (`agent/site_tools.py`):**
+  - It resends a query once when the result page doesn't show it.
+  - It drops rows without links when the site says there are no hits.
+  - It ends a finished list with "This is the complete result list: N hits, no further page."
+  - It records each search (query, rows, no-hits notice, complete, text, time) on the session.
+- **Search worker (`agent/research.py`):**
+  - The goal tells the model to return as soon as it sees that line, and to stop after the group itself shows no hits in the available fields and spellings.
+  - New harness stop: `until_settled` ends the worker 20 s after it has a complete hit list for the group (`ERP_SETTLE_SECONDS`). The salvage reader then reads that list.
+  - The same stop applies after a second no-hits search for the group.
+- **Detail workers:**
+  - `open_pages` now tracks unopened links across all its calls and says "No unopened links remain" when none are left.
+  - The harness ends the worker 20 s after that, and the reader reads what was opened.
+- **Your inspection cap item:**
+  - Up to 20 hits are now inspected (`MAX_INSPECT` 20).
+  - Hits whose row attributes fit the requirement as known so far go first. Attributes a row doesn't show, and a stroke still pending, never count against a hit.
+  - The other hits are still inspected, because a later amendment can change the requirement. They come last, and once one of the fitting hits is chosen they are not waited for, so the common case is no slower.
+- **Your empty-group item:** after the merge I dropped my `group_empty` field and reused main's `RequirementResearch.no_hits` and `evidence.group_without_hits()`.
+  - The search records stay dicts with `query`, `rows` and `no_hits`, plus my `complete`, `text` and `at`.
+  - A search whose query never reached the site and that has no links counts as 0 rows, so a swallowed search can't block empty-group detection.
+  - `no_hits` is now also set when the search worker stops without returning anything.
+
+**Tests.** New file `agent/tests/test_erp_converge.py` with 12 tests:
+- the complete-list line for one hit;
+- resending a swallowed query;
+- dropping footer rows and recording the no-hits notice;
+- `until_settled` ending a worker and keeping a quick result;
+- inspection order and the 20 cap;
+- the early choice not waiting for the other hits, and `no_hits` set or cleared;
+- the `open_pages` done signal on a local server.
+
+**Local check.** I didn't run `dev/research_check.py`, because it signs in to the shared spec site as well. Instead I ran short single-tab probes on the shared ERP login, one at a time:
+
+| Search | Before | After |
+|---|---|---|
+| GR-5152 (single hit) | search + `collect`, sometimes more | one search call, 13 s |
+| GR-6617, GR-4287 | – | 12–16 s |
+| A made-up empty group | 16 steps / 59 s, wandering to unrelated words | stopped by the harness at about 35 s |
+
+Detail workers HZ-3567, HZ-6932 and HZ-2170 took 4 steps each, 21–34 s.
+
+**Sandbox runs** (code `b9a4866`, recorded with experiment `erp-converge` in commit `9581161`):
+
+| Run | Result | Search workers | Detail workers |
+|---|---|---|---|
+| `run_0f4947d80c396928` | 100, eligible, 11 min, $0.176 | all 4 steps: A-2 15.7 s, A-5 14.5 s, A-1 15.3 s, A-4 19.7 s, A-3 26.6 s | all 4 steps, 18–29 s; HZ-3916 68 s and HZ-9704 72 s, still 4 steps |
+| `run_89384569dab3b7de` | 100, eligible, 7 min, $0.125 | A-1 14.6 s, A-3 17.0 s, A-4 18.2 s, A-5 19.5 s (4 steps); A-2 24.6 s (5 steps) | 4–5 steps, 17–30 s |
+
+Neither run hit a step limit or triggered the harness stop.
+
+**Open points.**
+- After the merge, `no_hits` is also set on paths main never reaches: when the worker returns nothing, and when the harness stops it after a second no-hits search for the group. Main's orchestrator turns `no_hits` into a no-bid decision.
+- The two sandbox runs were on `b9a4866`, before the merge. The merged result is covered by the unit tests only.</result>
+<usage><subagent_tokens>214013</subagent_tokens><tool_uses>92</tool_uses><duration_ms>2957020</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-adcffa74ad0d0b028</worktreePath><worktreeBranch>worktree-agent-adcffa74ad0d0b028</worktreeBranch></worktree>
+</task-notification>
