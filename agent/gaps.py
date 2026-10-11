@@ -231,6 +231,11 @@ class GapFiller:
 
     async def _rounds(self, first: Calculation, calculate) -> Calculation:
         best = first
+        verifying = getattr(self.o, "verifying", None)  # the verifier, running beside the first answer
+        if verifying is not None and not verifying.done() and any(
+                self.feasible(g) for g in detect_gaps(self.o, first.problems)):
+            # a round will run: its doubted mail kinds may ride along, so their verdicts are worth the wait
+            await asyncio.wait({verifying}, timeout=max(0.0, self.left()))
         gaps = detect_gaps(self.o, first.problems, doubts=getattr(self.o, "gap_rework", False))
         self._report(gaps, set())
         while self.round < GAP_ROUNDS:

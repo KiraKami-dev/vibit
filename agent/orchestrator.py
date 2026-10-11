@@ -70,6 +70,7 @@ PLAN_PATIENT_TIMEOUT = 90.0  # per call when the quick mail plan failed: a loade
 # doubtful mail facts go back to their search in the gap pass's first round (side by side with the gap retries)
 # instead of in a round of their own before calc, which held the first answer back by up to 2 minutes
 GAP_REWORK = os.environ.get("AGENT_GAP_REWORK", "1") == "1"
+VERIFY_ALONGSIDE = os.environ.get("AGENT_VERIFY_ALONGSIDE", "1") == "1"  # see run()
 REWORK_SECONDS = 150.0
 TENDER_WATCH_SECONDS = float(os.environ.get("AGENT_TENDER_WATCH_SECONDS", "240"))  # no positions by then: retry
 RECHECK_SECONDS = float(os.environ.get("AGENT_RECHECK_SECONDS", "150"))  # the Q&A re-check before a no_bid
@@ -1213,8 +1214,21 @@ class Orchestrator:
         omitted; with none complete it is still a bid with reference, decision and discount."""
         await self.research()
         # The deadline guard after research: each step runs only in the time the bid form leaves it.
-        if self.form_left() > 60:
+        # The verifier runs beside the rest: its doubts alone never change the answer (they only add a doubted mail
+        # kind to a gap round that has a real gap and a spare tab), and awaiting its one long call held the answer
+        # back 18 to 47 s in every measured run. The gap pass waits for it only when a round with real gaps runs.
+        self.verifying = (asyncio.create_task(self._bounded(self.verify(), "verify"))
+                          if self.form_left() > 60 and VERIFY_ALONGSIDE else None)
+        if self.verifying is None and self.form_left() > 60:
             await self._bounded(self.verify(), "verify")
+        try:
+            return await self._answer()
+        finally:
+            if self.verifying is not None and not self.verifying.done():
+                self.verifying.cancel()
+                await asyncio.gather(self.verifying, return_exceptions=True)
+
+    async def _answer(self) -> tuple[dict | None, calc.BidResult | None]:
         await self._bounded(self.select_materials(), "select")
         # The second pass: what the first answer lacks is retried while research time is left (gaps.py).
         best = await GapFiller(self).run(self.calculate(), self.calculate)
