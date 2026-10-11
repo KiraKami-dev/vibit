@@ -61,7 +61,11 @@ KIND_MAX_SECONDS = 240.0  # and at most this, from the mail time left per kind
 MAIL_RETRY_SECONDS = 90.0  # mail time a kind's second try needs
 MAIL_TAB_STAGGER = 4.0  # seconds between the mail tabs' sign-ins
 MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "540"))  # from the orchestrator's start
-FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys before planning from the brief alone
+# How long the mail planner waits for the tender's keys before planning from the brief alone. The keys arrive with
+# the Q&A (about 120 s in) while the wait was 45 s, so every sandbox run planned from the brief alone after waiting:
+# the wait only held the mail searches, the last research to finish, back by 45 s. Positions already on the
+# board are still passed along.
+FINDINGS_WAIT = float(os.environ.get("AGENT_FINDINGS_WAIT", "0"))
 PLAN_PATIENT_TIMEOUT = 90.0  # per call when the quick mail plan failed: a loaded model answers in up to ~90 s
 # doubtful mail facts go back to their search in the gap pass's first round (side by side with the gap retries)
 # instead of in a round of their own before calc, which held the first answer back by up to 2 minutes
@@ -646,7 +650,8 @@ class Orchestrator:
             # The tabs sign in while the planner reads the brief and waits for the tender's keys.
             # Staggered: several tabs signing in to one website at the same moment hung in local runs.
             starts = [asyncio.create_task(self._mail_tab(site, i)) for i in range(MAIL_TABS)]
-            positions = await board.wait("position", timeout=min(FINDINGS_WAIT, max(1.0, self.left())))
+            positions = (await board.wait("position", timeout=min(FINDINGS_WAIT, max(1.0, self.left())))
+                         if FINDINGS_WAIT > 0 else board.get("position"))
             findings = "\n".join(f"- position {k}: " + ", ".join(
                 f"{f} {v}" for f, v in fact.value.items() if f.endswith("_key") or f == "condition_group")
                 for k, fact in positions.items())
