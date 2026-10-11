@@ -101,6 +101,7 @@ REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at l
 # same facts. The mail rules themselves (exact reference, sender, date) are applied in code either way. Without
 # rework the verifier judges for the run log, beside the steps that follow, and costs the bid no time.
 REWORK = os.environ.get("AGENT_REWORK", "0") == "1"
+VERIFY_LOG = os.environ.get("AGENT_VERIFY", "0") == "1"  # judge the facts for the run log only (one large call)
 
 
 async def start_session(session: SiteSession, until: float | None = None) -> SiteSession:
@@ -1075,8 +1076,9 @@ class Orchestrator:
         omitted; with none complete it is still a bid with reference, decision and discount."""
         await self.research()
         # The deadline guard after research: each step runs only in the time the bid form leaves it.
-        if not REWORK:  # for the run log only: nothing waits for it
-            self.verifying = asyncio.create_task(self._bounded(self.verify(), "verify"))
+        if not REWORK:
+            if VERIFY_LOG:  # for the run log only: nothing waits for it
+                self.verifying = asyncio.create_task(self._bounded(self.verify(), "verify"))
         elif self.form_left() > 60:
             await self._bounded(self.verify(), "verify")
         await self._bounded(self.select_materials(), "select")

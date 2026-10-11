@@ -97,13 +97,33 @@ def _forget_old_views(messages: list[ModelMessage]) -> list[ModelMessage]:
                     latest = (i, j)
     if latest is None:
         return messages
+    # After the latest view, tools may return long texts that are no page view (several pages opened in one step):
+    # each rode along in every later step. Only the newest stays whole; an older one keeps its page headings.
+    long_after = [(i, j) for i, message in enumerate(messages) if isinstance(message, ModelRequest)
+                  for j, part in enumerate(message.parts)
+                  if (i, j) > latest and isinstance(part, ToolReturnPart) and isinstance(part.content, str)
+                  and len(part.content) > LONG_RESULT and part.tool_name not in KEEP_RESULTS]
+    older = set(long_after[:-1])
     result: list[ModelMessage] = []
     for i, message in enumerate(messages):
-        if isinstance(message, ModelRequest) and i <= latest[0]:
-            parts = [_shrink(part) if (i, j) < latest else part for j, part in enumerate(message.parts)]
+        if isinstance(message, ModelRequest) and (i <= latest[0] or any(a == i for a, _ in older)):
+            parts = [_shrink(part) if (i, j) < latest else _outline(part) if (i, j) in older else part
+                     for j, part in enumerate(message.parts)]
             message = dataclasses.replace(message, parts=parts)
         result.append(message)
     return result
+
+
+LONG_RESULT = 1500  # characters
+
+
+def _outline(part):
+    """A long tool result that a newer one followed: its section headings ("=== ...") and what it said last."""
+    lines = part.content.splitlines()
+    heads = [line for line in lines if line.startswith("=== ")][:20]
+    last = lines[-1][:600] if lines and not lines[-1].startswith("=== ") else ""
+    stub = "\n".join(heads or lines[:1]) + "\n[texts removed: these pages are kept for the reader]"
+    return dataclasses.replace(part, content=stub + (f"\n{last}" if last else ""))
 
 
 def steps_for(base: int, deadline: float | None, *, per_step: float = 8.0, most: float = 2.0) -> int:

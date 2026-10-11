@@ -511,7 +511,8 @@ async def _search(session: SiteSession, kind: Kind, reference: str, kept: _Readi
     """
     worker = asyncio.create_task(run_worker(
         session, _goal(kind, reference, again), Summary, deadline=until, max_steps=20, thinking=True,
-        grounded=False, tools=(paging_tool(Collected()), keep_messages_tool(kept), keep_open_tool(kept))))
+        grounded=False, notes=False,  # kept messages are read for the worker: no note tool, no note steps
+        tools=(paging_tool(Collected()), keep_messages_tool(kept), keep_open_tool(kept))))
     stalled, ended = False, False
     progress, moved = (session.stamp, len(kept)), time.monotonic()
     try:

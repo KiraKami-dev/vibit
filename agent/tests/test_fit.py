@@ -288,5 +288,54 @@ class SecondReadingBeforeNoBid(unittest.TestCase):
         self.assertEqual(self.settle(False, [None]), ({}, 1, False))
 
 
+class OldLongResultsLeaveTheHistory(unittest.TestCase):
+    def history(self):
+        from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart
+        view = "URL: https://erp.test/m/1\nTitle: Material\n\n" + "record line\n" * 50
+        batch = lambda n: "\n\n".join(f"=== /view/{n}{k}\n" + "value line\n" * 120 for k in "ab") + \
+            f"\n\nLinks on these views you have not opened yet: /view/{n}c"
+        return [ModelRequest(parts=[UserPromptPart(content="Goal\n\nCurrent view:\n" + view)]),
+                ModelRequest(parts=[ToolReturnPart(tool_name="open_pages", content=batch(1), tool_call_id="1")]),
+                ModelRequest(parts=[ToolReturnPart(tool_name="open_pages", content=batch(2), tool_call_id="2")]),
+                ModelRequest(parts=[ToolReturnPart(tool_name="open_pages", content="already opened", tool_call_id="3")])]
+
+    def test_only_the_newest_long_result_stays_whole(self):
+        import worker
+        out = worker._forget_old_views(self.history())
+        first, second, third = (m.parts[0].content for m in out[1:])
+        self.assertLess(len(first), 300)
+        self.assertIn("=== /view/1a", first)
+        self.assertIn("=== /view/1b", first)
+        self.assertIn("/view/1c", first)  # what it said was still to open
+        self.assertIn("value line", second)  # the newest batch is whole
+        self.assertEqual(third, "already opened")
+
+    def test_a_single_long_result_is_left_alone(self):
+        import worker
+        history = self.history()[:2]
+        self.assertEqual(worker._forget_old_views(history)[1].parts[0].content, history[1].parts[0].content)
+
+
+class ListForTheReaderOnly(unittest.TestCase):
+    def test_without_echo_the_worker_is_told_to_return(self):
+        import research_tender as rt
+        pages = ["# Q&A page 1\n[e9 button \"Next\"]\nAnswer 1", "# Q&A page 2\nAnswer 2"]
+        session = SimpleNamespace(view=pages[0], name="qa", trace=Trace(tempfile.mkdtemp()))
+
+        async def act(kind, ref, fn):
+            session.view = pages[1]
+            return session.view
+
+        async def look(*a, **k):
+            return session.view
+        session.act, session.look = act, look
+        collected = rt.Collected()
+        tool = rt.paging_tool(collected, echo=False)
+        answer = asyncio.run(tool(SimpleNamespace(deps=SimpleNamespace(session=session)), "e9"))
+        self.assertEqual(len(collected.pages), 2)
+        self.assertIn("return now", answer)
+        self.assertNotIn("Answer 1", answer)
+
+
 if __name__ == "__main__":
     unittest.main()

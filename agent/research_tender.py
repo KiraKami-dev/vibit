@@ -222,8 +222,10 @@ def pages_to_read(collected: Collected, views: list[str], seen: str) -> list[str
     return [*collected.pages, *extra]
 
 
-def paging_tool(collected: Collected):
-    """A tool that pages through the result set the model is looking at, by repeating the control it names."""
+def paging_tool(collected: Collected, echo: bool = True):
+    """A tool that pages through the result set the model is looking at, by repeating the control it names.
+    With `echo` the whole list is shown back to the model (it must pick entries from it); without, the pages are
+    only kept for the reader and the model is told to return (the list would ride along in every later step)."""
 
     async def collect_pages(ctx: RunContext[Deps], next_ref: str) -> str:
         """Collect the whole list you are looking at: give the ref of its "next page" or "load more" control. The
@@ -254,6 +256,9 @@ def paging_tool(collected: Collected):
             ref = same[0]
         session.trace.event(session.name, "collect_pages", control=name, pages=len(collected.pages))
         session.trace.event(session.name, "collected", quiet=True, pages=collected.pages)
+        if not echo:
+            return (f"Collected {pages} page(s) of this list; they are kept and will be read for you. Do not read "
+                    "or note them yourself: return now.")
         text = collected.text
         if len(text) > MAX_RETURN:
             text = text[:MAX_RETURN] + f"\n[... {len(text) - MAX_RETURN} more characters, kept for reading]"
@@ -505,15 +510,17 @@ async def research_tender(session: SiteSession, reference: str, scenario: dateti
 
     async def positions_part() -> TenderPositions:
         await run_worker(session, _positions_goal(reference), Summary, deadline=deadline,
-                         max_steps=steps_for(14, deadline), thinking=False, grounded=False,
+                         max_steps=steps_for(14, deadline), thinking=False, grounded=False, notes=False,
                          tools=(keep_tool(documents),))
         return await read_positions("\n\n".join(documents or [session.seen]), reference)
 
     async def qa_part() -> QaRecords:
         views = record_views(qa_session)
+        # no notes and no list shown back: the kept pages are read by read_qa (in one sandbox run the worker
+        # spent five more steps and 43 s on notes nobody reads, with the six-page list in every one of them)
         await run_worker(qa_session, _qa_goal(reference), Summary, deadline=deadline,
-                         max_steps=steps_for(14, deadline), thinking=False, grounded=False,
-                         tools=(paging_tool(collected),))
+                         max_steps=steps_for(14, deadline), thinking=False, grounded=False, notes=False,
+                         tools=(paging_tool(collected, echo=False),))
         pages = pages_to_read(collected, views, qa_session.seen)
         if len(pages) > max(1, len(collected.pages)):
             qa_session.trace.event(qa_session.name, "list_pages_added", collected=len(collected.pages),
