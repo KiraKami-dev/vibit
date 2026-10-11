@@ -505,5 +505,46 @@ class LatePositions(unittest.TestCase):
         self.assertEqual(o.trace.kinds("gap_filled")[0]["gap"], "tender/positions")
 
 
+class PartialRecords(unittest.TestCase):
+    def test_a_partly_read_kind_is_reread_with_a_hint_then_searched(self):
+        """Soak run a75f0ec3: the metal index message was read twice with one of its three windows."""
+        import dataclasses as dc
+
+        import research_mail
+        kind = research_mail.Kind(name="metal_indices", subject="s", sender="x", sender_form="name", site="m",
+                                  what="metal index rates", schema=research_mail.SCHEMAS["metal_indices"])
+        o = runnable(GAP_TAIL + GAP_MIN_ROUND + 300)
+        o.reference = "T-1"
+        o.mail_kinds, o.mail_sessions = [kind], [object()]
+        o.mail_results = {"metal_indices": SimpleNamespace(kind=kind, kept=["view"], records=["partial"],
+                                                           stopped=False)}
+        filler = GapFiller(o)
+        whats, searched = [], []
+
+        async def read_message(view, k, reference):
+            whats.append(k.what)
+            return "complete"
+
+        async def mails(kinds):
+            searched.append(list(kinds))
+
+        gap = Gap("mail", "metal_indices", "position 1: no metal index rate valid on 2027-01-25")
+        filler.mails = mails
+        saved = research_mail.read_message
+        research_mail.read_message = read_message
+        try:
+            self.assertEqual(filler.limit(gap), 2)
+            asyncio.run(filler.fill([gap]))
+            asyncio.run(filler.fill([gap]))
+        finally:
+            research_mail.read_message = saved
+        self.assertEqual(len(whats), 1)
+        self.assertIn("no metal index rate valid on 2027-01-25", whats[0])
+        self.assertIn("not only the first", whats[0])
+        self.assertEqual(o.mail_results["metal_indices"].records, ["partial", "complete"])
+        self.assertEqual(searched, [["metal_indices"]])  # the second round searches
+        self.assertTrue(dc.is_dataclass(kind))
+
+
 if __name__ == "__main__":
     unittest.main()

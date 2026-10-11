@@ -16,6 +16,7 @@ It never removes a fact: results add to what the first pass found, and the more 
 Nothing here names a site, a label or a value of any dataset.
 """
 import asyncio
+import dataclasses
 import inspect
 import os
 import time
@@ -175,6 +176,7 @@ class GapFiller:
         self.o = orchestrator
         self.tries: dict[str, int] = {}
         self.reread_done: set[str] = set()
+        self.hinted_done: set[str] = set()
         self.round = 0
 
     def until(self) -> float:
@@ -209,7 +211,7 @@ class GapFiller:
         if gap.area == "mail":
             found = (getattr(self.o, "mail_results", None) or {}).get(gap.key)
             if found is not None and found.records and not getattr(found, "stopped", False):
-                return 1
+                return 2 if getattr(found, "kept", None) and not gap.reason.startswith(DOUBT) else 1
             if found is not None and getattr(found, "kept", None) and not found.records:
                 return GAP_TRIES + 1  # one reread of the kept messages, then the searches
         return GAP_TRIES
@@ -320,7 +322,14 @@ class GapFiller:
             self.reread_done |= set(unread)
             if unread:
                 job(self.reread(unread), "mail reread")
-            search = [k for k in kinds if k not in unread]
+            # Kinds whose messages were read but whose facts still leave the gap (soak run a75f0ec3: the reader
+            # copied one of three metal index windows, twice): the kept messages are read again, told what the
+            # first reading lacked, before the kind is searched once more.
+            partial = {g.key: g.reason for g in areas["mail"] if g.key not in unread and self.partial(g)}
+            self.hinted_done |= set(partial)
+            if partial:
+                job(self.reread(list(partial), hints=partial), "mail reread with hint")
+            search = [k for k in kinds if k not in unread and k not in partial]
             if search:
                 job(self.mails(search), "mails")
         if not jobs:
@@ -448,14 +457,31 @@ class GapFiller:
         found = (getattr(self.o, "mail_results", None) or {}).get(kind)
         return (found is not None and bool(found.kept) and not found.records and kind not in self.reread_done)
 
-    async def reread(self, kinds: list[str]) -> None:
-        """Read the kept message views of each kind again; every record read is kept at once (a cut keeps it)."""
+    def partial(self, gap: Gap) -> bool:
+        """A real mail gap whose kind read records from kept messages, not yet reread with a hint."""
+        found = (getattr(self.o, "mail_results", None) or {}).get(gap.key)
+        return (found is not None and bool(getattr(found, "kept", None)) and bool(found.records)
+                and not gap.reason.startswith(DOUBT) and gap.key not in self.hinted_done)
+
+    async def reread(self, kinds: list[str], hints: dict[str, str] | None = None) -> None:
+        """
+        Read the kept message views of each kind again; every record read is kept at once (a cut keeps it). With
+        `hints`, the reader is told what the facts still lack; a record read later wins over an equal earlier one
+        when the mail facts are resolved again.
+        """
         read_message = _module("research_mail").read_message
         o = self.o
 
+        def told(kind, name: str):
+            if not hints or name not in hints or not dataclasses.is_dataclass(kind):
+                return kind
+            return dataclasses.replace(kind, what=(
+                f"{kind.what}. A first reading of this message left a gap ({hints[name][:200]}): report every "
+                f"entry the message lists, with all keys, rates and validity windows, not only the first"))
+
         async def one(name: str, view: str) -> None:
             found = o.mail_results[name]
-            record = await read_message(view, found.kind, o.reference)
+            record = await read_message(view, told(found.kind, name), o.reference)
             if record is not None:
                 found.records = [*found.records, record]
 
