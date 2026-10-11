@@ -20,7 +20,8 @@ import llm
 from briefing import Briefing
 from browser_tools import Deps, SiteSession
 from calc import position_key
-from configurator import (NUMBER_ONLY, VALUE_NAMES, FillPlan, clean, complete_positions, decimal_mark, fill_position,
+from configurator import (KIND_JS, NUMBER_ONLY, VALUE_NAMES, FillPlan, choice_options, clean, complete_positions,
+                          decimal_mark, fill_position, match_option, pick_option,
                           find_control, form_value, german, mapping_problems, parse_number, resolve_position, scoped,
                           unmapped)
 from extract import locate
@@ -132,12 +133,19 @@ class FormAction(BaseModel):
                                        "view lists it; empty for check, uncheck and click")
 
 
-async def _perform(element, step: FormAction) -> None:
+async def _perform(element, step: FormAction, session=None) -> None:
     if step.action == "fill":
         await element.fill(await number_field_text(element, step.value), timeout=2000)
     elif step.action == "select":
         if not step.value:
             raise ValueError("select needs the option's visible text as value")
+        kind = await element.evaluate(KIND_JS)
+        if kind in ("radiogroup", "listbox", "combobox") and session is not None:  # a choice that is no <select>
+            option, why = match_option(await choice_options(element, kind), step.value)
+            if option is None:
+                raise ValueError(why)
+            await pick_option(session, element, kind, option)
+            return
         try:
             await element.select_option(label=step.value, timeout=2000)
         except Exception:
@@ -179,7 +187,7 @@ async def fill_in(ctx: RunContext[Deps], actions: list[FormAction]) -> str:
                 stop = f"no element {step.ref} (the page changed; use the new view)"
                 break
             try:
-                await _perform(element, step)
+                await _perform(element, step, session)
             except Exception as error:
                 stop = f"{step.action} {step.ref} {step.value!r} failed: {str(error).splitlines()[0][:200]}"
                 break

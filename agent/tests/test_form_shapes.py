@@ -171,6 +171,19 @@ class AriaControls(unittest.TestCase):
         self.assertEqual(got, {"series": True, "mounting": "true", "catalogue": "M-11 / 25 bar", "qty": "4",
                                "price": "2.50", "weeks": "3"})
 
+    def test_fill_in_selects_in_a_radio_group_and_a_combobox(self):
+        from submit import FormAction, _perform
+
+        async def work(session):
+            await session.look()  # tags the controls with refs, as the worker's views do
+            page = session.page
+            await _perform(page.locator("fieldset"), FormAction(ref="e1", action="select", value="Series B"), session)
+            await _perform(page.locator("[role=combobox]"),
+                           FormAction(ref="e2", action="select", value="M-10 / 16 bar"), session)
+            return await page.is_checked("input[value=b]"), await page.text_content("[role=combobox]")
+
+        self.assertEqual(run_page(ARIA, work), (True, "M-10 / 16 bar"))
+
     def test_a_blocked_list_names_the_unmapped_choice(self):
         async def work(session):
             plan = FillPlan(fields={"Mounting": "mounting", "Catalogue no.": "material_number", "Qty": "quantity",

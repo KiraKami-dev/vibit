@@ -29,7 +29,7 @@ import run as contract  # noqa: E402
 from briefing import Briefing  # noqa: E402
 from browser_tools import SiteSession  # noqa: E402
 from playwright.async_api import async_playwright  # noqa: E402
-from submit import Mailbox, SigningTan, submit_bid  # noqa: E402
+from submit import BidFlow, Mailbox, SigningTan, submit_bid  # noqa: E402
 from tracing import Trace  # noqa: E402
 
 
@@ -74,13 +74,32 @@ async def mock(url: str, path: str) -> None:
         print("STATE", json.dumps(json.load(response), indent=1))
 
 
-async def live(path: str) -> int:
-    """The agent's own flow with this answer, stopped before the TAN request (AGENT_STOP_BEFORE_SIGN=1)."""
+def wait_for_prepared(seconds: float = 240) -> None:
+    """Let BidFlow.finish wait for the early pass to stop at the positions, as after a long research."""
+    original = BidFlow.finish
+
+    async def finish(self, answer, attributes):
+        until = time.monotonic() + seconds
+        while not self.ready and time.monotonic() < until:
+            await asyncio.sleep(1)
+        return await original(self, answer, attributes)
+
+    BidFlow.finish = finish
+
+
+async def live(path: str, prepared: bool = False) -> int:
+    """
+    The agent's own flow with this answer, stopped before the TAN request (AGENT_STOP_BEFORE_SIGN=1). With
+    `prepared` (--prepared), the answer is entered only once the early pass stands at the positions (a no-bid
+    answer then goes back to the offer type).
+    """
     answer, attributes = load(path)
     task, _ = contract.load_run()
     if task.get("run_id"):
         raise SystemExit("configurator_check runs only locally on the scouting run")
     os.environ["AGENT_STOP_BEFORE_SIGN"] = "1"  # TANs are shared by everyone on the scouting logins
+    if prepared:
+        wait_for_prepared()
     async with async_playwright() as playwright:
         _, page = await browsers.connect(playwright)
         await agent.solve(task, page, answer, attributes)
@@ -91,4 +110,4 @@ if __name__ == "__main__":
     if sys.argv[1:2] == ["--mock"]:
         asyncio.run(mock(sys.argv[2], sys.argv[3]))
     else:
-        sys.exit(asyncio.run(live(sys.argv[1])))
+        sys.exit(asyncio.run(live(sys.argv[-1], prepared="--prepared" in sys.argv)))
