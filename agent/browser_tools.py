@@ -146,6 +146,7 @@ class SiteSession:
     login_at: tuple = ()  # (time.monotonic(), url) of the latest sign-in the helpers sent
     _start_owner: object = None  # set while start() runs; its own looks (any task under it) must not wait
     _old_context: object = None
+    guard: object = None  # optional: (action kind, current view) -> a hint returned instead of acting, or None
     states: list[str] = field(default_factory=list)  # page-state signatures of this worker run (loop guard)
     loop_hits: int = 0
     loop_guard: bool = False
@@ -560,6 +561,10 @@ class SiteSession:
         """Run one action on the element `ref`, settle, and return the new view."""
         async with self.lock:
             await self.revive()
+            hint = self.guard(kind, self.view) if self.guard is not None else None
+            if hint:  # the worker's own check of what the page needs first; never repeated for the same thing
+                self.trace.event(self.name, "guard", action=kind, ref=ref, hint=hint[:160])
+                return f"{hint}\n\n" + await self.look(brief=True)
             element = await locate(self.page, ref)
             if element is None:
                 return (f"No element {ref} on this page (refs change with every view).\n\n"

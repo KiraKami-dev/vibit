@@ -141,6 +141,10 @@ async def fill_in(ctx: RunContext[Deps], actions: list[FormAction]) -> str:
     session = ctx.deps.session
     done: list[str] = []
     stop = ""
+    hint = session.guard("fill_in", session.view) if session.guard is not None else None
+    if hint:
+        session.trace.event(session.name, "guard", action="fill_in", hint=hint[:160])
+        return f"{hint}\n\n" + await session.look()
     async with session.lock:
         page, url, windows = session.page, session.page.url, len(session.pages)
         for step in actions:
@@ -181,6 +185,7 @@ class PositionDesk:
         self.entered: set[str] = set()
         self.choices: dict[str, dict[str, str]] = {}
         self.next_button = ""
+        self.nudged: set[str] = set()
 
     @property
     def tools(self) -> tuple:
@@ -256,6 +261,22 @@ class PositionDesk:
         self.entered.add(position)
         then = moved or " Check it, then save and continue with the form's next/continue button."
         return f"Position {position} entered: {'; '.join(log)}.{then} {self.so_far(session)}\n\n{view}"
+
+    def premature(self, view: str) -> str | None:
+        """
+        Before the worker clicks or types on a page itself: when the page shows exactly one position this bid has
+        values for, which is neither entered nor tried yet, say once to enter it first. (One sandbox run clicked
+        past a position's page and so left it out.) Said once per position, so a page that merely mentions the
+        number can never hold the worker up.
+        """
+        pending = [p for p in self.entries if p not in self.entered and p not in self.nudged
+                   and not self.failures.get(p) and position_on_page(view, p)]
+        if len(pending) != 1:
+            return None
+        self.nudged.add(pending[0])
+        return (f"This page shows position {pending[0]}, which this bid enters: call configure_position("
+                f"'{pending[0]}', ...) now; it enters all its values and saves it. Do not omit it and do not move "
+                "on without it. (If this is not that position's own input page, repeat your action.)")
 
     def so_far(self, session: SiteSession) -> str:
         """The running net total, told after every position so the totals step needs no arithmetic."""
@@ -425,9 +446,13 @@ Brief's submission steps:
     left = deadline - time.monotonic()
     # the form never eats the signing reserve; with little time left, half of it still goes to the form
     form_deadline = deadline - SIGNING_RESERVE if left > SIGNING_RESERVE + 90 else time.monotonic() + left / 2
-    ready, _ = await run_worker(bid_session, form_goal, FormReady, deadline=form_deadline,
-                                max_steps=45 + 3 * len(desk.entries), notes=False,
-                                thinking=llm.thinking("form", False), tools=tools)
+    bid_session.guard = (lambda kind, view: desk.premature(view)) if desk.entries else None
+    try:
+        ready, _ = await run_worker(bid_session, form_goal, FormReady, deadline=form_deadline,
+                                    max_steps=45 + 3 * len(desk.entries), notes=False,
+                                    thinking=llm.thinking("form", False), tools=tools)
+    finally:
+        bid_session.guard = None  # the review and signing pass acts on what is there
 
     requirements = _requirements(briefing, email, answer, desk, filled=True)
     check = await check_summary(bid_session.view, requirements) if ready and ready.at_signing_step else None

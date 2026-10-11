@@ -83,11 +83,13 @@ READ_THINKING = os.environ.get("RESEARCH_READ_THINKING", "0") == "1"
 
 
 async def _grounded_read(output_type: type[T], instructions: str, prompt: str, source: str, *,
-                         trace: Trace | None = None, name: str = "research", what: str = "") -> T:
+                         trace: Trace | None = None, name: str = "research", what: str = "",
+                         thinking: bool | None = None) -> T:
     """One reader call: the model reports what `source` (the text it is shown) says; every value it returns must
-    appear in that text, else it is told which ones do not and tries again. Traced with seconds and refusals."""
+    appear in that text, else it is told which ones do not and tries again. Traced with seconds and refusals.
+    `thinking` overrides the readers' default (RESEARCH_READ_THINKING) for this call."""
     agent = Agent(llm.model(), output_type=output_type, instructions=instructions,
-                  model_settings=_read_settings(READ_THINKING), retries=3)
+                  model_settings=_read_settings(READ_THINKING if thinking is None else thinking), retries=3)
     refusals: list[str] = []
 
     @agent.output_validator
@@ -326,15 +328,60 @@ a table row and in its full original wording (which wins if they differ). Report
 shows; return an empty list if it shows none."""
 
 
+# v3: each specification page is read twice at once. Every later step hangs on these values (one sandbox run lost
+# 44 points to a single misread pieces-per-set), and a grounded reader can still copy the wrong one of two numbers
+# on a page. Readings that agree stand; where they differ, a third reader that thinks and is told what differs
+# decides. Two calls side by side take no longer than one.
+SPEC_READS = int(os.environ.get("AGENT_SPEC_READS", "2"))
+_COMPARED = ("bore", "stroke", "pressure", "mounting", "certification", "catalog_group", "pieces_per_set",
+             "stroke_is_usable_travel", "reserve_key")
+
+
+def _reading_differences(first: SpecPage, second: SpecPage) -> list[str]:
+    """Where two readings of one page differ: requirements only one has, and fields with other values."""
+    def flat(value) -> str:
+        return " ".join(str(value).split()).casefold()
+
+    a = {flat(r.requirement_id): r for r in first.requirements}
+    b = {flat(r.requirement_id): r for r in second.requirements}
+    out = [f"requirement {a.get(key, b.get(key)).requirement_id} is in only one reading" for key in sorted(a.keys() ^ b.keys())]
+    for key in sorted(a.keys() & b.keys()):
+        for name in _COMPARED:
+            x, y = getattr(a[key], name), getattr(b[key], name)
+            if flat(x) != flat(y):
+                out.append(f"{a[key].requirement_id} {name}: {x!r} or {y!r}")
+    if flat(first.revision_shown) != flat(second.revision_shown):
+        out.append(f"revision shown: {first.revision_shown!r} or {second.revision_shown!r}")
+    return out
+
+
 async def _extract_page(text: str, document: str, revision: str, context: str, trace: Trace | None,
                         name: str) -> SpecPage | None:
     prompt = f"Document {document}, revision {revision} (the current one).\nContext: {context}\n\nPage:\n{text}"
-    try:
-        return await _grounded_read(SpecPage, EXTRACT_INSTRUCTIONS, prompt, text, trace=trace, name=name,
-                                    what="spec page")
-    except Exception as error:  # one bad page must not sink the rest
-        print(f"[research] spec page extraction failed: {type(error).__name__}: {str(error)[:200]}", flush=True)
-        return None
+
+    async def read(note: str = "", thinking: bool | None = None) -> SpecPage | None:
+        try:
+            return await _grounded_read(SpecPage, EXTRACT_INSTRUCTIONS, prompt + note, text, trace=trace, name=name,
+                                        what="spec page", thinking=thinking)
+        except Exception as error:  # one bad page must not sink the rest
+            print(f"[research] spec page extraction failed: {type(error).__name__}: {str(error)[:200]}", flush=True)
+            return None
+
+    if SPEC_READS < 2:
+        return await read()
+    first, second = await asyncio.gather(read(), read())
+    if first is None or second is None:
+        return first or second
+    differences = _reading_differences(first, second)
+    if not differences:
+        return first
+    if trace:
+        trace.event(name, "spec_read_disputed", differences=differences[:12])
+    note = ("\n\nTwo earlier readings of this page disagree: " + "; ".join(differences[:20]) + ". Find each of these "
+            "on the page again (a value may appear both in a table row and in the full wording, which wins) and "
+            "report all of the page's requirements.")
+    third = await read(note, thinking=True)
+    return third or first
 
 
 REVISION_JUDGES = int(os.environ.get("AGENT_REVISION_JUDGES", "2"))  # 1 = a single judgement, as before v3

@@ -36,6 +36,17 @@ Where the time went in those runs, and what was changed. None of it removes a ch
 | Rework after the verifier | In 2 of 3 runs every mail fact was "doubtful" only because its quote is the message header; all kinds were searched again (145 to 170 s) and judged again (22 s), with the same result | The verifier says what a doubt is about (`Verdict.about`). Only a doubt about the record itself (reference, date, sender, superseded) sends a fact back; the second check runs only after a rework |
 | Decision check before the form | 12 to 15 s; it can only turn a bid with a missing material into no_bid, which calc already does | Called only when it can change the decision |
 
+## Two unchecked steps (after a 56-point run of the above)
+
+That run lost its points in two single model steps, neither touched by the time changes: the spec reader copied
+a wrong pieces-per-set for one requirement (26 pieces instead of 130, which also shifts the pool and bonus shares
+of the positions next to it), and the form worker clicked past one position's page without entering it.
+
+| File | Change |
+| --- | --- |
+| `research.py` | `_extract_page`: each specification page is read twice at once; where the readings differ, a third reader that thinks and is told what differs decides (`AGENT_SPEC_READS`, 1 = as before). |
+| `submit.py`, `browser_tools.py` | `PositionDesk.premature` through `SiteSession.guard`: when the form worker is about to click or type on a page that shows exactly one position the bid has values for (not entered, not tried), it is told once to call `configure_position` first. Once per position, so it can never block the form; off in the signing pass. |
+
 ## Environment variables (all optional)
 
 | Variable | Default | What |
@@ -49,6 +60,7 @@ Where the time went in those runs, and what was changed. None of it removes a ch
 | `AGENT_ERP_RACE` / `AGENT_ERP_SECOND_AFTER` / `AGENT_ERP_ALT_TABS` | 0 / 40 / 3 | ERP second search: on, seconds before it starts, how many at once |
 | `AGENT_REVISION_JUDGES` | 2 | 1 = a single revision judgement |
 | `MAIL_TABS` / `AGENT_FINDINGS_WAIT` | 6 / 0 | Mail tabs; seconds the mail planner waits for the tender's keys |
+| `AGENT_SPEC_READS` | 2 | Readings of each specification page; 1 = a single reading |
 | `AGENT_STRONG_MODEL` | unset | Model name for the `explore` attempt, e.g. one your provider key allows |
 | `AGENT_STRONG_BASE_URL` / `AGENT_STRONG_API_KEY` | `OPENAI_BASE_URL` / `OPENAI_API_KEY` | Its endpoint and key (team secret) |
 
@@ -61,3 +73,4 @@ Where the time went in those runs, and what was changed. None of it removes a ch
 - `revision_disputed` when the two revision judgements differ.
 - `mails plan` within about 40 s of the start; `verify evidence_only` instead of `verify rework`; no second
   `verify done` unless a rework ran.
+- `spec_read_disputed` (a page read differently twice) and `guard` (the form worker was sent back to a position).

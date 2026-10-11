@@ -242,5 +242,118 @@ class MailPlanHedge(unittest.TestCase):
             self.plan([ValueError("bad"), ValueError("bad")], hedge=0.0)
 
 
+def seen(rid: str, **changes) -> research.RequirementSeen:
+    values = dict(requirement_id=rid, bore="50", stroke="100", pressure="160", mounting="Flansch",
+                  certification="keine", catalog_group="G-1", pieces_per_set="5", stroke_is_usable_travel=False)
+    values.update(changes)
+    return research.RequirementSeen(**values)
+
+
+def page(*requirements, revision: str = "R-2") -> research.SpecPage:
+    return research.SpecPage(revision_shown=revision, requirements=list(requirements))
+
+
+class SpecPageReadTwice(unittest.TestCase):
+    def extract(self, readings: list, reads: int = 2):
+        calls = []
+
+        async def grounded_read(output_type, instructions, prompt, source, *, trace=None, name="", what="",
+                                thinking=None):
+            calls.append({"thinking": thinking, "prompt": prompt})
+            answer = readings[len(calls) - 1]
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with patch.object(research, "_grounded_read", grounded_read), patch.object(research, "SPEC_READS", reads):
+            out = asyncio.run(research._extract_page("text", "D-1", "R-2", "context", None, "spec"))
+        return out, calls
+
+    def test_two_readings_that_agree_stand(self):
+        out, calls = self.extract([page(seen("A-1")), page(seen("A-1", mounting=" flansch "))])
+        self.assertEqual((out.requirements[0].pieces_per_set, len(calls)), ("5", 2))
+
+    def test_a_differing_value_goes_to_a_thinking_reader_that_is_told_what_differs(self):
+        out, calls = self.extract([page(seen("A-1", pieces_per_set="1")), page(seen("A-1")), page(seen("A-1"))])
+        self.assertEqual(out.requirements[0].pieces_per_set, "5")
+        self.assertEqual([c["thinking"] for c in calls], [None, None, True])
+        self.assertIn("A-1 pieces_per_set: '1' or '5'", calls[2]["prompt"])
+
+    def test_a_requirement_only_one_reading_has_is_a_difference(self):
+        differences = research._reading_differences(page(seen("A-1")), page(seen("A-1"), seen("A-2")))
+        self.assertEqual(differences, ["requirement A-2 is in only one reading"])
+
+    def test_one_failed_reading_leaves_the_other(self):
+        out, calls = self.extract([ValueError("bad"), page(seen("A-1"))])
+        self.assertEqual((out.requirements[0].requirement_id, len(calls)), ("A-1", 2))
+        self.assertIsNone(self.extract([ValueError("bad"), ValueError("bad")])[0])
+
+    def test_a_failed_third_reading_keeps_the_first(self):
+        out, _ = self.extract([page(seen("A-1", bore="63")), page(seen("A-1")), ValueError("bad")])
+        self.assertEqual(out.requirements[0].bore, "63")
+
+    def test_one_reading_when_set_so(self):
+        out, calls = self.extract([page(seen("A-1"))], reads=1)
+        self.assertEqual(len(calls), 1)
+
+
+POSITION_PAGE = """# Position {n}
+Hydraulic cylinder
+[e7 select "Bore (mm)"]
+[e8 button "Omit position"]
+[e9 button "Next"]"""
+OVERVIEW = """# Tender
+Positions 01.01, 01.02
+[e7 button "Start the bid"]"""
+
+
+class NoWalkingPastAPosition(unittest.TestCase):
+    def desk(self):
+        from submit import PositionDesk
+        return PositionDesk({"01.01": {"position": "01.01"}, "01.02": {"position": "01.02"}}, time.monotonic() + 900)
+
+    def test_a_page_of_a_position_with_values_is_named_once(self):
+        desk = self.desk()
+        hint = desk.premature(POSITION_PAGE.format(n="01.02"))
+        self.assertIn("configure_position('01.02'", hint)
+        self.assertIsNone(desk.premature(POSITION_PAGE.format(n="01.02")))  # never twice: it cannot block
+
+    def test_entered_tried_and_foreign_positions_are_left_alone(self):
+        desk = self.desk()
+        desk.entered.add("01.01")
+        desk.failures["01.02"] = 1
+        self.assertIsNone(desk.premature(POSITION_PAGE.format(n="01.01")))
+        self.assertIsNone(desk.premature(POSITION_PAGE.format(n="01.02")))
+        self.assertIsNone(desk.premature(POSITION_PAGE.format(n="01.07")))
+
+    def test_a_page_that_lists_several_positions_is_not_a_position_page(self):
+        self.assertIsNone(self.desk().premature(OVERVIEW))
+
+    def test_the_session_returns_the_hint_instead_of_acting(self):
+        from browser_tools import SiteSession
+
+        async def run():
+            session = SiteSession({"siteId": "bid", "url": "https://bid.test"}, None, Trace(tempfile.mkdtemp()))
+            session.view = POSITION_PAGE.format(n="01.01")
+            desk = self.desk()
+            session.guard = lambda kind, view: desk.premature(view)
+
+            async def revive():
+                return None
+
+            async def look(*a, **k):
+                return session.view
+            session.revive, session.look = revive, look
+            acted = []
+
+            async def fn(element):
+                acted.append(element)
+            return await session.act("click", "e8", fn), acted
+
+        out, acted = asyncio.run(run())
+        self.assertIn("configure_position('01.01'", out)
+        self.assertEqual(acted, [])
+
+
 if __name__ == "__main__":
     unittest.main()
