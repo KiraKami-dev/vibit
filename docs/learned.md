@@ -182,3 +182,11 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   for an attribute the form has no control for failed whole positions; one live run mapped no price breakdown
   fields at all; under model load (p50 11 s, p95 91 s) every 30 s try of the mail plan timed out and no mail kind
   was searched. All fixed on branch worktree-agent-a525dcbc767c5a2b1.
+- Hung starts (run_9f6e6e23f55952fc, quality 30.6; the Haiku run lost 210 s the same way): in one browser context the
+  webmail's requests never completed (first a goto that never committed, then a sign-in post), while a fresh context
+  opened it in under 1 s. Playwright page calls (locator.count, evaluate) on a tab whose navigation has not
+  committed wait for ever, so every settle hit its 45 s cap and the attempt waited 210 s on a dead tab. Starts now
+  race a tab in a fresh context after 15 s without a usable page, give up a page that answers no script call for
+  20 s, retry at once in a fresh context with 45/60/90/120 s budgets, and accept a rendered page whose settle never
+  ends. Test runs of 86b4f27: 100 (7:33) and 100 (11:33), all starts in 2.4 to 4.6 s; the second still had three
+  mail gotos mid-research that never committed, now bounded (30 s goto + about 22 s settle) and traced as slow_page.
