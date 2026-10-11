@@ -4067,3 +4067,56 @@ I will create an openrouter api key. Just tell me where to put it and the firewo
 <event>03:07 run_2ab652720c06167c 01435a7 quality=100 8.6min $0.123 signed</event>
 If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a183c69be42b5cc53</task-id>
+<tool-use-id>toolu_013YCu9ErgsnNHc9ZuuEZ7Fs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a183c69be42b5cc53.output</output-file>
+<status>completed</status>
+<summary>Agent "Generalize mail fact shapes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All four gaps are fixed on branch `worktree-agent-a183c69be42b5cc53`. The three sandbox runs all scored 100 and ran faster than earlier v2 runs. One caveat: those runs tested `9cdc47a`, my commit from before I merged main. Main (`3a67031`) then merged cleanly with no conflicts and all 307 unit tests pass, but the merged code has not had its own sandbox run. Nothing is merged into main or pushed.
+
+**Item 11: several setup pools and bonus plans**
+- In `calc.BidInput`, setup pools and bonus plans are now lists with one entry per key (`setup_pools`, `project_bonuses`). The old single `setup_pool` and `project_bonus` fields still work and are added to the lists.
+- Each pool is split with its own cent rule (rule 25). Each bonus plan applies its bands to its own members' total and splits it by largest remainders (rule 26). A position in more than one pool or plan gets the sum.
+- `research_mail.bid_clauses` builds one pool and one plan per key from the tender Q&amp;A. A key with no matching mail is listed as a problem.
+- In the orchestrator, `build_bid` and the blank-field check work on the lists. When calc fails for a pool or plan, `safe_calculate` drops one key at a time instead of all of them.
+
+**Item 15: FX direction and metal-index unit**
+- The FX record now reports the rate as written, which way it is quoted, and the amount if it is not 1 (e.g. "100 JPY = 0.62 EUR").
+- A rate quoted as EUR per currency unit is used as before. A rate quoted as currency units per EUR goes into a new `fx_per_eur` input, and calc divides the price by it before rounding HALF_UP to cents (rule 22). Dividing matters: multiplying by a rounded reciprocal can land on the wrong side of a half cent, and a test shows such a case.
+- Metal-index rates now report their mass unit (kg, 100 kg, tonne, gram) and are converted to EUR per kg exactly.
+
+**Item 16: planner dropping a fact kind**
+- The plan check in `plan_research` now sends the plan back if any of the four fact kinds has no site.
+- If the plan is still incomplete after the retries, it asks once more without that check and fills the gaps with `complete_plan()`. The tender goes to the bid site, the mails to the mailbox site, and a missing specification or ERP to the sites no other kind holds.
+
+**Item 20: approval sender**
+- `sender_ok` now takes the email address out of strings like "Name &lt;address&gt;".
+- A sender the brief names by name or role matches either the display name (whole words) or the address local part. It must also be on the bidder's mailbox domain when that domain is known. The other two sender forms keep the exact domain rule.
+
+**Tests**
+- `test_calc.py`: two pools with different cent rules, two bonus plans, old and new fields mixed, and the FX division cases.
+- `test_research_mail.py`: FX in both directions, a per-tonne index, the sender rules, and pools and plans per key.
+- `test_orchestrator.py`: `complete_plan`, and a failing pool that leaves the other pool in place.
+- All tests use invented values.
+
+**Sandbox runs** (commit `9cdc47a`, recorded as `v2` / `mail-shapes`; recent v2 runs took about 510 to 1070 s)
+
+| Run | Quality | Time | Cost |
+| --- | --- | --- | --- |
+| `run_475744256a4b2016` | 100 | 496 s | $0.131 |
+| `run_cdb51ea50c45119c` | 100 | 535 s | $0.165 |
+| `run_7863264a7259454f` | 100 | 459 s | $0.118 |
+
+Commits: `9cdc47a` (the fixes), `26516b7` (merge of main), `d147000` (run records).
+
+Two things to know:
+- When a pool can't be split for a position (e.g. no allocation mass), that position is still left out of the bid rather than losing only the pool. That was already the case before this change and I left it as is.
+- FX values quoted per EUR and metal rates converted from another unit are posted to the verifier differently from what the mail says. The verifier could flag them as doubtful and send the mail search round again, costing some time on a private dataset. Public-1 doesn't hit this.</result>
+<usage><subagent_tokens>182217</subagent_tokens><tool_uses>81</tool_uses><duration_ms>1447102</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a183c69be42b5cc53</worktreePath><worktreeBranch>worktree-agent-a183c69be42b5cc53</worktreeBranch></worktree>
+</task-notification>
