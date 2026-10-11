@@ -203,7 +203,8 @@ class SurveyListTest(unittest.TestCase):
                                ("Tariffs T-1 | 3 Jan", [("Tariffs T-1", "/messages/7")])]},
              "https://mail.test/?folder=old": {
                  "T-1 Tariffs": [("Tariffs T-1 | 1 Jan", [("Tariffs T-1", "/messages/2")])],
-                 "T-1 Rates": []}}
+                 # the same message as the search before listed it, under another address: remembered once
+                 "T-1 Rates": [("Tariffs T-1 | 1 Jan", [("Tariffs T-1", "/messages/2?q=rates")])]}}
 
     def test_one_call_lists_a_folder_for_every_topic(self):
         session, asked, searching = self.lister(self.FOUND)

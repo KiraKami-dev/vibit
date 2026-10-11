@@ -163,7 +163,7 @@ class FastStartTest(unittest.TestCase):
         async def broken(context):
             async def busy(route):
                 await route.fulfill(content_type="text/html", body="<h1>Portal home</h1><script>setTimeout(() => "
-                                    "{ while (true) {} }, 300)</script>")
+                                    "{ while (true) {} }, 50)</script>")  # frozen before the page is settled
             await context.route("**/*", busy)
 
         session, view, seconds, own = asyncio.run(start(server, broken))

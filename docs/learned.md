@@ -311,3 +311,21 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   to the front before a click (`SiteSession.front`). Headless local runs never show this.
 - 11 Oct: one message page that hangs held the whole mailbox survey for 75 s (its result is returned when every
   message is read). A message page is now opened again after 15 s, twice at most.
+- 11 Oct: what the page waits cost, from the run summary's totals: the browser's "network idle" needs 0.5 s without
+  a request and was waited for after every action (ERP tabs 71 to 74 s a run, mail 33 to 39 s, bid form 21 s). A tab
+  now counts its own requests and is settled 0.2 s after the last one ended (`SiteSession._idle`; the pause after
+  an action is 0.1 s). Same run before and after: specification 45 to 57 s -> 33 to 39 s, all materials read
+  92 to 118 s -> 74 to 76 s, a bid position 4 s -> 2.4 s. Note that the browser's signal says nothing after an
+  action that loads no new document: it is there at once.
+- 11 Oct: one call without thinking wrote for the whole 150 s cap (tokens kept coming, so no pause limit saw it)
+  and held the tender research; such calls are now cut at 45 s and retried (`LLM_MAX_CALL_FAST`).
+- 11 Oct: the coverage check ran only after all research, so a requirement the ERP had not answered waited for the
+  mail (216 s in one eval run); it now runs when the ERP research ends. A material called inactive without a view
+  that explains its status is read once more: that guess cost a position in two eval runs.
+- 11 Oct: a record kind the mailbox lists nothing for was searched twice at full length (215 s); after a complete
+  survey it gets one 60 s search. A topic the first listing showed no row for is listed once more while the other
+  messages are read (two kinds missed by the first listing cost 100 s in fallback searches). A message several
+  searches list is read once (25 reads became 15), and one whose page gave no record is read again first.
+- 11 Oct, public data, quality 100 each: 5:49 -> 3:39 (survey and TAN fixes) -> 3:09 (tab to the front) -> 2:10
+  (page waits, second listing pass). Runs in between lost 45 to 150 s to one incident each: a first sign-in that
+  hung, the 150 s model call, a fallback mail search.

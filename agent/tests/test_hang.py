@@ -46,6 +46,46 @@ class LargeTextTest(unittest.TestCase):
         self.assertEqual(unseen_values("Row 12 costs 91  EUR", "| Row 12 |\n  91   EUR"), [])
 
 
+class IdleWaitTest(unittest.TestCase):
+    """A page counts as loaded once none of its requests is under way, not after half a second of silence."""
+
+    def test_a_page_at_rest_is_not_waited_on_and_a_request_under_way_is(self):
+        async def run():
+            async with async_playwright() as playwright:
+                browser = await playwright.chromium.launch(headless=True)
+                context = await browser.new_context()
+
+                async def serve(route):
+                    if route.request.url.endswith("/slow"):
+                        await asyncio.sleep(1.0)
+                        await route.fulfill(body="late")
+                    else:
+                        await route.fulfill(content_type="text/html", body="<p id=a>Stock: 12</p><button>Go</button>")
+                await context.route("**/*", serve)
+                session = SiteSession(SITE, context, Trace(tempfile.mkdtemp()))
+                page = await context.new_page()
+                session._watch(page)
+                await page.goto("https://example.com/")
+                await asyncio.sleep(0.6)
+                started = time.monotonic()
+                await session._idle(page)
+                at_rest = time.monotonic() - started
+                await page.evaluate("() => { fetch('/slow').then(r => r.text()).then(t => { "
+                                    "document.getElementById('a').textContent = t }) }")  # started, not awaited
+                await asyncio.sleep(browser_tools.ACT_PAUSE)  # as after every action
+                started = time.monotonic()
+                await session._idle(page)
+                loading = time.monotonic() - started
+                text = await page.inner_text("#a")
+                await browser.close()
+                return at_rest, loading, text
+        at_rest, loading, text = asyncio.run(run())
+        self.assertLess(at_rest, 0.3)
+        self.assertGreater(loading, 0.8)  # the request took a second: the page is read after it
+        self.assertLess(loading, browser_tools.IDLE_LIMIT)
+        self.assertEqual(text, "late")
+
+
 class FrozenPageTest(unittest.TestCase):
     def test_a_frozen_page_is_cut_off_and_others_go_on(self):
         async def run():

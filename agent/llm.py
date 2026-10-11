@@ -91,6 +91,10 @@ def retries() -> int:
 DEFAULT_FIRST_TOKEN = 20.0  # measured: the first chunk came within 9.4 s (p90 5.9 s) in 179 calls, either mode
 DEFAULT_IDLE = 15.0  # text and reasoning tokens arrive at most ~1.5 s apart while the model answers
 DEFAULT_MAX_CALL = 150  # a streamed answer is not cut by the proxy: one runaway reasoning ran 814 s
+# Thinking off, an answer is a tool call or a short record and takes seconds. One such call wrote without a pause
+# for the whole 150 s (tokens kept coming, so neither the first-chunk nor the idle limit saw it) and held a run's
+# tender research for that long; the retry answered at once.
+DEFAULT_MAX_CALL_FAST = 45
 
 
 def watchdog() -> bool:
@@ -231,6 +235,8 @@ class _WatchdogModel(OpenAIChatModel):
         thinking = bool(((settings.get("extra_body") or {}).get("chat_template_kwargs") or {}).get("enable_thinking"))
         silence = float(settings.get("timeout") or timeout_seconds(thinking))  # type: ignore[arg-type]
         cap = env_seconds("LLM_MAX_CALL", DEFAULT_MAX_CALL)
+        if not thinking:  # a caller that asks for more time for one call gets it
+            cap = min(cap, max(silence, env_seconds("LLM_MAX_CALL_FAST", DEFAULT_MAX_CALL_FAST)))
         settings["timeout"] = cap  # the HTTP layer only guards the cap; progress is judged here
         tools = bool(model_request_parameters.function_tools or model_request_parameters.output_tools)
         limits = _Limits(first=env_seconds("LLM_FIRST_TOKEN_TIMEOUT", DEFAULT_FIRST_TOKEN),

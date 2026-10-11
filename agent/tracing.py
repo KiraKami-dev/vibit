@@ -28,7 +28,8 @@ class Trace:
 
     # events that mark a phase or a failure; repeated in one block at the end of the run (summary())
     KEY_KINDS = {"start", "done", "stopped", "problem", "start_failed", "spec_done", "tender_facts", "mail_kind",
-                 "answer", "summary_check", "last_chance", "crashed", "decision_disputed", "helper_error"}
+                 "answer", "summary_check", "last_chance", "crashed", "decision_disputed", "helper_error",
+                 "mail_survey", "mail_survey_again", "mail_listed"}
 
     def event(self, worker: str, kind: str, quiet: bool = False, **data) -> None:
         self.last = time.monotonic()

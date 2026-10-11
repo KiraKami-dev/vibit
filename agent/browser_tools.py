@@ -22,6 +22,13 @@ from pydantic_ai import RunContext
 from tracing import Trace
 
 SETTLE_SECONDS = 45  # upper bound for waiting on a page and its helpers after one action
+# After an action the page is waited on until nothing is loading. The browser's own "network idle" needs 0.5 s
+# without a request, on every action: over one run that added up to 70 s in the ERP tabs, 35 s in the mail tabs and
+# 20 s on the bid form. A tab's requests are counted here instead, and QUIET without one under way is enough; the
+# browser's signal still ends the wait when it comes first, and IDLE_LIMIT ends it in any case (a page that polls).
+QUIET = 0.2
+IDLE_LIMIT = 2.5
+ACT_PAUSE = 0.1  # after an action, before the page is waited on: what it starts (a request, a script) has begun
 MAX_VIEW = 14000  # characters of a page shown at once; read_more pages through the rest
 # A start waits on its tab while it loads: a slow site under load is still alive, and a new tab only queues behind
 # the old request. But a tab can also hang for minutes in a context whose requests never complete while the same
@@ -492,6 +499,19 @@ class SiteSession:
 
     def _watch(self, page: Page) -> None:
         self.pages.append(page)
+        net = [0, time.monotonic()]  # requests under way, and when one last began or ended
+        page._ar_net = net  # read by _idle; kept on the page, which may pass to another session
+
+        def began(_request) -> None:
+            net[0] += 1
+            net[1] = time.monotonic()
+
+        def ended(_request) -> None:
+            net[0] = max(0, net[0] - 1)
+            net[1] = time.monotonic()
+        page.on("request", began)
+        page.on("requestfinished", ended)
+        page.on("requestfailed", ended)
         page.on("dialog", lambda dialog: self._owner()._on_dialog(dialog))
         page.on("popup", lambda popup: self._owner()._on_popup(popup))
 
@@ -585,7 +605,7 @@ class SiteSession:
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=15000)
                 at = self._waited("load", at)
-                await page.wait_for_load_state("networkidle", timeout=2500)
+                await self._idle(page)
             except Exception:
                 pass
             at = self._waited("idle", at)
@@ -603,6 +623,32 @@ class SiteSession:
                 continue
             break
         await self._collect_closed(page)
+
+    @staticmethod
+    async def _idle(page: Page) -> None:
+        """
+        Wait until none of the page's requests is under way and the last one ended QUIET ago (ACT_PAUSE before
+        this lets a request the action started be counted). The browser's own network-idle signal also ends the
+        wait when it comes during it; one that is there at once is of the document as it was before the action
+        and says nothing. IDLE_LIMIT at most: a request that outlasts it (a page that polls) is not counted on.
+        """
+        net = getattr(page, "_ar_net", None) or [0, 0.0]
+        browser_says = asyncio.ensure_future(page.wait_for_load_state("networkidle", timeout=IDLE_LIMIT * 1000))
+        try:
+            await asyncio.sleep(0.03)
+            fresh = not browser_says.done()
+            end = time.monotonic() + IDLE_LIMIT
+            while time.monotonic() < end:
+                if net[0] <= 0 and time.monotonic() - net[1] >= QUIET:
+                    return
+                if browser_says.done() and (fresh or not hasattr(page, "_ar_net")):
+                    return
+                await asyncio.sleep(0.03)
+            net[0] = 0
+        finally:
+            if not browser_says.done():
+                browser_says.cancel()
+            await asyncio.gather(browser_says, return_exceptions=True)
 
     async def front(self) -> None:
         """
@@ -662,13 +708,13 @@ class SiteSession:
 
     async def _cookies(self, page: Page) -> bool:
         buttons = page.locator("button:visible, input[type=submit]:visible")
+        # all button texts in one call: this runs after every action, and a page may have twenty buttons
+        texts = await buttons.evaluate_all(
+            "els => els.slice(0, 20).map(e => (e.tagName === 'BUTTON' ? e.innerText : e.getAttribute('value')) || '')")
         candidates = []
-        for i in range(min(await buttons.count(), 20)):
-            button = buttons.nth(i)
-            text = (await button.inner_text() if await button.evaluate("e => e.tagName") == "BUTTON"
-                    else await button.get_attribute("value")) or ""
+        for i, text in enumerate(texts):
             if COOKIE.search(text) and COOKIE_ANSWER.search(text):
-                candidates.append((not COOKIE_MINIMAL.search(text), text.strip(), button))
+                candidates.append((not COOKIE_MINIMAL.search(text), text.strip(), buttons.nth(i)))
         if not candidates:
             return False
         candidates.sort(key=lambda c: c[0])  # the necessary-only choice first
@@ -690,7 +736,7 @@ class SiteSession:
             return False
         self.events.append("unlocked a human check (" + ", ".join(sorted(set(done))) + ")")
         self.trace.event(self.name, "helper", action="human_check", done=done)
-        await asyncio.sleep(0.4)
+        await asyncio.sleep(0.15)  # the page is waited on again after this (settle goes round once more)
         return True
 
     async def _error_page(self, page: Page) -> bool:
@@ -812,7 +858,7 @@ class SiteSession:
                 self.trace.event(self.name, "action_error", action=kind, ref=ref, error=first)
                 return f"{kind} {ref} failed: {first}\n\n" + await self.look(brief=True)
             self._waited("act", started)
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(ACT_PAUSE)
             await self.settle()
             self.trace.event(self.name, "action", action=kind, ref=ref, seconds=round(time.monotonic() - started, 2))
             view = await self.look(brief=True)

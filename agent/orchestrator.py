@@ -67,6 +67,9 @@ KIND_OPTIONS = set(inspect.signature(research_mail.research_kind).parameters) if
 KIND_MIN_SECONDS = 120.0  # a mail record kind's search budget: at least this
 KIND_MAX_SECONDS = 240.0  # and at most this, from the mail time left per kind
 MAIL_RETRY_SECONDS = 90.0  # mail time a kind's second try needs
+# A kind the survey listed every folder for (reference and topic) without a single row: one more search in other
+# words, short and without a second try. In an eval a record that did not exist was searched for 215 s.
+ABSENT_SECONDS = 60.0
 MAIL_TAB_STAGGER = 4.0  # seconds between the mail tabs' sign-ins
 # A mail search that takes much longer than the others took sits on a tab that hangs (one run: eight kinds done
 # within 118 s, the ninth held the research until 275 s). A tab with nothing left to do then searches that kind
@@ -540,6 +543,9 @@ class Orchestrator:
                 return
             self.erp = await erp.collect()
             await self._post_materials(erp_site or "")
+            # A requirement the ERP did not answer goes back to it at once, beside the mail research: waiting for
+            # the mail first cost an eval run 216 s (search failed at 363 s, sent back at 579 s).
+            await self.cover()
         except Exception as error:
             board.problem("specification", f"{type(error).__name__}: {str(error)[:200]}")
         finally:
@@ -723,6 +729,7 @@ class Orchestrator:
             surveyed.set()
         running: dict[str, list] = {}  # kind name -> [since, kind, the searches for it now running]
         unneeded: set[str] = set()  # kinds no source refers to: not searched (on), and not counted as open
+        absent: set[str] = set()  # kinds a complete survey found no row for
         took: list[float] = []  # how long the searches that read a record took
         helped: set[str] = set()
 
@@ -738,6 +745,8 @@ class Orchestrator:
 
         async def search(session: SiteSession, kind, tries: int, helping: bool = False) -> None:
             budget = self._kind_seconds(deadline, queue.qsize())
+            if kind.name in absent:
+                budget = min(budget, ABSENT_SECONDS)
             options = {"seconds": budget} if "seconds" in KIND_OPTIONS else {}
             copy = asyncio.ensure_future(research_mail.research_kind(session, kind, self.reference,
                                                                      deadline=deadline, **options))
@@ -777,7 +786,7 @@ class Orchestrator:
             if stopped is None:  # out of its budget without reading a message
                 stopped = not found.records and found.seconds >= min(budget, getattr(research_mail, "KIND_SECONDS", budget)) - 5
             if (stopped and not tries and not helping and not entry[2] and self.referred(kind.name) is not False
-                    and deadline - time.monotonic() > MAIL_RETRY_SECONDS):
+                    and kind.name not in absent and deadline - time.monotonic() > MAIL_RETRY_SECONDS):
                 # Out of its budget: once more at the end of the queue, from a fresh start on this tab.
                 self.board.problem("mails", f"{kind.name}: search stopped at its budget; tried once more")
                 queue.put_nowait((kind, 1))
@@ -793,6 +802,7 @@ class Orchestrator:
                 with_rows.update(found)
                 if complete:
                     listed.append(True)
+                    absent.update(kind.name for kind, _ in waiting if kind.name not in found)
                 for kind, tries in waiting:
                     if kind.name not in found:
                         queue.put_nowait((kind, tries))
@@ -1004,7 +1014,22 @@ class Orchestrator:
             elif not research.no_hits and (not research.inspected
                                            or any(n not in self.erp.materials for n in research.inspected)):
                 missing.append(rid)
+            elif self.status_guessed(research):
+                missing.append(rid)
         return missing
+
+    def status_guessed(self, research) -> list[str]:
+        """The requirement's materials that were called inactive although no view said what their status means,
+        and that were not read a second time yet. Such a material is a guess: in an eval the one material that
+        fitted was read as inactive in one run and as active in the next, and the guess cost its position."""
+        again = getattr(self, "reread", set())
+        out = []
+        for number in research.inspected:
+            record = self.erp.materials.get(number)
+            if (number not in again and record is not None and not getattr(record, "active", True)
+                    and "status meaning not read" in (getattr(record, "problems", None) or [])):
+                out.append(number)
+        return out
 
     async def cover(self) -> None:
         """Send the requirements that fail the coverage check back to the ERP (see COVERAGE_ROUNDS). Nothing
@@ -1013,16 +1038,24 @@ class Orchestrator:
         if erp is None or self.erp is None or not hasattr(erp, "so_far"):
             return
         sent: set[str] = set()
-        for attempt in range(1, COVERAGE_ROUNDS + 1):
+        # called when the ERP research ends and again after all research: the rounds are counted over both
+        for attempt in range(getattr(self, "cover_rounds", 0) + 1, COVERAGE_ROUNDS + 1):
             missing = self.uncovered()
             if not missing or self.left() < COVERAGE_SECONDS:
                 break
+            self.cover_rounds = attempt
             self.trace.event("coverage", "sent_back", round=attempt, requirements=missing,
                              seconds_left=round(self.left()))
             sent.update(missing)
             for number, task in list(erp.materials.items()):  # a material that was not read is read afresh
                 if task.done() and (task.cancelled() or task.exception() is not None or task.result() is None):
                     del erp.materials[number]
+            self.reread = getattr(self, "reread", set())
+            for research in self.erp.requirements:  # and one whose status was a guess, once
+                if research.requirement_id in missing:
+                    for number in self.status_guessed(research):
+                        erp.materials.pop(number, None)
+                        self.reread.add(number)
             tasks = []
             for rid in missing:
                 earlier = erp.tasks.pop(rid, None)

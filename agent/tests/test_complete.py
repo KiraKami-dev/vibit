@@ -111,6 +111,32 @@ class Coverage(unittest.TestCase):
         self.assertEqual(len(o._erp.calls), orchestrator.COVERAGE_ROUNDS)
         self.assertEqual(o.trace.of("done"), [{"covered": [], "still_missing": ["A-2"]}])
 
+    def test_a_material_called_inactive_on_a_guess_is_read_once_more(self):
+        o = bare()
+        guess = SimpleNamespace(active=False, problems=["status meaning not read"])
+        blocked = SimpleNamespace(active=False, problems=[])  # its status was explained: not a guess
+        first = ErpResearch.model_construct(
+            requirements=[found("A-1", "M-1"), found("A-2", "M-2"), found("A-3", no_hits=True)],
+            materials={"M-1": guess, "M-2": blocked})
+        o.erp = first
+        o._erp = FakeErp(first, {"A-1": [found("A-1", "M-1")]})
+        read = SimpleNamespace(done=lambda: True, cancelled=lambda: False, exception=lambda: None,
+                               result=lambda: "a record")
+        o._erp.materials = {"M-1": read, "M-2": read}
+        self.assertEqual(o.uncovered(), ["A-1"])
+        asyncio.run(o.cover())
+        self.assertEqual(o._erp.calls, ["A-1"])  # sent back once: a second guess is not read a third time
+        self.assertEqual(sorted(o._erp.materials), ["M-2"])  # the guessed reading was dropped, to be read afresh
+
+    def test_the_rounds_are_counted_over_both_calls(self):
+        # the check runs when the ERP research ends and once more after all research
+        o = bare()
+        o.erp = self.FIRST
+        o._erp = FakeErp(self.FIRST, {"A-2": [found("A-2") for _ in range(9)]})
+        asyncio.run(o.cover())
+        asyncio.run(o.cover())
+        self.assertEqual(len(o._erp.calls), orchestrator.COVERAGE_ROUNDS)
+
     def test_nothing_is_spent_when_all_is_covered_or_time_is_short(self):
         covered = findings([found("A-1", "M-1"), found("A-2", "M-2"), found("A-3", no_hits=True)], ["M-1", "M-2"])
         for o, first in ((bare(), covered), (bare(seconds_left=30), self.FIRST)):
@@ -230,10 +256,11 @@ class LastResort(unittest.TestCase):
 class MailSurvey(unittest.TestCase):
     """The mailbox is read once for all kinds; only what that did not find is searched on its own."""
 
-    def run_mail(self, survey_finds: dict, fails: bool = False):
+    def run_mail(self, survey_finds: dict, fails: bool = False, finds_nothing: bool = False):
         o = bare()
         kinds = [SimpleNamespace(name=name) for name in ("approval", "packaging", "fx")]
         searched: list[str] = []
+        self.budgets: dict[str, list] = {}
 
         async def survey(session, kinds, reference, deadline=None, on_assigned=None):
             if fails:
@@ -246,7 +273,10 @@ class MailSurvey(unittest.TestCase):
 
         async def research_kind(session, kind, reference, deadline=None, seconds=None):
             searched.append(kind.name)
+            self.budgets.setdefault(kind.name, []).append(seconds)
             await asyncio.sleep(0.02)
+            if finds_nothing:  # ran to the end of its time without a message
+                return SimpleNamespace(kind=kind, records=[], kept=[], seconds=seconds, stopped=True)
             return SimpleNamespace(kind=kind, records=[f"{kind.name} by search"], kept=["view"], seconds=0.02,
                                    stopped=False)
 
@@ -268,6 +298,15 @@ class MailSurvey(unittest.TestCase):
         self.assertEqual(o.mail_results["approval"].records, ["approval record"])
         self.assertEqual(sorted(searched), ["fx", "packaging"])
         self.assertEqual(o.mail_results["fx"].records, ["fx by search"])
+
+    def test_a_kind_the_whole_mailbox_lists_nothing_for_gets_one_short_search(self):
+        # packaging had rows, fx none in any folder; neither search finds a message
+        o, searched = self.run_mail({"approval": ["approval record"], "packaging": [], "fx": None},
+                                    finds_nothing=True)
+        self.assertEqual(searched.count("fx"), 1)  # no second try for a record that is not there
+        self.assertLessEqual(self.budgets["fx"][0], orchestrator.ABSENT_SECONDS)
+        self.assertEqual(searched.count("packaging"), 2)  # rows were there: its search is tried once more
+        self.assertGreater(self.budgets["packaging"][0], orchestrator.ABSENT_SECONDS)
 
     def test_without_a_survey_result_every_kind_is_searched_as_before(self):
         o, searched = self.run_mail({}, fails=True)

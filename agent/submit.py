@@ -215,12 +215,12 @@ async def fill_in(ctx: RunContext[Deps], actions: list[FormAction]) -> str:
                 stop = f"{step.action} {step.ref} {step.value!r} failed: {str(error).splitlines()[0][:200]}"
                 break
             done.append(f"{step.action} {step.ref}")
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(browser_tools.ACT_PAUSE)
             if page.is_closed() or page.url != url or len(session.pages) != windows:
                 if step is not actions[-1]:
                     stop = "the page changed after it; the remaining actions were not done"
                 break
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(browser_tools.ACT_PAUSE)
         await session.settle()
         session.trace.event(session.name, "action", action="fill_in", done=done, stop=stop,
                             asked=[step.model_dump() for step in actions])

@@ -126,6 +126,16 @@ class Watchdog(unittest.TestCase):
         self.assertIn("no progress for 0.2s", log)
         self.assertLess(seconds, 1.5)  # the trickle alone would take 2 s
 
+    def test_an_answer_that_never_ends_is_cut_at_the_cap_for_calls_without_thinking(self):
+        """Tokens keep coming, so no pause gives the call away: only its length does."""
+        endless = [(0, ROLE), *((0.1, chunk({"content": "x"})) for _ in range(30)), (0, DONE)]
+        fake = Fake((0, endless), (0, text("ok")))
+        response, seconds, log = run(fake, LLM_MAX_CALL_FAST="0.5", LLM_TIMEOUT="0.3")
+        self.assertEqual(response.parts[0].content, "ok")
+        self.assertEqual(fake.count, 2)
+        self.assertIn("no answer within 0.5s; retry 1/2", log)
+        self.assertLess(seconds, 2.0)  # the endless answer alone would take 3 s
+
     def test_slow_but_progressing_stream_is_never_cut(self):
         """Tokens 0.15 s apart for 1.5 s: longer than the call's timeout (0.6 s), each gap below the idle limit."""
         slow = [(0, ROLE), *((0.15, chunk({"content": "x"})) for _ in range(10)), (0, DONE)]

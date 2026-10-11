@@ -602,6 +602,12 @@ MESSAGE_OPEN_SECONDS = 15.0  # one try to open a message page in the survey
 MESSAGE_TRIES = 2  # a page that never loads (seen: a decoy) holds the survey no longer than two tries
 SURVEY_ROWS = 200  # rows the survey keeps
 SURVEY_OPEN = 8  # messages opened at one time
+AGAIN_SECONDS = 45.0  # the second listing, for the topics the first showed no row for
+AGAIN_STEPS = 10
+MIN_AGAIN_SECONDS = 30.0
+SURVEY_AGAIN = """
+The folders were listed for other topics before; these topics showed no message then. List every folder once more
+for these topics only."""
 
 
 @dataclass
@@ -661,7 +667,9 @@ def list_tool(index: list[SurveyRow]):
                 url = row_link(row, where, host) or ""
                 if (url and url in known) or len(index) >= SURVEY_ROWS:
                     continue
-                if not url and any(r.text == row.text and not r.url for r in index):
+                # one message shows in several searches, each time under another address (the search is part of
+                # it): a row that reads the same (subject, sender, date) is the same message, read once
+                if any(r.text == row.text[:400] and bool(r.url) == bool(url) for r in index):
                     continue
                 index.append(SurveyRow(text=row.text[:400], url=url, where=where))
                 known.add(url)
@@ -727,6 +735,11 @@ def list_tool(index: list[SurveyRow]):
         idle[0] = 0 if added else idle[0] + 1
         session.trace.event(session.name, "list_messages", queries=asked, added=added, total=len(index),
                             results=lines[:20])
+        # short, for the run summary: the last word of each query and the rows it showed
+        session.trace.event(session.name, "mail_listed", at=session.page.url.split("?")[-1][:22],
+                            rows=" ".join(f"{line.split(chr(39))[1].split()[-1][:8]}={line.split(': ')[1].split()[0]}"
+                                          if line.count("'") >= 2 and ": " in line else line[2:12]
+                                          for line in lines)[:110])
         if idle[0] >= 3:  # three lists in a row with nothing new: the survey has what there is
             raise Stuck("the mailbox lists nothing new any more")
         view = await session.look()  # the page as it is now: its refs are the ones to use for the next folder
@@ -833,29 +846,39 @@ async def survey(session: SiteSession, kinds: list[Kind], reference: str, deadli
     by_name = {kind.name: kind for kind in kinds}
     assigned = {name: [row for row in rows if row.url] for name, rows in assigned.items() if name in by_name}
     assigned = {name: rows for name, rows in assigned.items() if rows}
-    if on_assigned is not None:
-        on_assigned(set(assigned), complete)
     session.trace.event(session.name, "mail_assigned",
                         **{name: [row.text[:80] for row in rows] for name, rows in assigned.items() if rows})
     gate = asyncio.Semaphore(SURVEY_OPEN)
 
-    async def read(kind: Kind, row: SurveyRow) -> tuple[str, MailRecord | None] | None:
-        if not row.url:
-            return None  # a row that is not a link: left to the kind's own search, which can open it
-        view = None
+    async def opened(kind: Kind, row: SurveyRow) -> str | None:
         async with gate:
             for attempt in range(MESSAGE_TRIES):
                 try:  # a message page opens in a second or two; one that hangs is opened again in a new tab
-                    view = await asyncio.wait_for(open_message(session, row.url, tries=1), MESSAGE_OPEN_SECONDS)
+                    view = await asyncio.wait_for(open_message(session, row.url), MESSAGE_OPEN_SECONDS)
                 except asyncio.TimeoutError:
                     session.trace.event(session.name, "mail_message_reopened", record_kind=kind.name,
                                         attempt=attempt + 1, url=row.url[:120])
                     continue
                 if view:
-                    break
+                    return view
+        return None
+
+    async def read(kind: Kind, row: SurveyRow) -> tuple[str, MailRecord | None] | None:
+        if not row.url:
+            return None  # a row that is not a link: left to the kind's own search, which can open it
+        view = await opened(kind, row)
         if not view:
             return None
-        return view, await read_message(view, kind, reference)
+        record = await read_message(view, kind, reference)
+        if record is None or record.content is None:
+            # nothing of the record came off the page (it may have shown a sign-in or a notice instead): the
+            # message is opened and read once more, which takes seconds; the kind's own search takes minutes
+            session.trace.event(session.name, "mail_message_reread", record_kind=kind.name, url=row.url[:120])
+            again = await opened(kind, row)
+            second = await read_message(again, kind, reference) if again else None
+            if second is not None and second.content is not None:
+                return again, second
+        return view, record
 
     async def bounded(kind: Kind, row: SurveyRow):
         try:  # one message that hangs must not hold up the others: its kind is then searched on its own
@@ -866,6 +889,34 @@ async def survey(session: SiteSession, kinds: list[Kind], reference: str, deadli
 
     jobs = {(name, i): asyncio.create_task(bounded(by_name[name], row))
             for name, rows in assigned.items() for i, row in enumerate(rows)}
+    # A topic the listing showed no row for is listed once more while the others are read: a search that failed or
+    # was left out costs seconds here and minutes as the kind's own search. A record that is not there costs one
+    # short pass.
+    missing = [kind for kind in kinds if kind.name not in assigned and kind.subject]
+    if missing and index and complete and until - time.monotonic() > MIN_AGAIN_SECONDS:
+        had = len(index)
+        topics = ", ".join(dict.fromkeys(repr(kind.subject) for kind in missing))
+        again, _ = await run_worker(session, SURVEY_GOAL.format(reference=reference, topics=topics) + SURVEY_AGAIN,
+                                    Summary, deadline=min(until, time.monotonic() + AGAIN_SECONDS),
+                                    max_steps=AGAIN_STEPS, thinking=False, grounded=False, notes=False,
+                                    loop_guard=True, tools=(list_tool(index),))
+        session.trace.event(session.name, "mail_survey_again", topics=topics, new_rows=len(index) - had,
+                            seconds=round(time.monotonic() - started, 1))
+        if len(index) > had:
+            try:
+                more = await assign_rows(index[had:], missing, reference)
+            except Exception as error:
+                session.trace.event(session.name, "mail_assign_failed",
+                                    error=f"{type(error).__name__}: {str(error)[:160]}")
+                more = {}
+            for name, rows in more.items():
+                rows = [row for row in rows if row.url]
+                if name in by_name and name not in assigned and rows:
+                    assigned[name] = rows
+                    for i, row in enumerate(rows):
+                        jobs[(name, i)] = asyncio.create_task(bounded(by_name[name], row))
+    if on_assigned is not None:
+        on_assigned(set(assigned), complete)
     if jobs:
         limit = None if deadline is None else max(1.0, deadline - 5 - time.monotonic())
         await asyncio.wait(jobs.values(), timeout=limit)
