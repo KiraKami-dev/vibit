@@ -10,6 +10,7 @@ from typing import TypeVar
 
 import clef
 import llm
+import vision  # noqa: F401  (pictures without a text label are read into the page text)
 from browser_tools import TOOLS, Deps, SiteSession, Stuck, unseen_values
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.capabilities.process_history import ProcessHistory

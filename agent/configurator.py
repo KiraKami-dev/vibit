@@ -309,8 +309,33 @@ async def fill_position(session, entry: dict, plan: FillPlan, log: list[str],
             if kept is None or await kept.evaluate("e => e.value") != option["value"]:
                 return f"{label!r} lost its choice after {plan.confirm!r}"
         else:
-            await element.fill(value, timeout=5000)
-            if await element.evaluate("e => e.value") != value:
-                return f"{label!r} did not take {value!r}"
+            problem = await type_value(element, value, numeric=key in MONEY_KEYS | COUNT_KEYS)
+            if problem:
+                return f"{label!r} {problem}"
             log.append(f"{label} = {value}")
     return None
+
+
+async def type_value(element, value: str, numeric: bool) -> str | None:
+    """
+    Type a value into a field and check that the field holds it; None when it does, else what went wrong. A
+    number is tried in the notation of the answer first (decimal comma), then with a decimal point and no
+    thousands separator, which a number field or an English form wants; and the check compares numbers as numbers,
+    since a field may show what it took in its own way ("1.234,50", "1234.5").
+    """
+    number = parse_number(value) if numeric else None
+    notations = [value]
+    if number is not None and format(number, "f") not in notations:
+        notations.append(format(number, "f"))
+    why = ""
+    for text in notations:
+        try:
+            await element.fill(text, timeout=5000)
+        except Exception as error:  # e.g. a number field refuses a comma
+            why = str(error).splitlines()[0][:120]
+            continue
+        held = await element.evaluate("e => e.value")
+        if held == text or (number is not None and parse_number(str(held)) == number):
+            return None
+        why = f"it holds {held!r}"
+    return f"did not take {value!r} ({why})"

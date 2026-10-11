@@ -199,6 +199,29 @@ def _same_id(a: str, b: str) -> bool:
 # ---------------------------------------------------------------- the calculation with per-field fallbacks
 
 
+def unread_attributes(research, materials: dict) -> list[str]:
+    """
+    The inspected materials of a requirement that were never fully compared: a number (bore, stroke, pressure) or
+    the mounting that neither the hit list nor the material's record showed. "No material matches" is established
+    only when every candidate was compared in every attribute; an unread one leaves the position out instead of
+    turning the whole bid into no bid. (Certification is not counted: a material without one shows nothing.)
+    """
+    out = []
+    for number in getattr(research, "inspected", None) or []:
+        record = materials.get(number)
+        cand = next((c for c in getattr(research, "candidates", []) if c.material_number == number), None)
+        if record is None:
+            out.append(f"{number}: record not read")
+            continue
+        missing = [key for key in ("bore", "stroke", "pressure")
+                   if getattr(record, key, None) is None and getattr(cand, key, None) is None]
+        if not getattr(record, "mounting", "") and not getattr(cand, "mounting", ""):
+            missing.append("mounting")
+        if missing:
+            out.append(f"{number}: {', '.join(missing)} not read")
+    return out
+
+
 def safe_calculate(bid: calc.BidInput) -> tuple[calc.BidResult | None, dict[str, set[str]], list[str]]:
     """
     calc with CalcError caught per position: a position whose packaging or surcharge inputs are incomplete is
@@ -893,9 +916,10 @@ class Orchestrator:
                 # No material only means no_bid (rule 3) when the search for it was complete; a requirement still
                 # pending (e.g. a reserve not found) or a search that hit problems leaves the position out instead.
                 pending = self.effective(self.requirements[req_id]).pending
-                if pending or (research is not None and research.problems):
+                unread = unread_attributes(research, self.erp.materials if self.erp else {})
+                if pending or (research is not None and research.problems) or unread:
                     problems.append(f"position {p.position}: material undecided "
-                                    f"({'; '.join(pending or research.problems)[:160]}); position omitted")
+                                    f"({'; '.join(pending or research.problems or unread)[:160]}); position omitted")
                     continue
             material = self.erp.materials.get(number) if (number and self.erp) else None
             if number and material is None:  # chosen, but its record was not read: a gap, never "no material"

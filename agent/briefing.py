@@ -33,11 +33,20 @@ async def read_brief(task: dict) -> Briefing:
         ids = {s["siteId"] for s in task["access"]}
         if briefing.bid_site not in ids or briefing.mail_site not in ids:
             raise ModelRetry(f"bid_site and mail_site must be among these siteIds: {sorted(ids)}")
-        missing = unseen_values(briefing.model_dump_json(exclude={"bid_site", "mail_site"}), task["brief"])
-        if missing:
+        # the values themselves, not their JSON: there a line break is the two characters "\n", and a numbered
+        # list copied word for word ("...\n2. ...") would yield values such as "n2" that no brief contains
+        values = "\n".join(str(v) for v in briefing.model_dump(exclude={"bid_site", "mail_site"}).values())
+        missing = unseen_values(values, task["brief"])
+        if missing and strict:
             raise ModelRetry(f"{', '.join(missing)} are not in the brief; copy values exactly from it.")
         return briefing
 
     prompt = (f"Websites of this run:\n{sites}\n\nThe answer goes to: {submission}\n\nBrief:\n{task['brief']}")
-    result = await agent.run(prompt)
-    return result.output
+    strict = True
+    try:
+        return (await agent.run(prompt)).output
+    except Exception as error:  # without a briefing no bid is signed at all: read it once more, unchecked
+        print(f"[briefing] strict reading failed ({type(error).__name__}: {str(error)[:160]}); reading again",
+              flush=True)
+        strict = False
+        return (await agent.run(prompt)).output

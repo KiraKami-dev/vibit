@@ -328,8 +328,9 @@ folder and look for a subject that names this record; another word for the topic
 - If the hits span several pages, call collect_pages with the ref of the list's next-page control first.
 - Check every folder the mailbox has (e.g. inbox and archive) once, with the same search. If a search shows
   nothing in any folder or asks you to narrow it, change the words once (another topic word, or more words).
-As soon as every folder is checked, return a one-line summary. Do not open messages yourself, do not use back()
-and do not note() anything: kept messages are read for you."""
+As soon as every folder is checked, return a one-line summary. Do not open messages yourself (unless
+keep_results says the results are not links: then open each such message and call keep_open_message() while its
+text shows), do not use back() and do not note() anything: kept messages are read for you."""
 
 
 READ_INSTRUCTIONS = """\
@@ -437,10 +438,29 @@ def keep_messages_tool(kept: list[str]):
         session.trace.event(session.name, "keep_results", texts=link_texts, urls=urls, kept=len(good))
         if not urls:
             texts = sorted({text for _, text, _ in LINK.findall(session.view)})[:40]
-            return f"No link seen with exactly these texts: {link_texts}. Link texts in the latest view: {texts}"
+            return (f"No link seen with exactly these texts: {link_texts}. Link texts in the latest view: {texts}. "
+                    "If the results are not links at all (rows that open a message when clicked, or a reading "
+                    "pane), open each such message yourself and call keep_open_message() while its text shows.")
         return f"Kept {len(good)} of {len(urls)} result page(s):\n{_heads(good)}"
 
     return keep_results
+
+
+def keep_open_tool(kept: list[str]):
+    """A tool for mailboxes whose results are not links: keeps the message the worker opened itself."""
+
+    async def keep_open_message(ctx: RunContext[Deps]) -> str:
+        """Keep the message that is open on the page now (its text shows in your latest view) for reading. Only
+        for results keep_results cannot open because they are not links: open such a message yourself first."""
+        session: SiteSession = ctx.deps.session
+        view = await session.look()
+        if view in kept:
+            return "This page is already kept."
+        kept.append(view)
+        session.trace.event(session.name, "keep_open_message", chars=len(view), kept=len(kept))
+        return f"Kept the open page for reading ({len(kept)} kept so far). Go on with the next message or folder."
+
+    return keep_open_message
 
 
 class _Reading(list):
@@ -491,7 +511,7 @@ async def _search(session: SiteSession, kind: Kind, reference: str, kept: _Readi
     """
     worker = asyncio.create_task(run_worker(
         session, _goal(kind, reference, again), Summary, deadline=until, max_steps=20, thinking=True,
-        grounded=False, tools=(paging_tool(Collected()), keep_messages_tool(kept))))
+        grounded=False, tools=(paging_tool(Collected()), keep_messages_tool(kept), keep_open_tool(kept))))
     stalled, ended = False, False
     progress, moved = (session.stamp, len(kept)), time.monotonic()
     try:

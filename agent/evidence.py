@@ -82,8 +82,8 @@ _SET_WORDS = ("satz", "sätze", "saetze", "set", "kit", "pack")
 def parse_pieces_per_set(text: str) -> int:
     """
     Pieces in one set, from a model's copy of the spec wording: "5", "5 Stück", or a definition such as
-    "1 Satz = 5 Stück" / "2 sets = 10 pcs" (the first number there is the sets, not the pieces: a live run read 1
-    and bid 26 pieces instead of 130). An equation gives right / left; otherwise a number next to a set word is the
+    "1 Satz = 5 Stück" / "2 sets = 10 pcs" (the first number there is the sets, not the pieces: reading it as the
+    pieces bids a fraction of the quantity). An equation gives right / left; otherwise a number next to a set word is the
     set count and the other one the pieces. Raises ParseError when the text does not say it unambiguously.
     """
     body = _TAG.sub("", str(text or ""))

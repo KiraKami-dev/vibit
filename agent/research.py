@@ -114,10 +114,18 @@ async def _grounded_read(output_type: type[T], instructions: str, prompt: str, s
             trace.event(name, "read", what=what, seconds=round(time.monotonic() - started, 1), refusals=refusals)
 
 
+_LABEL_TOKEN = re.compile(r"\w+(?:[-./]\w+)*")
+
+
 def same_revision(a: str, b: str) -> bool:
-    """Revision labels as reported may carry a word around the id ("Revision R-2" vs "R-2")."""
-    a, b = " ".join(a.split()).casefold(), " ".join(b.split()).casefold()
-    return bool(a and b) and (a == b or a in b or b in a)
+    """
+    Whether two revision labels name the same revision. A label may carry words around the identifier (a label
+    word, a date, a status), so one label's tokens must all be among the other's; whole tokens, never substrings:
+    a one-letter revision is not "in" every word that has that letter, and an identifier is not the start of a
+    longer one.
+    """
+    ta, tb = (set(_LABEL_TOKEN.findall(str(x or "").casefold())) for x in (a, b))
+    return bool(ta and tb) and (ta <= tb or tb <= ta)
 
 
 def _worker_kwargs(**kwargs) -> dict:
@@ -279,7 +287,7 @@ async def read_document(ctx: RunContext[Deps], next_ref: str = "") -> str:
                 break
             await session.act("click", refs[min(nth, len(refs) - 1)], _click)
             text = _strip_refs(session.view)
-            if text in seen:  # a slow site may still be loading the next page (a local run lost pages 3 to 5)
+            if text in seen:  # a slow site may still be loading the next page
                 await asyncio.sleep(PAGE_WAIT)
                 await session.settle()
                 await session.look()

@@ -28,6 +28,7 @@ WALK_JS = r"""
                          'slider', 'textbox', 'searchbox']);
   const SELECT_CHARS = 600, SELECT_HEAD = 8, SELECT_TAIL = 2;  // longer option lists are shortened
   let n = start;
+  let pictures = 0;
   const out = [];
   const crossOrigin = [];
   const emit = s => out.push(s);
@@ -139,6 +140,15 @@ WALK_JS = r"""
       if (tag === 'CANVAS' || tag === 'IMG' || tag === 'svg' || tag === 'SVG' || role === 'img') {
         const label = clean(el.getAttribute('aria-label') || el.getAttribute('alt') || el.getAttribute('title'));
         if (label) emit(` [img: ${label}] `);
+        else if (pictures < 6) {
+          // no text label: if it is large enough to carry text, mark it so its text can be read from the pixels
+          const box = el.getBoundingClientRect();
+          if (box.width >= 60 && box.height >= 14) {
+            const id = `${stamp}-${start}-${pictures++}`;
+            el.setAttribute('data-ar-img', id);
+            emit(` [img #${id}] `);
+          }
+        }
         continue;
       }
       if (tag === 'IFRAME' || tag === 'FRAME') {
@@ -206,12 +216,44 @@ async def observe(page: Page, stamp: str = "1") -> str:
                 continue
             next_id = sub["next"]
             parts.append(f"[frame {frame.url}]\n{sub['text']}\n[/frame]")
-    return "\n".join(parts)
+    return await inline_images(page, "\n".join(parts))
+
+
+# Set by vision.py: async (png bytes) -> the text the picture shows ('' for none). None: pictures are not read.
+IMAGE_READER = None
+IMAGE_MARK = re.compile(r" ?\[img #([\w-]+)\] ?")
+IMAGE_SECONDS = 40.0  # for all pictures of one view together; what was read by then stands
+
+
+async def inline_images(page: Page, text: str) -> str:
+    """Replace the marks of unlabelled pictures by `[img: <their text>]`; a picture without text leaves nothing."""
+    ids = list(dict.fromkeys(IMAGE_MARK.findall(text)))
+    if not ids:
+        return text
+    found: dict[str, str] = {}
+
+    async def read(mark: str) -> None:
+        try:
+            element = await _first(page, f'[data-ar-img="{mark}"]')
+            if element is not None:
+                found[mark] = await IMAGE_READER(await element.screenshot(timeout=4000))
+        except Exception:  # a picture that cannot be read is left out, as before
+            pass
+
+    if IMAGE_READER is not None:
+        try:
+            await asyncio.wait_for(asyncio.gather(*(read(mark) for mark in ids)), IMAGE_SECONDS)
+        except Exception:
+            pass
+    return IMAGE_MARK.sub(lambda m: f" [img: {found[m.group(1)]}] " if found.get(m.group(1)) else " ", text)
 
 
 async def locate(page: Page, ref: str) -> Locator | None:
     """The element a ref from the latest `observe` points at, in whichever frame it lives."""
-    selector = f'[data-ar="{ref.strip()}"]'
+    return await _first(page, f'[data-ar="{ref.strip()}"]')
+
+
+async def _first(page: Page, selector: str) -> Locator | None:
     frames: list[Frame] = [page.main_frame, *page.frames[1:]]
     for frame in frames:
         try:

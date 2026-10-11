@@ -62,6 +62,29 @@ after the positions took up to seven single steps.
 `AGENT_POSITION_BATCH=0` restores one position per call. The model still gives the mapping, names the buttons,
 resolves worded choices, omits positions and does every other page.
 
+## After the overfitting review (not yet run in the sandbox)
+
+Three readers went through `agent/` against the 29 rules. No scenario value, site name or pre-solved answer was
+found; the calculation follows the rules. What was fixed:
+
+| File | Change | Why |
+| --- | --- | --- |
+| `briefing.py` | The copy check runs on the values, not their JSON; a reading that still fails is repeated unchecked. | A numbered list copied word for word failed the check every time, and without a briefing no bid is signed. |
+| `submit.py` | A save click that fails is reported to the worker instead of raising. | An error there skipped the signing pass. |
+| `research.py` | `same_revision` compares whole tokens. | By substring, a one-letter revision matched any word with that letter, and an identifier matched a longer one. |
+| `configurator.py` | `type_value`: a number is tried with a decimal comma, then with a decimal point; the check compares numbers as numbers. | A number field refuses a comma, and a field may show what it took in its own way: every position was then left out. |
+| `vision.py`, `extract.py` | A picture without a text label that is large enough to carry text is read by the model (twice, a third reading on a difference) and its text put into the page view as `[img: ...]`. | A number that exists only as pixels was invisible to every worker and reader. `AGENT_READ_IMAGES=0` turns it off. |
+| `orchestrator.py` | `unread_attributes`: a candidate whose bore, stroke, pressure or mounting nobody read leaves the position out instead of making the bid a no bid. | "No material matches" was accepted although a candidate had never been compared. |
+| `research_mail.py` | `keep_open_message()`: where results are not links, the worker opens a message itself and keeps it. | Messages could only be read through a link with its own address. |
+| `submit.py` | `position_values()` and `position_entered()`: after three failed entries of a position the worker may enter it itself. | The mapping assumes labelled controls and one position per page, and the worker had no other way. |
+| comments, `verify.py` | Figures from a public run removed from a comment; the verifier's header says what happens by default. | |
+
+Left as they are, and why: the automatic closing of pop-ups, the page walker that only gives refs to links,
+buttons and inputs, the one-site-per-role state in the orchestrator, the keyword lists for "next page" and "no
+hits", unread stock or mass counted as 0, and the time budgets. Each is a design choice in the mail, form and
+site-tool modules that scores 100 on the public sites; changing one blind risks that, so they need a test bed
+with other layouts first.
+
 ## Environment variables (all optional)
 
 | Variable | Default | What |
@@ -77,6 +100,7 @@ resolves worded choices, omits positions and does every other page.
 | `MAIL_TABS` / `AGENT_FINDINGS_WAIT` | 6 / 0 | Mail tabs; seconds the mail planner waits for the tender's keys |
 | `AGENT_SPEC_READS` | 2 | Readings of each specification page; 1 = a single reading |
 | `AGENT_POSITION_BATCH` | 1 | 0 = `configure_position` enters one position per call |
+| `AGENT_READ_IMAGES` | 1 | 0 = pictures without a text label are not read |
 | `AGENT_STRONG_MODEL` | unset | Model name for the `explore` attempt, e.g. one your provider key allows |
 | `AGENT_STRONG_BASE_URL` / `AGENT_STRONG_API_KEY` | `OPENAI_BASE_URL` / `OPENAI_API_KEY` | Its endpoint and key (team secret) |
 

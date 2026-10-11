@@ -20,8 +20,8 @@ import llm
 from briefing import Briefing
 from browser_tools import Deps, SiteSession
 from calc import position_key
-from configurator import (VALUE_NAMES, FillPlan, clean, complete_positions, fill_position, find_control, german,
-                          mapping_problems, resolve_position, unmapped)
+from configurator import (VALUE_NAMES, FillPlan, clean, complete_positions, fill_position, find_control, form_value,
+                          german, mapping_problems, resolve_position, unmapped)
 from extract import locate
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
@@ -134,7 +134,7 @@ class Mailbox:
             found, _ = await run_worker(
                 self.session, f"A new signing TAN for tender {self.briefing.tender_reference} was just requested."
                 f"{said} Open the newest signing TAN message for exactly this tender reference (the highest "
-                "request number; new TAN messages are listed without a search, newest first; reload the list once "
+                "request number; new TAN messages are usually listed without a search; reload the list once "
                 "if it is not there yet), copy the TAN from its text and return it at once. If a preview pane "
                 f"stays empty, open the message's own page through its link.{older}",
                 SigningTan, context=answer, deadline=self.deadline, max_steps=10, notes=False)
@@ -230,7 +230,31 @@ class PositionDesk:
 
     @property
     def tools(self) -> tuple:
-        return (self.configure_position, self.net_total) if self.entries else ()
+        return ((self.configure_position, self.net_total, self.position_values, self.position_entered)
+                if self.entries else ())
+
+    async def position_values(self, position: str) -> str:
+        """
+        The values of one position of this bid, as the form takes them. Only when configure_position() reported
+        that it cannot enter the position on this form (for example several positions on one page, or controls
+        it cannot address): then enter these values yourself and call position_entered(position).
+        """
+        entry = self.entries.get(position.strip())
+        if entry is None:
+            return (f"No values for position {position!r}: it is not one of this bid's positions "
+                    f"({', '.join(sorted(self.entries, key=position_key))}); leave it out.")
+        values = "; ".join(f"{key} = {form_value(key, value)}" for key, value in entry.items() if key != "position")
+        return (f"Position {position.strip()}: {values}. Numbers are in German notation (decimal comma); use the "
+                "notation the form's fields take. Enter them, save the position, then call position_entered().")
+
+    async def position_entered(self, ctx: RunContext[Deps], position: str) -> str:
+        """Report that you entered and saved a position's values yourself (after position_values())."""
+        position = position.strip()
+        if position not in self.entries:
+            return f"{position!r} is not one of this bid's positions."
+        self.entered.add(position)
+        ctx.deps.session.trace.event(ctx.deps.session.name, "position_entered_by_hand", position=position)
+        return f"Noted. {self.so_far(ctx.deps.session)} Still to enter: {self.remaining()}."
 
     @property
     def known(self) -> set[str]:
@@ -319,8 +343,11 @@ class PositionDesk:
             return refuse("no_fields", f"Position {position} has values to enter. Give fields (control label -> "
                                        f"value name) for the controls of this form, then call again; do not omit it.")
         if self.failures.get(position, 0) >= 3:
-            return refuse("failed", f"Position {position} failed three times: leave it out with the form's option "
-                                    f"to omit a position. {self.so_far(session)}")
+            return refuse("failed", f"Position {position} failed three times. If this form cannot be filled by "
+                                    "mapping its controls, enter the position yourself: position_values("
+                                    f"'{position}') lists its values, position_entered('{position}') reports it "
+                                    "done. Otherwise leave it out with the form's option to omit a position. "
+                                    f"{self.so_far(session)}")
         if time.monotonic() > self.deadline - SIGNING_RESERVE:
             return refuse("time", "Time is short: leave this and every remaining position out and go on to "
                                   "signing. " + self.so_far(session))
@@ -348,9 +375,14 @@ class PositionDesk:
                     if target is None:
                         moved = f" Could not save it: {why}; click the form's next/continue button yourself."
                     else:
-                        await target.click(timeout=5000)
-                        await session.settle()
-                        moved, saved = f" Saved with {self.next_button!r}; the page below is the form's next step.", True
+                        try:  # e.g. a banner over the button: the model clicks it itself, the bid goes on
+                            await target.click(timeout=5000)
+                            await session.settle()
+                            moved, saved = (f" Saved with {self.next_button!r}; the page below is the form's next "
+                                            "step."), True
+                        except Exception as exc:
+                            moved = (f" Could not save it ({type(exc).__name__}: {str(exc).splitlines()[0][:120]}); "
+                                     "click the form's next/continue button yourself.")
                 session.trace.event(session.name, "configure_position", position=position, done=log, error=error,
                                     moved=moved, after=len(saved_now))
                 view = await session.look()
@@ -506,7 +538,8 @@ def _positions(answer: dict | None, desk: PositionDesk, filled: bool, prepared: 
   with the next/continue button you name and goes on by itself with the following positions of this list that
   the form shows; when it returns, the view below its answer is the page that needs you (or it tells you to
   omit a position). Never omit a position of this list unless
-  configure_position() told you to omit that very position. Never pick options or type position values yourself;
+  configure_position() told you to omit that very position. Never pick options or type position values yourself, unless
+  configure_position() tells you to enter a position yourself;
 {mapping}- leave out, with the form's option to omit a position, every other position and any position where
   configure_position() reports a problem it cannot resolve. Never use options that add positions; if the form
   shows an extra position you did not ask for, remove it or leave it out;

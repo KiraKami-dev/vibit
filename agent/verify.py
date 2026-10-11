@@ -3,9 +3,10 @@ The verifier: a model checks the facts on the board against the bid rules before
 
 It sees each fact with its source quote and the brief's rules, and judges the things the rules make traps of:
 the exact tender reference, the latest valid record dated no later than the scenario date, an authorised
-sender, superseded or withdrawn records, future-dated ones. A doubtful fact is marked on the board; the
-orchestrator sends it back to the producing worker once. Before signing, the verifier confirms the bid/no_bid
-decision from the evidence. It never computes anything itself.
+sender, superseded or withdrawn records, future-dated ones. A doubtful fact is marked on the board and in the
+run log. By default nothing waits for the verdicts (the rules above are applied in code when records are
+resolved; AGENT_REWORK=1 sends a doubted record back to its worker once and judges it again). confirm_decision
+checks a bid that still has a position without material. It never computes anything itself.
 """
 import asyncio
 import time
