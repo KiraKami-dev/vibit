@@ -32,8 +32,9 @@ import llm
 from board import Board, Source
 from briefing import Briefing
 from browser_tools import SiteSession
-from evidence import (EffectiveRequirement, Requirement, effective_requirement, merged_attributes, parse_date,
-                      to_position_input, wording_differences)
+from evidence import (EffectiveRequirement, Requirement, effective_requirement, merged_attributes, mismatches,
+                      parse_date, to_position_input, wording_differences)
+from gaps import Calculation, GapFiller
 from research import Erp, ErpResearch, SpecResult, research_spec, reselect, same_revision
 from tracing import Trace
 from verify import VERIFY_SECONDS, confirm_decision, verify_board, wording_check
@@ -62,7 +63,12 @@ MAIL_TAB_STAGGER = 4.0  # seconds between the mail tabs' sign-ins
 MAIL_SECONDS = float(os.environ.get("AGENT_MAIL_SECONDS", "540"))  # from the orchestrator's start
 FINDINGS_WAIT = 45.0  # how long the mail planner waits for the tender's keys before planning from the brief alone
 PLAN_PATIENT_TIMEOUT = 90.0  # per call when the quick mail plan failed: a loaded model answers in up to ~90 s
-REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at least this much research time left
+# doubtful mail facts go back to their search in the gap pass's first round (side by side with the gap retries)
+# instead of in a round of their own before calc, which held the first answer back by up to 2 minutes
+GAP_REWORK = os.environ.get("AGENT_GAP_REWORK", "1") == "1"
+REWORK_SECONDS = 150.0
+TENDER_WATCH_SECONDS = float(os.environ.get("AGENT_TENDER_WATCH_SECONDS", "240"))  # no positions by then: retry
+TENDER_RETRY_SECONDS = 150.0  # research time a second tender attempt needs  # a doubtful fact goes back to its worker only with at least this much research time left
 
 
 async def start_session(session: SiteSession, until: float | None = None) -> SiteSession:
@@ -254,13 +260,18 @@ def safe_calculate(bid: calc.BidInput) -> tuple[calc.BidResult | None, dict[str,
     return None, blank, problems
 
 
-def material_attributes(material) -> dict[str, str]:
-    """The chosen material's attributes as the ERP shows them (the bid form's cascading choices lead to it)."""
+def material_attributes(material, requirement=None) -> dict[str, str]:
+    """
+    The chosen material's attributes as the ERP shows them, completed by the requirement's (its catalogue group
+    and whatever the ERP did not show): the bid form's cascading choices lead through any of them to the material.
+    """
     out = {}
-    for key in ("bore", "stroke", "pressure", "mounting", "certification"):
-        value = getattr(material, key, None)
-        if value not in (None, ""):
-            out[key] = format(value, "f") if isinstance(value, Decimal) else str(value)
+    for key in ("catalog_group", "bore", "stroke", "pressure", "mounting", "certification"):
+        for source in (material, requirement):
+            value = getattr(source, key, None)
+            if value not in (None, ""):
+                out[key] = format(value, "f") if isinstance(value, Decimal) else str(value)
+                break
     return out
 
 
@@ -309,6 +320,7 @@ class Orchestrator:
         self.mail_kinds: list = []
         self.mail_sessions: list[SiteSession] = []
         self.rework: dict[str, object] = {}  # worker -> coroutine function for doubtful facts
+        self.gap_rework = GAP_REWORK  # doubtful mail kinds are retried in the gap pass (gaps.py)
         self.blank_hints: dict[str, set[str]] = {}  # position -> answer fields that stay blank
         self.attributes: dict[str, dict[str, str]] = {}  # position -> chosen material's attributes, for the form
         self.mailbox = ""
@@ -358,11 +370,45 @@ class Orchestrator:
 
     # ------------------------------------------------------------ workers
 
-    async def tender(self, site: str) -> None:
+    async def _tender_watch(self, site: str, first: asyncio.Task) -> None:
+        """
+        The gap check that cannot wait for the end of research: every position, and so the whole answer, waits on
+        the tender's positions. When none are read TENDER_WATCH_SECONDS after the tender research started (a
+        reader call that keeps timing out held them for ten minutes in one sandbox run), a second tender attempt
+        on fresh tabs runs alongside; whichever completes with positions first wins and the other is stopped.
+        """
+        started = time.monotonic()
+
+        def read() -> bool:
+            return first.done() or bool(self.board.get("position")) or bool(getattr(self.tender_facts, "positions", None))
+
+        while not read() and time.monotonic() - started < TENDER_WATCH_SECONDS:
+            await asyncio.sleep(min(2.0, max(0.01, TENDER_WATCH_SECONDS - (time.monotonic() - started))))
+        if read() or self.left() < TENDER_RETRY_SECONDS:
+            return
+        self.trace.event("gaps", "gap", gap="tender/positions", reason="no positions read yet", early=True,
+                         seconds=round(time.monotonic() - started))
+        retry = asyncio.create_task(self.tender(site, "2"), name=f"tender2@{site}")
+        pending = {first, retry}
+        try:
+            while pending:
+                _, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                if getattr(self.tender_facts, "positions", None):
+                    break
+        finally:  # also at the research deadline: the retry is no job of research(), so it ends here
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+        if getattr(self.tender_facts, "positions", None):
+            self.trace.event("gaps", "gap_filled", gap="tender/positions", early=True,
+                             by="retry" if retry.done() and not retry.cancelled() else "first attempt")
+
+    async def tender(self, site: str, attempt: str = "") -> None:
         board = self.board
         try:
-            session, qa_session = await asyncio.gather(self.session(site, "tender"), self.session(site, "qa"),
-                                                       return_exceptions=True)
+            session, qa_session = await asyncio.gather(self.session(site, f"tender{attempt}"),
+                                                       self.session(site, f"qa{attempt}"), return_exceptions=True)
             if isinstance(session, BaseException):
                 if isinstance(qa_session, BaseException):
                     raise session
@@ -574,7 +620,12 @@ class Orchestrator:
                 f"{f} {v}" for f, v in fact.value.items() if f.endswith("_key") or f == "condition_group")
                 for k, fact in positions.items())
             sites = {s["siteId"]: s["url"] for s in self.task["access"]}
-            kinds = await self._plan_mail(sites, findings)
+            try:
+                kinds = await self._plan_mail(sites, findings)
+            except BaseException:
+                for start in starts:  # no plan, no searches: the tabs would only compete for the browser
+                    start.cancel()
+                raise
             self.mail_kinds = [k for k in kinds if k.site == site]
             elsewhere = [f"{k.name} on {k.site}" for k in kinds if k.site != site]
             if elsewhere:  # another mail site would be its own job (the plan names every website it needs)
@@ -696,7 +747,11 @@ class Orchestrator:
             self.board.problem("mails", f"mail deadline: {open_kinds} not read; their fields stay blank")
         if not self.mail_sessions:
             raise ConnectionError("no mail tab could be opened")
-        mailbox = await address[0] if address else await self._mailbox()
+        await self._resolve_mail(await address[0] if address else None)
+
+    async def _resolve_mail(self, mailbox: str | None = None) -> None:
+        """The records read so far, all kinds, resolved into mail facts and posted on the board."""
+        mailbox = mailbox if mailbox is not None else await self._mailbox()
         facts = research_mail.resolve_mail(list(self.mail_results.values()), self.reference,
                                            mailbox.split("@", 1)[1] if "@" in mailbox else "", self.scenario, mailbox)
         if not mailbox:
@@ -736,7 +791,9 @@ class Orchestrator:
                 sites[n.kind].append(n.site)
         jobs = []
         if "tender" in sites and research_tender is not None:
-            jobs += [asyncio.create_task(self.tender(site), name=f"tender@{site}") for site in sites["tender"]]
+            for site in sites["tender"]:
+                first = asyncio.create_task(self.tender(site), name=f"tender@{site}")
+                jobs += [first, asyncio.create_task(self._tender_watch(site, first), name=f"tender-watch@{site}")]
         elif "tender" in sites:
             self.board.problem("plan", "tender research module not available")
         erp_sites = sites.get("materials", [])
@@ -784,6 +841,8 @@ class Orchestrator:
         by_worker: dict[str, list] = {}
         for fact in doubtful:
             by_worker.setdefault(fact.worker, []).append(fact)
+        if GAP_REWORK:  # the doubtful mail kinds are searched again in the gap pass, alongside the other retries
+            return
         for worker, facts in by_worker.items():
             rework = self.rework.get(worker)
             if rework is None or self.left() < REWORK_SECONDS:
@@ -833,6 +892,33 @@ class Orchestrator:
         if fields:
             self.blank_hints.setdefault(p.position, set()).update(fields)
 
+    def _estimate(self, req_id: str, research) -> str | None:
+        """
+        A requirement whose stroke still waits on a per-end reserve (rule 20) at calc time: the best estimate among
+        the inspected active materials that equal it in every other attribute is the one with the smallest stroke
+        that still exceeds the usable travel (nominal = usable + 2 x reserve, so never less). An estimate keeps
+        the position's quantity and other points that an omitted position loses; the gap pass still treats the
+        requirement as open, so the reserve is searched for while time is left.
+        """
+        if research is None or self.erp is None:
+            return None
+        req = self.requirements[req_id]
+        effective = self.effective(req)
+        usable = Decimal(str(calc.apply_amendments({"stroke": req.stroke}, self._amendments(), req.revision,
+                                                   req.requirement_id, self.scenario_stamp)["stroke"]))
+        best: tuple[Decimal, str] | None = None
+        for number in research.inspected:
+            record = self.erp.materials.get(number)
+            if record is None or not record.active:
+                continue
+            attrs = merged_attributes(record, research)
+            stroke = attrs.get("stroke")
+            if mismatches(effective, attrs) or not isinstance(stroke, Decimal) or stroke <= usable:
+                continue
+            if best is None or stroke < best[0]:
+                best = (stroke, number)
+        return best[1] if best else None
+
     def build_bid(self) -> tuple[calc.BidInput, list[str]]:
         self.blank_hints = {}
         self.attributes = {}
@@ -864,7 +950,16 @@ class Orchestrator:
                 # No material only means no_bid (rule 3) when the search for it was complete; a requirement still
                 # pending (e.g. a reserve not found) or a search that hit problems leaves the position out instead.
                 pending = self.effective(self.requirements[req_id]).pending
-                if pending or (research is not None and research.problems):
+                estimate = self._estimate(req_id, research) if pending else None
+                if estimate:
+                    # Only here: no material was chosen (never replaces a choice) and the reserve is still unknown.
+                    # The position was omitted before, not a no_bid, so the decision does not change either.
+                    self.trace.event("calc", "stroke_estimate", position=p.position, requirement=req_id,
+                                     material=estimate, pending="; ".join(pending)[:160])
+                    problems.append(f"position {p.position}: {'; '.join(pending)[:120]}; material {estimate} "
+                                    f"estimated (the closest stroke above the usable travel)")
+                    number = estimate
+                elif pending or (research is not None and research.problems):
                     problems.append(f"position {p.position}: material undecided "
                                     f"({'; '.join(pending or research.problems)[:160]}); position omitted")
                     continue
@@ -873,7 +968,11 @@ class Orchestrator:
                 problems.append(f"position {p.position}: record of {number} not read; position omitted")
                 continue
             if material is not None:
-                self.attributes[p.position] = material_attributes(material)
+                try:  # after amendments and the usable-travel derivation
+                    wanted = self.effective(self.requirements[req_id])
+                except Exception:
+                    wanted = None
+                self.attributes[p.position] = material_attributes(material, wanted)
             clause = by_position.get(p.position)
             self._unknown_clauses(p, clause, getattr(clauses, "setup_pools", None),
                                   getattr(clauses, "project_bonuses", None))
@@ -901,6 +1000,11 @@ class Orchestrator:
                             setup_pools=getattr(clauses, "setup_pools", None) or [],
                             project_bonuses=getattr(clauses, "project_bonuses", None) or [])
         return bid, problems
+
+    def calculate(self) -> Calculation:
+        """_calculate() with the form attributes it set, for the gap pass (run again after each gap round)."""
+        result, blank, problems = self._calculate()
+        return Calculation(result, blank, problems, dict(self.attributes))
 
     def fallback_answer(self) -> dict:
         """
@@ -980,7 +1084,9 @@ class Orchestrator:
         if self.form_left() > 60:
             await self._bounded(self.verify(), "verify")
         await self._bounded(self.select_materials(), "select")
-        result, blank, problems = self._calculate()
+        # The second pass: what the first answer lacks is retried while research time is left (gaps.py).
+        best = await GapFiller(self).run(self.calculate(), self.calculate)
+        result, blank, problems, self.attributes = best.result, best.blank, best.problems, best.attributes
         if result is not None and result.decision == "no_bid" and result.missing_materials and self.form_left() > 45:
             # Before a no_bid is accepted: are the mismatches that leave positions without material only wording?
             try:

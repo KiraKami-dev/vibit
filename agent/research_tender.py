@@ -37,6 +37,8 @@ from worker import run_worker, steps_for
 
 MAX_PAGES = 40
 MAX_RETURN = 30000  # characters of a collected list shown back to the model
+POSITIONS_READ_SECONDS = 240.0  # the thinking positions read in all (it answers in 20 to 90 s when healthy)
+POSITIONS_FALLBACK_SECONDS = 120.0  # the thinking-off read after that
 READER_TIMEOUT = 180.0  # a thinking reader writes long answers; the navigation timeout is too short
 
 # ---------------------------------------------------------------- records
@@ -419,9 +421,10 @@ def reader_settings():
     return llm.settings(thinking=True, timeout=READER_TIMEOUT)
 
 
-async def _read(output_type, instructions: str, text: str, prompt: str):
+async def _read(output_type, instructions: str, text: str, prompt: str, thinking: bool = True):
+    settings = reader_settings() if thinking else llm.settings(thinking=False)
     agent = Agent(reader_model(), output_type=output_type, instructions=instructions,
-                  model_settings=reader_settings(), retries=3)
+                  model_settings=settings, retries=3)
 
     @agent.output_validator
     def _grounded(records):
@@ -434,7 +437,20 @@ async def _read(output_type, instructions: str, text: str, prompt: str):
 
 
 async def read_positions(text: str, reference: str) -> TenderPositions:
-    return await _read(TenderPositions, POSITIONS_INSTRUCTIONS, text, f"Tender {reference}. Documents:")
+    """
+    The positions, thinking on, within POSITIONS_READ_SECONDS in all: in one sandbox run the reader's calls kept
+    timing out and retrying from 137 s to the research deadline, so no position reached the bid. After that
+    bound, one thinking-off read (short answers, fast) within POSITIONS_FALLBACK_SECONDS.
+    """
+    prompt = f"Tender {reference}. Documents:"
+    try:
+        return await asyncio.wait_for(_read(TenderPositions, POSITIONS_INSTRUCTIONS, text, prompt),
+                                      POSITIONS_READ_SECONDS)
+    except asyncio.TimeoutError:
+        print(f"[tender] positions reader still busy after {POSITIONS_READ_SECONDS:g} s; reading once thinking off",
+              flush=True)
+    return await asyncio.wait_for(_read(TenderPositions, POSITIONS_INSTRUCTIONS, text, prompt, thinking=False),
+                                  POSITIONS_FALLBACK_SECONDS)
 
 
 async def read_qa(pages: list[str], reference: str) -> QaRecords:
