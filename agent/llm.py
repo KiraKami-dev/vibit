@@ -30,6 +30,14 @@ proxy too: ANTHROPIC_BASE_URL, which the platform sets to $LLM_PROXY_URL/anthrop
 to the hosted Qwen. Thinking off maps to Anthropic's thinking off (or the closest the model allows), thinking on to
 adaptive thinking at LLM_EFFORT (default medium); see `anthropic_thinking`. The per-mode deadlines, the retries and
 the call log are the same; the stream watchdog is Qwen-only (Claude calls do not hang the way the hosted model does).
+
+LLM_BACKEND=openrouter runs them on an OpenRouter model with the team's own key (LLM_MODEL, default z-ai/glm-5.3-flash;
+OPENROUTER_API_KEY), on the same OpenAI client path as Qwen: deadlines, watchdog and call log included. Calls go to
+OPENROUTER_BASE_URL, else the run's proxy ($LLM_PROXY_URL/openrouter/v1), else (locally) OpenRouter itself.
+LLM_PROVIDER pins the serving provider (default fireworks, no fallbacks; "any" lets OpenRouter choose). Thinking maps
+to OpenRouter's `reasoning`: GLM 5.3 Flash cannot turn reasoning off (400 "Reasoning is mandatory"), so off is
+{"effort": LLM_EFFORT_OFF (low), "exclude": true}, which measured 0 reasoning tokens on short answers; on is
+{"effort": LLM_EFFORT}.
 """
 import asyncio
 import contextvars
@@ -51,6 +59,8 @@ import localenv  # noqa: F401  (local runs only: loads agent/.env on import; the
 
 QWEN_MODEL = "qwen3.8-flash-next"
 ANTHROPIC_MODEL = "claude-haiku-5-5"
+OPENROUTER_MODEL = "z-ai/glm-5.3-flash"
+OPENROUTER_PROVIDER = "fireworks"
 USER_AGENT = "error404ai-rfq-agent"
 DEFAULT_TIMEOUT = 45.0  # thinking off: steps answer in seconds, so a hang shows early
 DEFAULT_TIMEOUT_THINKING = 90.0  # thinking on: a call reading a whole page may take 25 to 45 s
@@ -199,7 +209,7 @@ class _WatchdogModel(OpenAIChatModel):
         if not watchdog():
             return await super().request(messages, model_settings, model_request_parameters)
         settings = ModelSettings(**(model_settings or {}))
-        thinking = bool(((settings.get("extra_body") or {}).get("chat_template_kwargs") or {}).get("enable_thinking"))
+        thinking = settings_thinking(settings)
         silence = float(settings.get("timeout") or timeout_seconds(thinking))  # type: ignore[arg-type]
         cap = env_seconds("LLM_MAX_CALL", DEFAULT_MAX_CALL)
         settings["timeout"] = cap  # the HTTP layer only guards the cap; progress is judged here
@@ -289,7 +299,11 @@ def _thinking(request: httpx2.Request) -> str:
     content = request.content or b""
     markers = (b'"enable_thinking": true', b'"enable_thinking":true',  # Qwen
                b'"type": "adaptive"', b'"type":"adaptive"')  # Anthropic
-    return "on" if any(marker in content for marker in markers) else "off"
+    if any(marker in content for marker in markers):
+        return "on"
+    openrouter = b'"reasoning": {"effort"' in content or b'"reasoning":{"effort"' in content
+    excluded = b'"exclude": true' in content or b'"exclude":true' in content
+    return "on" if openrouter and not excluded else "off"
 
 
 async def _sent(request: httpx2.Request) -> None:
@@ -382,15 +396,20 @@ def _warn_once(key: str, text: str) -> None:
         print(text, flush=True)
 
 
+_KEYS = {"anthropic": "ANTHROPIC_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
+_ALIASES = {"claude": "anthropic"}
+
+
 def backend() -> str:
-    """Which model backend the run uses: "qwen" (the hosted model, the default) or "anthropic" (LLM_BACKEND=anthropic,
-    with the team's own key). Anthropic without ANTHROPIC_API_KEY falls back to Qwen, so a missing secret costs speed,
-    not the run."""
+    """Which model backend the run uses: "qwen" (the hosted model, the default), "anthropic" or "openrouter"
+    (LLM_BACKEND, with the team's own key). Without its key a backend falls back to Qwen, so a missing secret costs
+    speed, not the run."""
     value = os.environ.get("LLM_BACKEND", "").strip().lower()
-    if value in ("anthropic", "claude"):
-        if os.environ.get("ANTHROPIC_API_KEY", "").strip():
-            return "anthropic"
-        _warn_once("no-key", "[model] LLM_BACKEND=anthropic but ANTHROPIC_API_KEY is not set: using the hosted Qwen")
+    value = _ALIASES.get(value, value)
+    if value in _KEYS:
+        if os.environ.get(_KEYS[value], "").strip():
+            return value
+        _warn_once("no-key", f"[model] LLM_BACKEND={value} but {_KEYS[value]} is not set: using the hosted Qwen")
     elif value not in ("", "qwen", "hosted"):
         _warn_once("unknown", f"[model] unknown LLM_BACKEND {value!r}: using the hosted Qwen")
     return "qwen"
@@ -401,7 +420,44 @@ def model_name() -> str:
     chosen = os.environ.get("LLM_MODEL", "").strip()
     if backend() == "anthropic":
         return chosen or ANTHROPIC_MODEL
+    if backend() == "openrouter":
+        return chosen or OPENROUTER_MODEL
     return chosen or os.environ.get("AGENT_MODEL", "").strip() or QWEN_MODEL
+
+
+def openrouter_base_url() -> str:
+    """Where OpenRouter calls go: OPENROUTER_BASE_URL, else the run's proxy (the platform sets no OpenRouter variable,
+    so it is built from LLM_PROXY_URL), else (only on a developer's machine) OpenRouter itself."""
+    explicit = os.environ.get("OPENROUTER_BASE_URL", "").strip()
+    if explicit:
+        return explicit
+    proxy = os.environ.get("LLM_PROXY_URL", "").strip()
+    return proxy.rstrip("/") + "/openrouter/v1" if proxy else "https://openrouter.ai/api/v1"
+
+
+def openrouter_provider() -> dict | None:
+    """OpenRouter's provider routing: LLM_PROVIDER (default fireworks; comma-separated for an order) without
+    fallbacks to other providers; "any" leaves the choice to OpenRouter."""
+    value = os.environ.get("LLM_PROVIDER", "").strip()
+    if value.lower() == "any":
+        return None
+    order = [name.strip() for name in (value or OPENROUTER_PROVIDER).split(",") if name.strip()]
+    return {"order": order, "allow_fallbacks": False}
+
+
+def openrouter_reasoning(thinking: bool) -> dict:
+    """Our thinking on/off as OpenRouter's `reasoning` object. Off keeps the lowest effort the model accepts and
+    leaves the reasoning text out of the answer (reasoning cannot be disabled on GLM 5.3 Flash)."""
+    return {"effort": effort(True)} if thinking else {"effort": effort(False), "exclude": True}
+
+
+def settings_thinking(settings) -> bool:
+    """Whether model settings ask for thinking, in the Qwen or the OpenRouter shape."""
+    body = (settings or {}).get("extra_body") or {}
+    if "reasoning" in body:
+        reasoning = body["reasoning"]
+        return reasoning.get("enabled", True) is not False and not reasoning.get("exclude")
+    return bool((body.get("chat_template_kwargs") or {}).get("enable_thinking"))
 
 
 def anthropic_base_url() -> str | None:
@@ -421,8 +477,12 @@ def model() -> Model:
     http_client = _DeadlineClient(event_hooks={"request": [_sent], "response": [_answered]})
     if backend() == "anthropic":
         return _anthropic_model(http_client)
-    client = AsyncOpenAI(base_url=os.environ["QWEN_BASE_URL"], api_key=os.environ["QWEN_API_KEY"],
-                         timeout=timeout_seconds(thinking=False), max_retries=retries(), http_client=http_client)
+    if backend() == "openrouter":
+        base_url, key, headers = openrouter_base_url(), os.environ["OPENROUTER_API_KEY"], {"User-Agent": USER_AGENT}
+    else:
+        base_url, key, headers = os.environ["QWEN_BASE_URL"], os.environ["QWEN_API_KEY"], None
+    client = AsyncOpenAI(base_url=base_url, api_key=key, timeout=timeout_seconds(thinking=False),
+                         max_retries=retries(), default_headers=headers, http_client=http_client)
     return _WatchdogModel(model_name(), provider=OpenAIProvider(openai_client=client))
 
 
@@ -562,6 +622,11 @@ def settings(thinking: bool = False, *, timeout: float | None = None) -> ModelSe
     seconds = timeout if timeout is not None else timeout_seconds(thinking)
     if backend() == "anthropic":
         return anthropic_settings(model_name(), thinking, seconds)
+    if backend() == "openrouter":
+        body: dict = {"reasoning": openrouter_reasoning(thinking), "usage": {"include": True}}
+        if (provider := openrouter_provider()) is not None:
+            body["provider"] = provider
+        return ModelSettings(temperature=0.2, parallel_tool_calls=False, timeout=seconds, extra_body=body)
     return ModelSettings(
         temperature=0.2,
         parallel_tool_calls=False,  # one tab per worker: actions must run in order
