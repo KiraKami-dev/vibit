@@ -3,7 +3,7 @@
   "checkpoint_id": "01M4MEP2R01KFGXMPYXT8SCVFV",
   "strategy": "manual-commit",
   "branch": "codex/mail-token-trim",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": null,
   "sessions": [
     {
@@ -12,13 +12,27 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 20458,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 3860352,
-    "output_tokens": 10235,
-    "api_call_count": 22
+    "input_tokens": 20462,
+    "cache_creation_tokens": 401,
+    "cache_read_tokens": 4186142,
+    "output_tokens": 10276,
+    "api_call_count": 23,
+    "subagent_tokens": {
+      "input_tokens": 56,
+      "cache_creation_tokens": 39563,
+      "cache_read_tokens": 8655427,
+      "output_tokens": 20281,
+      "api_call_count": 28
+    }
   }
 }
