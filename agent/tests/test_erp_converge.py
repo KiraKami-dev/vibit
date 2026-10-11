@@ -254,6 +254,41 @@ class RequirementPhasesTest(unittest.TestCase):
         self.assertFalse(self.run_requirement(report, searches * 2).no_hits)
 
 
+class CompactViewsTest(unittest.TestCase):
+    """The reader's corpus: gates and duplicate views out, page frame and navigation once, every value kept."""
+
+    BANNER = "## M-1 · Cylinder 50/100; group G-1"
+    VIEWS = {
+        "http://erp.example/rec?m=M-1": f"Top\n{BANNER}\n[link \"Tab A\" -> /rec?tab=a]\nBasic 1\nFoot",
+        "http://erp.example/rec?m=M-1&tab=a": f"Top\n{BANNER}\n[link \"Tab A\" -> /rec?tab=a]\nBasic 1\nFoot",
+        "http://erp.example/login?returnTo=x": "Top\nSign in\nReceipt 12345\nFoot",
+        "http://erp.example/stock?m=M-1": f"Top\n{BANNER}\n[link \"Tab A\" -> /rec?tab=a]\nFree 14\nFoot",
+        "http://erp.example/prices?m=M-1&p=1": f"Top\n{BANNER}\nRecord 1\nCurrency EUR\nPrice 9.50\nFoot",
+        "http://erp.example/prices?m=M-1&p=2": f"Top\n{BANNER}\nRecord 2\nCurrency EUR\nPrice 8.75\nFoot",
+    }
+
+    def test_values_stay_and_repeats_go(self):
+        corpus = research._corpus(self.VIEWS, {"/login"}, "/")
+        for value in ("Basic 1", "Free 14", "Price 9.50", "Price 8.75"):
+            self.assertIn(value, corpus)
+        self.assertNotIn("Receipt 12345", corpus)
+        self.assertEqual(corpus.count(self.BANNER), 1)
+        self.assertEqual(corpus.count('[link "Tab A"'), 1)
+        self.assertNotIn("tab=a\n", corpus.split("===")[-1])
+        self.assertEqual(corpus.count("Basic 1"), 1)  # the same tab under two addresses: once
+
+    def test_lines_of_one_page_are_never_taken_from_its_records(self):
+        views = {k: v for k, v in self.VIEWS.items() if "/prices" in k}
+        self.assertEqual(research._corpus(views).count("Currency EUR"), 2)
+
+    def test_off_switch_keeps_every_view(self):
+        research.COMPACT_VIEWS = False
+        try:
+            self.assertIn("Receipt 12345", research._corpus(self.VIEWS, {"/login"}, "/"))
+        finally:
+            research.COMPACT_VIEWS = True
+
+
 class OpenPagesTest(unittest.TestCase):
     """open_pages on a local site: a record with two tabs, one of which links to a sub-view."""
 

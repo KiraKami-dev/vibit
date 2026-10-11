@@ -230,6 +230,7 @@ async def open_pages(ctx: RunContext[Deps], paths: list[str]) -> str:
 
     head, tail = _common_edges([t for t in texts if was_opened(t)])
     out, more = [], {}
+    shown: list[str] = []  # the opened views as shown, for _drop_repeated_nav
     for i, (name, text) in enumerate(zip(names, texts)):
         if was_opened(text):
             lines = text.splitlines()
@@ -241,7 +242,15 @@ async def open_pages(ctx: RunContext[Deps], paths: list[str]) -> str:
         if i and was_opened(text) and (head or tail):
             lines = text.splitlines()
             text = "\n".join(lines[head:len(lines) - tail]) + "\n[page frame as in the first page]"
+        if COMPACT_VIEWS and was_opened(text):  # tab bars and menus once per call; their links stay listed
+            text = _drop_repeated_nav([*shown, text])[-1]
+            shown.append(text)
         out.append(f"=== {name}\n{text}")
+    if COMPACT_VIEWS:  # the record's banner and system lines once per call, when the views are different pages
+        at = [i for i, text in enumerate(texts) if was_opened(text)]
+        compact = _drop_common_lines([out[i] for i in at], [urlparse(names[i]).path for i in at])
+        for i, text in zip(at, compact):
+            out[i] = text
     # links seen on any view this tool opened and not opened since, over all calls of this worker
     pending: dict[str, str] = session.__dict__.setdefault("pending_links", {})
     for link in more:
@@ -766,17 +775,67 @@ def _keep_views(session: SiteSession, views: dict[str, str] | None = None) -> di
     return views
 
 
-def _corpus(views: dict[str, str]) -> str:
-    """The kept views as one text, site chrome shown once."""
-    texts = list(views.values())
+# The ERP reader and detail workers get compact views (ERP_COMPACT_VIEWS=0: as before): gate pages and repeated
+# navigation lines left out. Local check: the reader's text shrank by about a third with every value kept.
+COMPACT_VIEWS = os.environ.get("ERP_COMPACT_VIEWS", "1") == "1"
+# A line made only of links and buttons (a tab bar, a transaction menu) or separators: page navigation, no values.
+_NAV_LINE = re.compile(r'^(?:\s*(?:\[(?:link|button) "[^"\]]*"(?: -> \S+)?\]|[-|·•]))+\s*$')
+
+
+def _drop_repeated_nav(texts: list[str]) -> list[str]:
+    """The texts with every navigation line that an earlier text already showed left out (tab bars and menus repeat
+    on every view of a record); lines with any value stay wherever they are."""
+    seen: set[str] = set()
+    out = []
+    for text in texts:
+        lines = []
+        for line in text.splitlines():
+            if _NAV_LINE.match(line):
+                if line in seen:
+                    continue
+                seen.add(line)
+            lines.append(line)
+        out.append("\n".join(lines))
+    return out
+
+
+def _drop_common_lines(texts: list[str], paths: list[str]) -> list[str]:
+    """
+    Lines that every text shows (the record's banner, the system line under it) kept in the first text only, when
+    the texts come from at least two different pages (paths): such a line is the page frame of the record, not a
+    value of one view. Texts from one page only (several condition records of one transaction) stay whole, so a
+    record's own lines are never taken away from it.
+    """
+    if len(texts) < 2 or len(set(paths)) < 2:
+        return texts
+    common = set.intersection(*(set(t.splitlines()) for t in texts)) - {""}
+    if not common:
+        return texts
+    return [texts[0]] + ["\n".join(line for line in t.splitlines() if line not in common) for t in texts[1:]]
+
+
+def _corpus(views: dict[str, str], gates: set[str] | frozenset[str] = frozenset(), home: str = "") -> str:
+    """The kept views as one text for the reader: site chrome and repeated navigation shown once, without the views
+    of sign-in and entry gates (paths in `gates`) or the bare start page (`home`, without a query), and without a
+    view whose text repeats an earlier one (a record's first tab opened under two addresses)."""
+    def skipped(url: str) -> bool:
+        parsed = urlparse(url)
+        return parsed.path in gates or (bool(home) and parsed.path == home and not parsed.query)
+    kept = ({url: text for url, text in views.items() if not skipped(url)} or views) if COMPACT_VIEWS else views
+    texts = list(kept.values())
     head, tail = _common_edges(texts)
-    parts = []
-    for i, (url, text) in enumerate(views.items()):
+    bodies, urls, seen = [], [], set()
+    for i, (url, text) in enumerate(kept.items()):
         lines = text.splitlines()
-        if i and (head or tail):
-            lines = lines[head:len(lines) - tail]
-        parts.append(f"=== {url}\n" + "\n".join(lines))
-    return "\n\n".join(parts)
+        inner = "\n".join(lines[head:len(lines) - tail])  # without the site chrome, to spot a repeated view
+        if COMPACT_VIEWS and inner in seen:
+            continue
+        seen.add(inner)
+        bodies.append("\n".join(lines[head:len(lines) - tail] if i and (head or tail) else lines))
+        urls.append(url)
+    if COMPACT_VIEWS:
+        bodies = _drop_common_lines(_drop_repeated_nav(bodies), [urlparse(u).path for u in urls])
+    return "\n\n".join(f"=== {url}\n{body}" for url, body in zip(urls, bodies))
 
 
 async def _read_material(number: str, corpus: str, trace: Trace, name: str) -> MaterialSeen:
@@ -1315,7 +1374,7 @@ class Erp:
                     coverage = result[0] if result else None
                 finally:
                     await self._close(session)
-            corpus = _corpus(views)
+            corpus = _corpus(views, self.gate_paths, self.home)
             self.trace.event(name, "material_read", views=len(views), chars=len(corpus),
                              not_found=coverage.not_found if coverage else "worker stopped")
             try:
