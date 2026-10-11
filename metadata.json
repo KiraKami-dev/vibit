@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M4M8KRYRADNDG8TP2CHEDW7V",
+  "strategy": "manual-commit",
+  "branch": "monitoring",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CLAUDE.md",
+    "monitor/api/_lib.js",
+    "monitor/api/_lib.test.js",
+    "monitor/api/runs.js",
+    "monitor/dev-server.js",
+    "monitor/index.html",
+    "monitor/vercel.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 76,
+    "cache_creation_tokens": 214457,
+    "cache_read_tokens": 4382685,
+    "output_tokens": 37957,
+    "api_call_count": 39
+  }
+}

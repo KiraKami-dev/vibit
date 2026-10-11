@@ -1,0 +1,5 @@
+can you make another dashboard for monitoring only our test runs and what are our quality, cost and time and other factors which is live and help us compare test runs which are happening and is it performing better and better or just going worse
+
+---
+
+use the atira mcp and make the plan
