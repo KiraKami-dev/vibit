@@ -337,5 +337,51 @@ class ListForTheReaderOnly(unittest.TestCase):
         self.assertNotIn("Answer 1", answer)
 
 
+class KeysThatMustResolve(unittest.TestCase):
+    def orch(self, commitments: dict, kept=("view of the message",)):
+        o = object.__new__(orchestrator.Orchestrator)
+        o.trace = Trace(tempfile.mkdtemp())
+        o.reference, o.scenario, o.mailbox = "T-1", None, "bidder@firm.test"
+        o.tender_facts = SimpleNamespace(positions=[
+            SimpleNamespace(position="01.01", commitment_key="TZ-1", packaging_key="VP-9", condition_group=None,
+                            setup_pool_key=None, bonus_key=None),
+            SimpleNamespace(position="01.02", commitment_key="TZ-02", packaging_key="VP-9", condition_group=None,
+                            setup_pool_key=None, bonus_key=None)])
+        o.requirements = {"A-1": SimpleNamespace(reserve_key="")}
+        o.erp = None
+        o.mail_facts = SimpleNamespace(commitments=dict(commitments), packaging={"vp-9": 1})
+        kind = SimpleNamespace(name="commitments")
+        o.mail_kinds = [kind]
+        o.mail_results = {"commitments": SimpleNamespace(kind=kind, kept=list(kept), records=[])}
+        o.mail_sessions = []
+        o.research_deadline = time.monotonic() + 600
+        return o
+
+    def test_a_key_that_is_referred_to_and_not_resolved_is_named(self):
+        o = self.orch({"TZ-1": 1})
+        self.assertEqual(o.unresolved_references(), {"commitments": {"TZ-02"}})  # packaging resolved, any case
+        self.assertEqual(self.orch({"TZ-1": 1, "tz-2": 2}).unresolved_references(), {})  # leading zeros aside
+
+    def test_the_kept_messages_are_read_again_only_then(self):
+        calls = []
+
+        async def read_message(view, kind, reference):
+            calls.append(view)
+            return "record read the second time"
+
+        def resolve_mail(results, reference, domain, scenario, mailbox):
+            read = any(r.records for r in results)
+            return SimpleNamespace(commitments={"TZ-1": 1, "TZ-02": 2} if read else {"TZ-1": 1}, packaging={"VP-9": 1})
+
+        for commitments, expected in (({"TZ-1": 1}, 1), ({"TZ-1": 1, "TZ-02": 2}, 0)):
+            calls.clear()
+            o = self.orch(commitments)
+            with patch.object(orchestrator.research_mail, "read_message", read_message), \
+                    patch.object(orchestrator.research_mail, "resolve_mail", resolve_mail):
+                asyncio.run(o.resolve_references())
+            self.assertEqual(len(calls), expected)
+            self.assertEqual(o.unresolved_references(), {})
+
+
 if __name__ == "__main__":
     unittest.main()

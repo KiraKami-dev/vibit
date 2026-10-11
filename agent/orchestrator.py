@@ -981,6 +981,84 @@ class Orchestrator:
             blank.setdefault(position, set()).update(fields)
         return result, blank, problems + calc_problems
 
+    # Which mail record kind resolves which key that another source refers to: (kind, table of the mail facts).
+    REFERENCED = {"condition_group": ("condition_rules", "discount_scopes"),
+                  "packaging_key": ("packaging", "packaging"),
+                  "commitment_key": ("commitments", "commitments"),
+                  "setup_pool_key": ("setup_pools", "setup_pools"),
+                  "bonus_key": ("project_bonus", "project_bonuses")}
+
+    def unresolved_references(self) -> dict[str, set[str]]:
+        """
+        Mail record kind -> the keys other sources refer to that no record of that kind resolved: the keys the
+        tender's Q&A assigns to positions, the reserve keys of the specification, and the index and exchange-rate
+        keys of the materials read. A key that is referred to must resolve; one that does not means a message was
+        not found or not read, and that is known here without any model's opinion.
+        """
+        facts = self.mail_facts
+        if facts is None:
+            return {}
+        wanted: dict[tuple[str, str], set[str]] = {}
+        for p in getattr(self.tender_facts, "positions", None) or []:
+            for field, target in self.REFERENCED.items():
+                if getattr(p, field, None):
+                    wanted.setdefault(target, set()).add(str(getattr(p, field)))
+        for req in self.requirements.values():
+            if getattr(req, "reserve_key", None):
+                wanted.setdefault(("end_reserves", "end_reserves"), set()).add(str(req.reserve_key))
+        for record in (self.erp.materials.values() if self.erp else []):
+            if getattr(record, "metal_index", None):
+                wanted.setdefault(("metal_indices", "metal_indices"), set()).add(str(record.metal_index))
+            for condition in getattr(record, "conditions", None) or []:
+                if getattr(condition, "fx_key", None):
+                    wanted.setdefault(("fx", "fx_rates"), set()).add(str(condition.fx_key))
+        out: dict[str, set[str]] = {}
+        for (kind, table), keys in wanted.items():
+            have = {calc.norm_code(k) for k in (getattr(facts, table, None) or {})}
+            missing = {k for k in keys if calc.norm_code(k) not in have}
+            if missing:
+                out[kind] = missing
+        return out
+
+    def _resolve_mail_again(self) -> None:
+        domain = self.mailbox.split("@", 1)[1] if "@" in self.mailbox else ""
+        self.mail_facts = research_mail.resolve_mail(list(self.mail_results.values()), self.reference, domain,
+                                                     self.scenario, self.mailbox)
+
+    async def resolve_references(self) -> None:
+        """
+        Keys that are referred to but did not resolve: first the messages kept for that kind are read once more
+        (a reading can miss the record or its entries), then, if keys are still open and time allows, that kind
+        alone is searched again. Nothing happens, and nothing is spent, when every key resolved.
+        """
+        if research_mail is None or self.mail_facts is None:
+            return
+        open_keys = self.unresolved_references()
+        if not open_keys:
+            return
+        self.trace.event("mails", "unresolved_keys", **{kind: sorted(keys) for kind, keys in open_keys.items()})
+
+        async def read_again(result) -> None:
+            records = await asyncio.gather(*(research_mail.read_message(view, result.kind, self.reference)
+                                             for view in dict.fromkeys(result.kept)), return_exceptions=True)
+            result.records = [*result.records, *(r for r in records if r is not None
+                                                 and not isinstance(r, BaseException))]
+
+        again = [self.mail_results[kind] for kind in open_keys
+                 if kind in self.mail_results and self.mail_results[kind].kept]
+        if again:
+            await asyncio.gather(*(read_again(result) for result in again))
+            self._resolve_mail_again()
+            open_keys = self.unresolved_references()
+            self.trace.event("mails", "read_again", kinds=[r.kind.name for r in again],
+                             still_open={kind: sorted(keys) for kind, keys in open_keys.items()})
+        kinds = [k for k in self.mail_kinds if k.name in open_keys]
+        if kinds and self.mail_sessions and self.left() > MAIL_RETRY_SECONDS:
+            self.trace.event("mails", "search_again", kinds=[k.name for k in kinds])
+            await self._research_mail(kinds, min(self.research_deadline, time.monotonic() + REWORK_SECONDS))
+            self.trace.event("mails", "after_search_again",
+                             still_open={kind: sorted(keys) for kind, keys in self.unresolved_references().items()})
+
     async def second_reading(self, missing: list[str]) -> dict[str, str]:
         """
         Before a no bid is accepted: every candidate of the positions without material is read a second time from
@@ -1081,6 +1159,7 @@ class Orchestrator:
                 self.verifying = asyncio.create_task(self._bounded(self.verify(), "verify"))
         elif self.form_left() > 60:
             await self._bounded(self.verify(), "verify")
+        await self._bounded(self.resolve_references(), "references")
         await self._bounded(self.select_materials(), "select")
         result, blank, problems = self._calculate()
         if result is not None and result.decision == "no_bid" and result.missing_materials and self.form_left() > 45:
