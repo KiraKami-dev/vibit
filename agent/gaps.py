@@ -113,6 +113,8 @@ def detect_gaps(o, calc_problems: list[str] = (), doubts: bool = False) -> list[
                 pending = o.effective(o.requirements[rid]).pending
                 if pending:
                     add("mail", "end_reserves", f"stroke reserve pending: {'; '.join(pending)}", p.position)
+                elif getattr(research, "no_hits", False) and not research.inspected:
+                    pass  # the site reported the catalogue group empty: searched without a match (rule 3)
                 elif research is None or not research.inspected:
                     add("erp", rid, "ERP not researched" + (f": {research.problems[0]}" if research and
                                                             research.problems else ""), p.position)

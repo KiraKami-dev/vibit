@@ -103,6 +103,14 @@ class DetectGaps(unittest.TestCase):
             "requirement/A-1": ("1",), "erp/A-2": ("2",), "erp/A-3": ("3",), "mail/end_reserves": ("4",),
             "material/M-6": ("6",)})
 
+    def test_an_empty_catalogue_group_is_no_gap(self):
+        research = RequirementResearch(requirement_id="A-1")
+        if "no_hits" not in RequirementResearch.model_fields:
+            self.skipTest("no no_hits field")
+        research.no_hits = True
+        o = state([position("1", "A-1")], [requirement("A-1")], [research])
+        self.assertEqual(detect_gaps(o), [])
+
     def test_unresolved_keys_and_calc_problems_name_their_mail_kind(self):
         o = state([position("1", "A-1", packaging_key="P-1", condition_group="K-1"),
                    position("2", "A-1", packaging_key="P-1", bonus_key="B-1")],
