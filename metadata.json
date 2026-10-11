@@ -3,7 +3,7 @@
   "checkpoint_id": "01M4MMMFDMA586FVJ8CH1X2BHM",
   "strategy": "manual-commit",
   "branch": "worktree-agent-a2bc308e1974aaf80",
-  "checkpoints_count": 1,
+  "checkpoints_count": 4,
   "files_touched": [
     "evals/err404-nobid/.atira/eval.json",
     "evals/err404-nobid/.gitignore",
@@ -42,6 +42,13 @@
       "transcript": "/0/full.jsonl",
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
       "prompt": ""
     }
   ],
