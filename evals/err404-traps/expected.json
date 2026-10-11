@@ -1,0 +1,53 @@
+{
+  "tender_reference": "VG-2026-0815",
+  "decision": "bid",
+  "currency": "EUR",
+  "discount_percent": 0,
+  "positions": [
+    {
+      "position": "10",
+      "material_number": "HZ-50-250-FL-X",
+      "quantity": 12,
+      "unit_price": 474.46,
+      "lead_time_weeks": 4,
+      "base_unit_price": 470,
+      "surcharge_per_unit": 4.46,
+      "packaging_per_unit": 0,
+      "rebate_total": 0
+    },
+    {
+      "position": "20",
+      "material_number": "HZ-63-400-GA-0",
+      "quantity": 18,
+      "unit_price": 621.89,
+      "lead_time_weeks": 3,
+      "base_unit_price": 615,
+      "surcharge_per_unit": 6.89,
+      "packaging_per_unit": 0,
+      "rebate_total": 0
+    },
+    {
+      "position": "30",
+      "material_number": "HZ-80-500-FU-D",
+      "quantity": 6,
+      "unit_price": 950.4,
+      "lead_time_weeks": 9,
+      "base_unit_price": 940,
+      "surcharge_per_unit": 10.4,
+      "packaging_per_unit": 0,
+      "rebate_total": 0
+    },
+    {
+      "position": "40",
+      "material_number": "HZ-80-500-FU-D",
+      "quantity": 5,
+      "unit_price": 990.4,
+      "lead_time_weeks": 9,
+      "base_unit_price": 980,
+      "surcharge_per_unit": 10.4,
+      "packaging_per_unit": 0,
+      "rebate_total": 0
+    }
+  ],
+  "total_net": 27541.94
+}
