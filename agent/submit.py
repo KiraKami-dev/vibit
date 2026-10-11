@@ -65,6 +65,38 @@ class Mailbox:
         self.session, self.briefing, self.deadline = session, briefing, deadline
         self.lock = asyncio.Lock()
         self.last_tan = ""
+        self.warming: asyncio.Task | None = None
+
+    def adopt(self, sessions: list[SiteSession]) -> None:
+        """
+        When the research ends: go on in a webmail tab the research used last, and make sure it answers before a
+        TAN is asked for. The tab opened at the start sits idle through the research; in one run it answered
+        nothing any more, and the TAN lookup waited 95 s on it after the TAN had been requested. Reloading the
+        tab now puts that wait (if any) beside the bid form.
+        """
+        if self.lock.locked():  # a lookup is running in the current tab: leave it there
+            return
+        for session in reversed(sessions or []):
+            try:
+                usable = bool(getattr(session, "ok", True)) and not session.page.is_closed()
+            except Exception:  # no open page left
+                usable = False
+            if usable:
+                self.session.trace.event(self.session.name, "mailbox_tab", now=session.name)
+                self.session = session
+                break
+        self.warming = asyncio.create_task(self._warm())
+
+    async def _warm(self) -> None:
+        try:
+            started = time.monotonic()
+            async with self.lock:
+                async with self.session.lock:
+                    await self.session.revive()
+                    await self.session._goto(self.session.page.url)
+            self.session.trace.event(self.session.name, "mailbox_warm", seconds=round(time.monotonic() - started, 1))
+        except Exception as error:  # the TAN lookup does the same again and copes with a tab that is down
+            self.session.trace.event(self.session.name, "mailbox_warm", error=f"{type(error).__name__}: {str(error)[:160]}")
 
     async def address(self) -> str:
         """The bidder's own address, or "" when the webmail cannot tell: never an error that would stop the bid."""

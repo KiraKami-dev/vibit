@@ -94,6 +94,12 @@ SPEC_STRATEGIES = {
 FINDINGS_WAIT = float(os.environ.get("AGENT_FINDINGS_WAIT", "0"))
 PLAN_PATIENT_TIMEOUT = 90.0  # per call when the quick mail plan failed: a loaded model answers in up to ~90 s
 REWORK_SECONDS = 150.0  # a doubtful fact goes back to its worker only with at least this much research time left
+# Off unless AGENT_REWORK=1: in seven sandbox runs a doubt sent every mail kind back to its search (120 to 170 s,
+# plus a second check) and never changed a fact: the doubts were about the quote on the board, which is only the
+# message's header, and the model's own label for that (record or evidence) differed between two checks of the
+# same facts. The mail rules themselves (exact reference, sender, date) are applied in code either way. Without
+# rework the verifier judges for the run log, beside the steps that follow, and costs the bid no time.
+REWORK = os.environ.get("AGENT_REWORK", "0") == "1"
 
 
 async def start_session(session: SiteSession, until: float | None = None) -> SiteSession:
@@ -803,6 +809,9 @@ class Orchestrator:
         reworked = False
         for worker, facts in by_worker.items():
             rework = self.rework.get(worker)
+            if not REWORK:
+                self.trace.event("verify", "rework_off", by=worker, facts=[f.ident for f in facts])
+                continue
             if rework is None or self.left() < REWORK_SECONDS:
                 continue
             self.trace.event("verify", "rework", by=worker, facts=[f.ident for f in facts])
@@ -994,7 +1003,9 @@ class Orchestrator:
         omitted; with none complete it is still a bid with reference, decision and discount."""
         await self.research()
         # The deadline guard after research: each step runs only in the time the bid form leaves it.
-        if self.form_left() > 60:
+        if not REWORK:  # for the run log only: nothing waits for it
+            self.verifying = asyncio.create_task(self._bounded(self.verify(), "verify"))
+        elif self.form_left() > 60:
             await self._bounded(self.verify(), "verify")
         await self._bounded(self.select_materials(), "select")
         result, blank, problems = self._calculate()

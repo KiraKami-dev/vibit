@@ -73,7 +73,7 @@ def doubt(key: str, rework: bool) -> Fact:
 
 
 class ReworkOnlyForRecordDoubts(unittest.TestCase):
-    def verify(self, rounds: list[list[Fact]]):
+    def verify(self, rounds: list[list[Fact]], on: bool = True):
         calls, reworked = [], []
 
         async def verify_board(board, rules, reference, scenario):
@@ -85,7 +85,7 @@ class ReworkOnlyForRecordDoubts(unittest.TestCase):
 
         o = bare()
         o.rework = {"mails": rework}
-        with patch.object(orchestrator, "verify_board", verify_board):
+        with patch.object(orchestrator, "verify_board", verify_board), patch.object(orchestrator, "REWORK", on):
             asyncio.run(o.verify())
         return len(calls), reworked
 
@@ -97,6 +97,56 @@ class ReworkOnlyForRecordDoubts(unittest.TestCase):
 
     def test_no_doubt_is_one_check(self):
         self.assertEqual(self.verify([[]]), (1, []))
+
+    def test_by_default_nothing_is_searched_again(self):
+        self.assertFalse(orchestrator.REWORK)
+        self.assertEqual(self.verify([[doubt("a", True), doubt("b", True)]], on=False), (1, []))
+
+
+class MailboxTab(unittest.TestCase):
+    """The TAN is fetched in a webmail tab the research used last, reloaded while the bid form is filled in."""
+
+    def session(self, name: str, closed: bool = False, ok: bool = True):
+        events: list[str] = []
+
+        async def revive():
+            events.append("revive")
+
+        async def goto(url):
+            events.append("goto")
+        page = SimpleNamespace(url="https://mail.test/", is_closed=lambda: closed)
+        return SimpleNamespace(name=name, ok=ok, page=page, lock=asyncio.Lock(), revive=revive, _goto=goto,
+                               trace=Trace(tempfile.mkdtemp()), events=events)
+
+    def adopt(self, sessions, busy: bool = False):
+        import submit
+
+        async def run():
+            first = self.session("mail")
+            box = submit.Mailbox(first, SimpleNamespace(tender_reference="T-1"), time.monotonic() + 600)
+            if busy:
+                await box.lock.acquire()
+            box.adopt(sessions)
+            if box.warming is not None:
+                await box.warming
+            return box, first
+        return asyncio.run(run())
+
+    def test_the_last_usable_research_tab_is_taken_and_reloaded(self):
+        tabs = [self.session("mail:mail1"), self.session("mail:mail2"), self.session("mail:mail3", closed=True)]
+        box, first = self.adopt(tabs)
+        self.assertEqual(box.session.name, "mail:mail2")
+        self.assertEqual((tabs[1].events, first.events), (["revive", "goto"], []))
+
+    def test_without_research_tabs_its_own_tab_is_reloaded(self):
+        box, first = self.adopt([])
+        self.assertEqual((box.session.name, first.events), ("mail", ["revive", "goto"]))
+        box, first = self.adopt([self.session("mail:mail1", ok=False)])
+        self.assertEqual(box.session.name, "mail")
+
+    def test_a_running_lookup_keeps_its_tab(self):
+        box, first = self.adopt([self.session("mail:mail1")], busy=True)
+        self.assertEqual((box.session.name, box.warming), ("mail", None))
 
 
 def seen(rid: str, **changes) -> research.RequirementSeen:

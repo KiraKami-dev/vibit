@@ -85,7 +85,7 @@ async def solve(task: dict, page, answer: dict | None = None,
     flow = BidFlow(bid, Mailbox(mail, briefing, deadline), briefing, deadline)
     flow.start()
     if answer is None and os.environ.get("AGENT_RESEARCH", "1") != "0":
-        answer, attributes = await research(task, briefing, contexts, trace, deadline, sessions)
+        answer, attributes = await research(task, briefing, contexts, trace, deadline, sessions, flow.mailbox)
     # A start still running is waited for by the session's first look; one that gave up gets a fresh tab there.
     trace.event("starts", "state", **{name: ("up" if s.ok else "starting" if s.starting else "down")
                                       for name, s in sessions.items()}, pending=sum(not t.done() for t in starts.values()))
@@ -99,8 +99,10 @@ async def solve(task: dict, page, answer: dict | None = None,
 
 
 async def research(task: dict, briefing, contexts: list, trace: Trace, deadline: float,
-                   warm: dict[str, SiteSession] | None = None) -> tuple[dict | None, dict[str, dict[str, str]] | None]:
-    """The orchestrator's answer and material attributes; (None, None) when it fails or builds nothing."""
+                   warm: dict[str, SiteSession] | None = None, mailbox: Mailbox | None = None
+                   ) -> tuple[dict | None, dict[str, dict[str, str]] | None]:
+    """The orchestrator's answer and material attributes; (None, None) when it fails or builds nothing. `mailbox`
+    (the one the TAN is fetched with) is handed the webmail tabs the research used, once it ends."""
     answer, attributes, problems = None, None, []
     orchestrator = None
     started = time.monotonic()
@@ -114,6 +116,11 @@ async def research(task: dict, briefing, contexts: list, trace: Trace, deadline:
         trace.event("orchestrator", "failed", error=f"{type(error).__name__}: {str(error)[:300]}")
     if answer is None and orchestrator is not None:  # still the reference, decision and any discount read
         answer = orchestrator.fallback_answer()
+    if mailbox is not None:
+        try:
+            mailbox.adopt(list(orchestrator.mail_sessions) if orchestrator is not None else [])
+        except Exception as error:  # the mailbox then stays in its own tab, as before
+            trace.event("mail", "mailbox_tab_failed", error=f"{type(error).__name__}: {str(error)[:160]}")
     trace.event("orchestrator", "done", seconds=round(time.monotonic() - started, 1), answer=answer,
                 attributes=attributes, problems=problems[:30])
     path = Path(trace.path).with_name("answer.json")
