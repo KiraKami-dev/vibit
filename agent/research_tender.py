@@ -24,8 +24,10 @@ import llm
 from browser_tools import Deps, SiteSession, _click
 from calc import (
     Amendment,
+    CalcError,
     QuantityChange,
     Unit,
+    norm_id,
     parse_unit,
     position_key,
     resolve_quantity,
@@ -142,6 +144,7 @@ class TenderFacts(BaseModel):
     withdrawn: list[str] = Field(default_factory=list)
     qa: QaRecords
     seconds: float = 0.0
+    problems: list[str] = Field(default_factory=list, description="Records that could not be read (left out)")
 
 
 # ---------------------------------------------------------------- the paging helper
@@ -511,7 +514,7 @@ async def research_tender(session: SiteSession, reference: str, scenario: dateti
     facts = resolve_tender(positions.positions, qa, scenario, fmt)
     facts.seconds = round(time.monotonic() - started, 1)
     session.trace.event(session.name, "tender_facts", seconds=facts.seconds,
-                        positions=[p.model_dump(mode="json") for p in facts.positions])
+                        positions=[p.model_dump(mode="json") for p in facts.positions], problems=facts.problems)
     if on_facts is not None:
         on_facts(facts)
     return facts
@@ -537,7 +540,7 @@ async def _research_tender_one(session: SiteSession, reference: str, scenario: d
     facts = resolve_tender(positions.positions, qa, scenario, positions.number_format or None)
     facts.seconds = round(time.monotonic() - started, 1)
     session.trace.event(session.name, "tender_facts", seconds=facts.seconds,
-                        positions=[p.model_dump(mode="json") for p in facts.positions])
+                        positions=[p.model_dump(mode="json") for p in facts.positions], problems=facts.problems)
     if on_facts is not None:
         on_facts(facts)
     return facts
@@ -547,11 +550,12 @@ async def _research_tender_one(session: SiteSession, reference: str, scenario: d
 
 
 def _same_ref(a: str, b: str) -> bool:
-    return a.strip().casefold() == b.strip().casefold()
+    """Position (or answer) numbers as different records write them: "Pos. 02" is "2" (calc.norm_id)."""
+    return norm_id(a) == norm_id(b)
 
 
 def _latest_key(records: list[QaKey], position: str, withdrawn: set[str], scenario: datetime) -> str | None:
-    live = [r for r in records if _same_ref(r.position, position) and r.answer_number not in withdrawn
+    live = [r for r in records if _same_ref(r.position, position) and norm_id(r.answer_number) not in withdrawn
             and _aware(r.date) <= scenario]
     return max(live, key=lambda r: (_aware(r.date), position_key(r.answer_number))).key if live else None
 
@@ -569,38 +573,54 @@ def _decimal_or_text(value: str, fmt: str | None) -> Decimal | str:
 
 def resolve_tender(positions: list[TenderPosition], qa: QaRecords, scenario: datetime,
                    positions_format: str | None = None) -> TenderFacts:
-    """Rules 1, 13, 14 and the Q&A keys: latest dated answer per position and key, withdrawn ones ignored."""
+    """
+    Rules 1, 13, 14 and the Q&A keys: latest dated answer per position and key, withdrawn ones ignored. Position
+    and answer numbers compare normalised ("Pos. 02" is "2"). A record that cannot be read costs only itself: an
+    unreadable quantity change is left out, a position with an unreadable unit, quantity or fee is left out (it
+    cannot be priced), and each is listed in `problems`.
+    """
     scenario = _aware(scenario)
-    withdrawn = {w.withdrawn_number for w in qa.withdrawals if _aware(w.date) <= scenario}
+    withdrawn = {norm_id(w.withdrawn_number) for w in qa.withdrawals if _aware(w.date) <= scenario}
     fmt = qa.number_format or None
-    changes = [QuantityChange(number=c.answer_number, date=_aware(c.date), position=c.position,
-                              quantity=parse_int(c.quantity, fmt))
-               for c in qa.quantity_changes if _aware(c.date) <= scenario]
+    problems: list[str] = []
+    changes = []
+    for c in qa.quantity_changes:
+        if _aware(c.date) > scenario:
+            continue
+        try:
+            changes.append(QuantityChange(number=c.answer_number, date=_aware(c.date), position=c.position,
+                                          quantity=parse_int(c.quantity, fmt)))
+        except (ParseError, ValueError) as error:
+            problems.append(f"quantity change {c.answer_number} for position {c.position} unreadable: {error}")
     facts = []
     for p in sorted(positions, key=lambda p: position_key(p.position)):
-        mine = [c for c in changes if _same_ref(c.position, p.position)]
-        for c in mine:
-            c.position = p.position
-        original = parse_int(p.quantity, positions_format)
-        final = resolve_quantity(original, p.position, mine, withdrawn, scenario)
-        live = [c for c in mine if c.number not in withdrawn]
-        source = max(live, key=lambda c: (c.date, position_key(c.number))).number if live else None
-        fees = [f for f in qa.setup_fees if _same_ref(f.position, p.position) and f.answer_number not in withdrawn
-                and _aware(f.date) <= scenario]
-        fee = parse_number(max(fees, key=lambda f: _aware(f.date)).amount, fmt) if fees else Decimal(0)
-        facts.append(PositionFacts(
-            position=p.position, short_text=p.short_text, requirement=p.requirement, unit=parse_unit(p.unit),
-            unit_text=p.unit, tender_quantity=original, quantity=final, quantity_answer=source,
-            condition_group=_latest_key(qa.condition_groups, p.position, withdrawn, scenario),
-            packaging_key=_latest_key(qa.packaging_tariffs, p.position, withdrawn, scenario),
-            commitment_key=_latest_key(qa.delivery_commitments, p.position, withdrawn, scenario),
-            setup_pool_key=_latest_key(qa.setup_pools, p.position, withdrawn, scenario),
-            bonus_key=_latest_key(qa.project_bonuses, p.position, withdrawn, scenario),
-            setup_fee=fee))
+        try:
+            mine = [c for c in changes if _same_ref(c.position, p.position)]
+            for c in mine:
+                c.position = p.position
+            original = parse_int(p.quantity, positions_format)
+            final = resolve_quantity(original, p.position, mine, withdrawn, scenario)
+            live = [c for c in mine if norm_id(c.number) not in withdrawn]
+            source = max(live, key=lambda c: (c.date, position_key(c.number))).number if live else None
+            fees = [f for f in qa.setup_fees if _same_ref(f.position, p.position)
+                    and norm_id(f.answer_number) not in withdrawn and _aware(f.date) <= scenario]
+            fee = parse_number(max(fees, key=lambda f: _aware(f.date)).amount, fmt) if fees else Decimal(0)
+            facts.append(PositionFacts(
+                position=p.position, short_text=p.short_text, requirement=p.requirement, unit=parse_unit(p.unit),
+                unit_text=p.unit, tender_quantity=original, quantity=final, quantity_answer=source,
+                condition_group=_latest_key(qa.condition_groups, p.position, withdrawn, scenario),
+                packaging_key=_latest_key(qa.packaging_tariffs, p.position, withdrawn, scenario),
+                commitment_key=_latest_key(qa.delivery_commitments, p.position, withdrawn, scenario),
+                setup_pool_key=_latest_key(qa.setup_pools, p.position, withdrawn, scenario),
+                bonus_key=_latest_key(qa.project_bonuses, p.position, withdrawn, scenario),
+                setup_fee=fee))
+        except (ParseError, CalcError, ValueError) as error:
+            problems.append(f"position {p.position} left out: {error}")
     amendments = [Amendment(date=_aware(a.date), revision=a.revision, requirement=a.requirement,
                             attributes={a.attribute if a.attribute != "other" else a.attribute_label:
                                         _decimal_or_text(a.value, fmt)})
-                  for a in qa.amendments if a.answer_number not in withdrawn and _aware(a.date) <= scenario]
+                  for a in qa.amendments if norm_id(a.answer_number) not in withdrawn and _aware(a.date) <= scenario]
     units = {a.attribute: a.unit for a in qa.amendments if a.unit}
-    return TenderFacts(positions=facts, amendments=amendments, amendment_units=units, withdrawn=sorted(withdrawn),
-                       qa=qa)
+    shown = sorted({w.withdrawn_number for w in qa.withdrawals if _aware(w.date) <= scenario})  # as written
+    return TenderFacts(positions=facts, amendments=amendments, amendment_units=units, withdrawn=shown,
+                       qa=qa, problems=problems)
