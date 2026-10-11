@@ -20,8 +20,8 @@ import llm
 from briefing import Briefing
 from browser_tools import Deps, SiteSession
 from calc import position_key
-from configurator import (KIND_JS, NUMBER_ONLY, VALUE_NAMES, FillPlan, choice_options, clean, complete_positions,
-                          decimal_mark, fill_position, match_option, pick_option,
+from configurator import (KIND_JS, NUMBER_ONLY, VALUE_NAMES, FillPlan, choice_options, clean,
+                          complete_positions, controls, decimal_mark, fill_position, match_option, pick_option,
                           find_control, form_value, german, mapping_problems, parse_number, resolve_position, scoped,
                           unmapped)
 from extract import locate
@@ -33,6 +33,10 @@ ADDRESS_WAIT = 15  # seconds the bid worker waits for the contact address before
 SIGNING_RESERVE = 180  # seconds kept for the review, the TAN round trip and submitting (seen: 25-30 s, 173 s)
 LAST_CHANCE = 45  # seconds a final sign-only pass needs at least
 HAND_OVER_AFTER = 2  # form failures of one position after which the model enters it itself with fill_in()
+# After a position the model named is entered and saved, the next position pages are entered with the same mapping
+# (PositionDesk._continue) while each passes the checks; any difference goes back to the model. Saves a model step
+# per position. AGENT_AUTO_POSITIONS=0: one position per call, as before.
+AUTO_POSITIONS = os.environ.get("AGENT_AUTO_POSITIONS", "1") == "1"
 # AGENT_FILL_IN=0 leaves out fill_in(), the several-actions-per-step form tool
 
 
@@ -206,6 +210,11 @@ async def fill_in(ctx: RunContext[Deps], actions: list[FormAction]) -> str:
     return f"{report}\n\n{view}"
 
 
+def page_layout(view: str) -> frozenset[tuple[str, str]]:
+    """The kinds and labels of a page's controls: two position pages of one form look alike before filling."""
+    return frozenset((kind, clean(label)) for _, kind, label in controls(view))
+
+
 class PositionDesk:
     """
     The bid worker's tools for the positions: enter the calculated values of the position the model says is on
@@ -225,6 +234,7 @@ class PositionDesk:
         self.reserve = SIGNING_RESERVE  # seconds kept for signing (submit_bid sets it from the model pace)
         self.handed: set[str] = set()  # positions handed to the model to enter itself with fill_in()
         self.restarts = 0  # the bid website's restarts known here (SiteSession.restarts)
+        self.layout: frozenset[tuple[str, str]] = frozenset()  # controls of the last position page the model named
 
     def sync(self, session) -> None:
         """A website started again from scratch (a dead page, SiteSession.reopen) lost every position entered."""
@@ -352,7 +362,6 @@ class PositionDesk:
             return refuse("not_on_page", f"Position {position} is not on the page now. Configure the position "
                                          "the page shows, by its own number; omit only a position that is not one "
                                          f"of {self.remaining()}.")
-        entry = self.entries[position]
         if not plan.fields:
             return refuse("no_fields", f"Position {position} has values to enter. Give fields (control label -> "
                                        f"value name) for the controls of this form, then call again; do not omit it.")
@@ -364,6 +373,7 @@ class PositionDesk:
         if time.monotonic() > self.deadline - self.reserve:
             return refuse("time", "Time is short: leave this and every remaining position out and go on to "
                                   "signing. " + self.so_far(session))
+        entry = self.entries[position]
         values, labels = unmapped(view, entry, plan.fields)
         if values and labels and not self.asked_unmapped:  # asked once per run; the next call fills as mapped
             self.asked_unmapped = True
@@ -372,13 +382,63 @@ class PositionDesk:
                                       f"{'; '.join(labels)}. Call again now with fields that add every one of them "
                                       "that takes such a value (the mapping you gave stays); leave out fields that "
                                       "match none.")
+        self.layout = page_layout(view)
+        text, saved = await self._enter(session, position, shown, asked, choices)
+        if saved and AUTO_POSITIONS:
+            text = await self._continue(session, text)
+        return text
+
+    def _auto_blocker(self, position: str | None, shown: list[str], view: str) -> str:
+        """Why the next page is not entered with the mapping the model gave ('' when it can be): it must show
+        exactly one bid position not yet entered, with the same controls (kinds and labels) as the position page the
+        model named showed before it was filled, and time must be left."""
+        if position is None or shown != [position]:
+            return "the page shows no single bid position"
+        if position in self.entered or position in self.handed or self.failures.get(position):
+            return f"position {position} was entered or tried before"
+        if not self.next_button:
+            return "no save button named"
+        if time.monotonic() > self.deadline - self.reserve:
+            return "time"
+        layout = page_layout(view)
+        if layout != self.layout:
+            return f"other controls: {sorted(layout ^ self.layout)[:6]}"
+        return ""
+
+    async def _continue(self, session, text: str) -> str:
+        """
+        After a position was entered and saved: the next position pages are entered with the same mapping as long
+        as each one passes _auto_blocker; fill_position checks every option and value, and a failure or a page
+        that does not pass goes back to the model with the latest result.
+        """
+        done: list[str] = []
+        while True:
+            async with session.lock:
+                view = await session.look()
+            position, shown = resolve_position("", self.entries, view)
+            blocker = self._auto_blocker(position, shown, view)
+            if blocker:
+                session.trace.event(session.name, "auto_positions_stop", entered=done, reason=blocker[:200])
+                break
+            text, saved = await self._enter(session, position, shown, position, None)
+            done.append(position)
+            if not saved:
+                break
+        if not done:
+            return text
+        return f"Entered with the same mapping as well: {', '.join(done)}. " + text
+
+    async def _enter(self, session, position: str, shown: list[str], asked: str,
+                     choices: dict[str, str] | None) -> tuple[str, bool]:
+        """Fill one position page and save it: the tool's message, and whether it was entered and saved."""
+        plan, entry = self.plan, self.entries[position]
         async with session.lock:
             log: list[str] = []
             try:
                 error = await fill_position(session, entry, plan, log, self.picks(position, entry, choices))
             except Exception as exc:  # a slow or changed page: the model decides to retry or omit
                 error = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
-            moved = ""
+            moved, saved = "", False
             if not error and self.next_button:  # the model named the button; clicking it is the mechanical part
                 view = await session.look()
                 ref, why = find_control(view, self.next_button, ("button",))
@@ -394,6 +454,7 @@ class PositionDesk:
                     await target.click(timeout=5000)
                     await session.settle()
                     moved = f" Saved with {self.next_button!r}; the page below is the form's next step."
+                    saved = True
             session.trace.event(session.name, "configure_position", position=position, done=log, error=error,
                                 moved=moved)
             view = await session.look()
@@ -405,15 +466,16 @@ class PositionDesk:
             if self.form_failures.get(position, 0) >= HAND_OVER_AFTER:
                 self.handed.add(position)
                 session.trace.event(session.name, "handed_to_model", position=position, error=error[:300])
-                return f"Position {position} not entered: {error}. {self.hand_over(position, session)}\n\n{view}"
+                return (f"Position {position} not entered: {error}. {self.hand_over(position, session)}\n\n{view}",
+                        False)
             return (f"Position {position} not fully entered: {error}. Entered so far: {'; '.join(log) or 'nothing'}. "
                     "Fix the mapping and call again, or leave the position out with the form's option to omit "
-                    f"it. {self.so_far(session)}\n\n{view}")
+                    f"it. {self.so_far(session)}\n\n{view}", False)
         self.entered.add(position)
         then = moved or " Check it, then save and continue with the form's next/continue button."
         which = "" if position == asked else f" (the page showed {position}, not {asked!r}; {position} was entered)"
         return (f"Position {position} entered{which}: {'; '.join(log)}.{then} {self.so_far(session)} Still to "
-                f"enter when the form shows them: {self.remaining()}.\n\n{view}")
+                f"enter when the form shows them: {self.remaining()}.\n\n{view}", saved)
 
     def hand_over(self, position: str, session: SiteSession) -> str:
         """The model enters a position itself after this tool failed on the form twice."""
