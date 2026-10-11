@@ -5764,3 +5764,7 @@ If this event is something the user would act on now, send a PushNotification. R
 ---
 
 And 51.3 both you and the other agents reported, are you sure it's yours
+
+---
+
+How on track are you to reach any of the targets to get competitive? Or should I start a new fresh agent or so?
