@@ -147,6 +147,8 @@ class Mailbox:
 
 TAN_STEPS = 24  # 16 ran out on a mailbox that lists the oldest message first, six per page
 TAN_RETRY_SECONDS = 60  # a second TAN lookup only with at least this much time left
+# a link inside a sentence of the page view, e.g. `sent to your mailbox ([e9 link "open it" -> /mail])`: its words
+WORDS_ONLY = re.compile(r'\[e\d+ link "([^"]*)"[^\]]*\]')
 
 
 def tan_goal(reference: str, said: str = "", older: str = "") -> str:
@@ -495,10 +497,14 @@ class PositionDesk:
                     moved = (f" This page also shows {', '.join(others)}: enter each with configure_position(); "
                              f"{self.next_button!r} is clicked after the last of them.")
                 else:
-                    await target.click(timeout=5000)
-                    await session.settle()
-                    moved = f" Saved with {self.next_button!r}; the page below is the form's next step."
-                    saved = True
+                    try:  # like the model's own click: a button under a notice is clicked through it
+                        await browser_tools._click(target)
+                        await session.settle()
+                        moved = f" Saved with {self.next_button!r}; the page below is the form's next step."
+                        saved = True
+                    except Exception as exc:  # the model sees where the form stands and goes on from there
+                        moved = (f" Could not save it ({type(exc).__name__}: {str(exc).splitlines()[0][:160]}); "
+                                 "check the page below and click the form's next/continue button yourself.")
             session.trace.event(session.name, "configure_position", position=position, done=log, error=error,
                                 moved=moved)
             view = await session.look()
@@ -728,8 +734,9 @@ async def submit_bid(bid_session: SiteSession, mailbox: Mailbox, briefing: Brief
                     "the review and request the TAN.")
         before = set(bid_session.view.splitlines())
         view = await browser_tools.click(ctx, ref)
-        answer = " ".join(line.strip() for line in bid_session.view.splitlines()
-                          if line.strip() and line not in before and "[e" not in line)[:400]
+        answer = " ".join(said for said in (WORDS_ONLY.sub(r"\1", line).strip()
+                                           for line in bid_session.view.splitlines() if line not in before)
+                          if said and "[e" not in said)[:400]
         found = await mailbox.tan(answer)  # two lookups for this request's code before a new one is asked for
         if not found:
             return (f"{view}\n\nNo TAN found in the webmail for this request, after two lookups. Request a new TAN "

@@ -179,6 +179,13 @@ class MailSession(FakeSession):
         pass
 
 
+class RequestAnswer(unittest.TestCase):
+    def test_a_notice_with_a_link_keeps_its_words(self):
+        line = 'Code 2 was sent to your mailbox ([e9 link "open the inbox" -> http://mail.example/]).'
+        self.assertEqual(submit.WORDS_ONLY.sub(r"\1", line), "Code 2 was sent to your mailbox (open the inbox).")
+        self.assertEqual(submit.WORDS_ONLY.sub(r"\1", '[e5 button "Request code"]'), '[e5 button "Request code"]')
+
+
 class TanLookup(unittest.IsolatedAsyncioTestCase):
     def test_goal_describes_what_not_where(self):
         goal = submit.tan_goal("T-1", "", "")

@@ -47,10 +47,10 @@ ENTRIES = {p: {"position": p, "material_number": m, "quantity": q, "unit_price":
                                      ("01.03", "M-1", 1, 99, 4))}
 
 
-def run_wizard(order: list[str], extra: list[str] = (), auto: bool = True):
+def run_wizard(order: list[str], extra: list[str] = (), auto: bool = True, cover: str = ""):
     async def go():
         async with _Browser() as b:
-            session = await b.session(WIZARD % (order, list(extra)))
+            session = await b.session(WIZARD % (order, list(extra)) + cover)
             desk = PositionDesk(ENTRIES, deadline=time.monotonic() + 600)
             ctx = SimpleNamespace(deps=SimpleNamespace(session=session))
             submit.AUTO_POSITIONS = auto
@@ -77,6 +77,12 @@ class AutoPositions(unittest.TestCase):
         self.assertEqual(desk.entered, {"01.01"})
         self.assertIn("Position 01.02", page)
         self.assertNotIn("as well", text)
+
+    def test_a_covered_save_button_is_still_clicked(self):
+        cover = '<div style="position:fixed;inset:0;background:#0008">Hinweis</div>'
+        text, desk, page = run_wizard(["01.01", "01.02"], cover=cover)
+        self.assertEqual(desk.entered, {"01.01", "01.02"})
+        self.assertIn("Konditionen", page)
 
     def test_off_switch_enters_one_position_per_call(self):
         text, desk, page = run_wizard(["01.01", "01.02"], auto=False)
