@@ -25,7 +25,7 @@ import os
 import re
 import time
 from decimal import Decimal
-from typing import TypeVar
+from typing import Awaitable, Callable, TypeVar
 from urllib.parse import urljoin, urlparse
 
 from playwright.async_api import BrowserContext, Page
@@ -48,6 +48,7 @@ from evidence import (
     SpecRevision,
     check_choice,
     merged_attributes,
+    mismatches,
     number_format,
     parse_date,
     parse_int,
@@ -60,6 +61,7 @@ from tracing import Trace
 from worker import run_worker, steps_for
 
 T = TypeVar("T", bound=BaseModel)
+R = TypeVar("R")
 
 _REF = re.compile(r"\[e\d+ ")
 
@@ -238,8 +240,23 @@ async def open_pages(ctx: RunContext[Deps], paths: list[str]) -> str:
             lines = text.splitlines()
             text = "\n".join(lines[head:len(lines) - tail]) + "\n[page frame as in the first page]"
         out.append(f"=== {name}\n{text}")
+    # links seen on any view this tool opened and not opened since, over all calls of this worker
+    pending: dict[str, str] = session.__dict__.setdefault("pending_links", {})
+    for link in more:
+        pending.setdefault(urljoin(session.page.url, link), link)
+    for target in list(pending):
+        if target in opened:
+            del pending[target]
     if more:
         out.append("Links on these views you have not opened yet: " + " ".join(list(more)[:40]))
+    elif pending:
+        out.append("Links on views you opened earlier that you have not opened yet: "
+                   + " ".join(list(pending.values())[:40]))
+    elif opened:
+        # every link the opened views show has been read: the harness may end a worker that keeps going
+        session.__dict__.setdefault("exhausted_at", time.monotonic())
+        out.append("No unopened links remain: everything the views you opened link to has been opened. Return "
+                   "your result now.")
     return "\n\n".join(out)
 
 
@@ -645,8 +662,11 @@ search(field_ref, query, submit_ref) on its search field with that group as the 
 returns every hit row with its links in one step. As soon as hits of that group show, return every one of them
 with its link target and the technical attributes (bore, stroke, pressure, mounting, certification) the rows show,
 whether or not they look like a fit: which material fits is decided later from their records, so never refine or
-repeat a search that already lists hits of the group and do not open the hits. If the site refuses the search or
-shows no hits, change the query or the search field it offers. If a sign-in or notice page interrupts, get past
+repeat a search that already lists hits of the group and do not open the hits. When search says "This is the
+complete result list", you are done: return those hits right away (one hit is a complete answer too), without
+collect, another query or paging. If the site refuses the search or shows no hits for the group, try the group in
+another search field or spelling the site offers; when those show no hits either, return an empty list (searches
+for other words do not tell which materials belong to the group). If a sign-in or notice page interrupts, get past
 it."""
 
 DETAIL_GOAL = """\
@@ -661,7 +681,9 @@ stock levels, condition records and their sub-views); its result lists the links
 opened yet, so open the ones that matter in one more open_pages call. Never guess addresses, and do not open a
 view twice. If a sign-in, notice or error page interrupts, get past it and open again what it replaced. Every
 view you open is kept for a reader, so you do not need to copy values: return as soon as all of these have been
-opened, listing only facts you could not find (a fact a view shows as absent counts as found).{focus}"""
+opened, listing only facts you could not find (a fact a view shows as absent counts as found). When open_pages
+says no unopened links remain, return at once: a fact that none of the opened views shows is not on this
+record.{focus}"""
 
 MATERIAL_INSTRUCTIONS = """\
 You read the ERP views of one material and report its facts exactly as written. Copy numbers as shown with units
@@ -760,7 +782,11 @@ async def _read_material(number: str, corpus: str, trace: Trace, name: str) -> M
                                 corpus, trace=trace, name=name, what="material views")
 
 
-MAX_INSPECT = int(os.environ.get("ERP_MAX_INSPECT", "10"))
+MAX_INSPECT = int(os.environ.get("ERP_MAX_INSPECT", "20"))  # the rules cap a usable search at 20 hits
+
+# A worker that has what it came for (a complete hit list; every view of a record opened) but keeps going is ended
+# this many seconds later; what it has is then read from its pages.
+SETTLE_SECONDS = float(os.environ.get("ERP_SETTLE_SECONDS", "20"))
 
 # Time the ERP stage keeps before the research deadline, so that what it started finishes and counts: a material's
 # reader call after its worker stops (READ_SECONDS), the model's choice over the records (CHOOSE_SECONDS); a search
@@ -813,10 +839,11 @@ You read the page a browsing worker ended on in an ERP. If it lists material hit
 attributes the list shows, exactly as written. If it shows no such hit list, return an empty list of candidates."""
 
 
-async def _salvage_search(session: SiteSession, views: dict[str, str], group: str) -> SearchReport | None:
-    """The hits on the latest page of a stopped search worker that lists the group with links (one grounded reader
-    call), or None."""
-    text = next((t for t in reversed(views.values()) if group in t and "->" in t), "")
+async def _salvage_search(session: SiteSession, views: dict[str, str], group: str,
+                          listing: str = "") -> SearchReport | None:
+    """The hits of a stopped search worker (one grounded reader call): its complete hit list if it had one, else
+    the latest page that lists the group with links; None without either."""
+    text = listing or next((t for t in reversed(views.values()) if group in t and "->" in t), "")
     if not text:
         return None
     try:
@@ -827,6 +854,63 @@ async def _salvage_search(session: SiteSession, views: dict[str, str], group: st
         session.trace.event(session.name, "search_salvage_failed", error=f"{type(error).__name__}: {str(error)[:160]}")
         return None
     return report if report.candidates else None
+
+
+def contradicted(req: EffectiveRequirement, cand: Candidate) -> list[str]:
+    """The attributes a hit's row shows that differ from the requirement as known now (attributes the row does not
+    show, and a stroke still pending, contradict nothing)."""
+    shown = {k: v for k, v in cand.attributes().items()
+             if k not in ("mounting", "certification") or str(getattr(cand, k) or "").strip()}
+    return [m for m in mismatches(req, shown) if not m.endswith(" not shown")]
+
+
+def inspection_order(req: EffectiveRequirement, candidates: list[Candidate]) -> tuple[list[str], list[str]]:
+    """The hits to inspect, at most MAX_INSPECT: first those whose rows fit the requirement as known now, then the
+    others (a later amendment may still make one of them the match), each in list order."""
+    fit: dict[str, None] = {}
+    other: dict[str, None] = {}
+    for cand in candidates:
+        number = cand.material_number
+        if number in fit or number in other:
+            continue
+        (other if contradicted(req, cand) else fit)[number] = None
+    first = list(fit)[:MAX_INSPECT]
+    return first, list(other)[:MAX_INSPECT - len(first)]
+
+
+def _group_key(text: str) -> str:
+    return re.sub(r"[\s\-_./]+", "", text).casefold()
+
+
+def group_search(searches: list, group: str) -> tuple[site_tools.SearchRecord | None, bool]:
+    """From the searches a worker ran: the first complete hit list that shows the group, and whether a search for
+    the group itself came back with the site's own no-hits text."""
+    key = _group_key(group)
+    listing = next((s for s in searches if s.complete and s.rows and key in _group_key(s.text)), None)
+    empty = any(s.no_hits and key in _group_key(s.query) for s in searches)
+    return listing, empty
+
+
+async def until_settled(work: Awaitable[R], settled: Callable[[], float | None], grace: float, trace: Trace,
+                        name: str) -> tuple[R | None, bool]:
+    """Await a worker; once `settled()` gives the time it got what it came for and `grace` seconds have passed
+    without it returning, end it. Returns (its result or None, whether it was ended that way)."""
+    task = asyncio.ensure_future(work)
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=0.5)
+            if done:
+                return task.result(), False
+            at = settled()
+            if at is not None and time.monotonic() - at >= grace:
+                task.cancel()
+                with contextlib.suppress(BaseException):
+                    await task
+                trace.event(name, "settled_stop", grace=grace)
+                return None, True
+    finally:
+        if not task.done():
+            task.cancel()
 
 
 class Erp:
@@ -1048,10 +1132,38 @@ class Erp:
             self.trace.event("erp", "tab_failed", tag=tag, error=f"{type(error).__name__}: {str(error)[:160]}")
             return None
 
+    async def _search(self, session: SiteSession, req: EffectiveRequirement, until: float | None,
+                      searches: list) -> SearchReport | None:
+        """The search worker, ended SETTLE_SECONDS after it has a complete hit list of the group; a worker that
+        stops without a result leaves its hit list to the salvage reader."""
+        views = _keep_views(session)
+        session.__dict__["searches"] = searches  # the search tool records every search here
+
+        def settled() -> float | None:
+            """When the worker had its answer: a complete hit list of the group, or a second search for the group
+            (another field or spelling) that the site also answered with no hits."""
+            listing, _ = group_search(searches, req.catalog_group)
+            if listing:
+                return listing.at
+            key = _group_key(req.catalog_group)
+            empty = [s.at for s in searches if s.no_hits and key in _group_key(s.query)]
+            return empty[1] if len(empty) > 1 else None
+
+        result, _ = await until_settled(run_worker(
+            session, SEARCH_GOAL.format(group=req.catalog_group), SearchReport, deadline=until,
+            max_steps=steps(until, 6, 16), tools=(site_tools.search, site_tools.collect),
+            **_worker_kwargs(notes=False)), settled, SETTLE_SECONDS, self.trace, session.name)
+        report = result[0] if result else None
+        if report is None:  # stopped (steps, time, settled): read the hit list it had
+            listing, _ = group_search(searches, req.catalog_group)
+            report = await _salvage_search(session, views, req.catalog_group, listing.text if listing else "")
+        return report
+
     async def requirement(self, req: EffectiveRequirement) -> RequirementResearch:
         out = RequirementResearch(requirement_id=req.requirement_id)
         report = None
         until = self._until(MATERIAL_SECONDS)
+        searches: list[site_tools.SearchRecord] = []
         for attempt in range(2):  # retry once: the ERP sometimes drops the session mid-search
             if self.left() < MATERIAL_SECONDS + 20:
                 break
@@ -1059,18 +1171,15 @@ class Erp:
                 session = await self._worker_tab(req.requirement_id if not attempt else f"{req.requirement_id}+")
                 if session is None:
                     continue
-                views = _keep_views(session)
                 try:
-                    report, _ = await run_worker(
-                        session, SEARCH_GOAL.format(group=req.catalog_group), SearchReport,
-                        deadline=until, max_steps=steps(until, 6, 16), tools=(site_tools.search, site_tools.collect),
-                        **_worker_kwargs(notes=False))
-                    if report is None:  # stopped (steps, time): the hit list it ended on may still be there
-                        report = await _salvage_search(session, views, req.catalog_group)
+                    report = await self._search(session, req, until, searches)
                 finally:
                     await self._close(session)
-            if report is not None:
-                break
+            if report is not None or group_search(searches, req.catalog_group)[1]:
+                break  # a result, or the site said the group has no hits (another attempt would see the same)
+        _, empty = group_search(searches, req.catalog_group)
+        if report is None and empty:
+            report = SearchReport(search_term=req.catalog_group, candidates=[])
         if report is None:
             out.problems.append("search worker returned no result")
             return out
@@ -1079,33 +1188,45 @@ class Erp:
                                     bore=_num(c.bore), stroke=_num(c.stroke), pressure=_num(c.pressure),
                                     mounting=c.mounting, certification=c.certification)
                           for c in report.candidates]
-        # every hit of the model's search is inspected (the rules cap a usable search at 20 hits); which one fits is
-        # the model's choice below, once the details are known
-        out.inspected = list(dict.fromkeys(c.material_number for c in out.candidates))[:MAX_INSPECT]
-        if len(out.candidates) > MAX_INSPECT:
-            out.problems.append(f"{len(out.candidates)} hits, inspected the first {MAX_INSPECT}")
+        out.group_empty = empty and not out.candidates
+        if out.group_empty:
+            self.trace.event("erp", "group_empty", requirement=req.requirement_id, group=req.catalog_group)
+        # every hit of the model's search is inspected (the rules cap a usable search at 20 hits), those whose rows
+        # fit the requirement as known now first; which one fits is the model's choice below, once details are known
+        first, rest = inspection_order(req, out.candidates)
+        out.inspected = first + rest
+        hits = len(dict.fromkeys(c.material_number for c in out.candidates))
+        if hits > len(out.inspected):
+            out.problems.append(f"{hits} hits, inspected {len(out.inspected)}")
         # until the choice below is made, the research stands with its hits marked unfinished (so_far): a later
         # choice can still find the exact match among the materials read, and no match omits the position
         out.problems.append(UNFINISHED)
         self.partial[req.requirement_id] = out
         links = {c.material_number: c.link for c in out.candidates}
-        tasks = [self.material(number, links.get(number, "")) for number in out.inspected]
+        tasks = {number: self.material(number, links.get(number, "")) for number in out.inspected}
         # material workers stop early enough for their reader; a record still open at the deadline is left out
-        # and the choice is made over the ones that are complete
-        done = set()
-        if tasks:
-            done, _ = await asyncio.wait(tasks, timeout=max(1.0, self.left() - CHOOSE_SECONDS))
-        materials = {}
-        for task in tasks:
-            if task in done and not task.cancelled() and task.exception() is None and task.result() is not None:
-                materials[task.result().material_number] = task.result()
-        if len(materials) < len(out.inspected):
-            out.problems.append(f"{len(out.inspected) - len(materials)} of {len(out.inspected)} materials not read")
-        try:
-            out.selected, problems = await asyncio.wait_for(choose_material(req, out, materials, self.trace),
+        # and the choice is made over the ones that are complete. The hits whose rows fit come first: when one of
+        # them is chosen, the others are not waited for (they still finish, for a later reselect).
+        selected, problems, materials, phase = None, [], {}, out.inspected
+        for phase in ([first, out.inspected] if first and rest else [out.inspected]):
+            wanted = [tasks[n] for n in phase]
+            done = set()
+            if wanted:
+                done, _ = await asyncio.wait(wanted, timeout=max(1.0, self.left() - CHOOSE_SECONDS))
+            materials = {}
+            for task in wanted:
+                if task in done and not task.cancelled() and task.exception() is None and task.result() is not None:
+                    materials[task.result().material_number] = task.result()
+            try:
+                selected, problems = await asyncio.wait_for(choose_material(req, out, materials, self.trace),
                                                             max(1.0, self.left() - 2))
-        except asyncio.TimeoutError:
-            out.selected, problems = None, [f"{req.requirement_id}: no choice before the research deadline"]
+            except asyncio.TimeoutError:
+                selected, problems = None, [f"{req.requirement_id}: no choice before the research deadline"]
+            if selected:
+                break
+        if len(materials) < len(phase):
+            problems.append(f"{len(phase) - len(materials)} of {len(phase)} materials not read")
+        out.selected = selected
         out.problems = [p for p in out.problems if p != UNFINISHED] + problems
         return out
 
@@ -1147,9 +1268,13 @@ class Erp:
                     if link and session.view:  # the record view it opened on, kept for the reader too
                         views[session.page.url] = _strip_refs(session.view)
                     until = self._until(READ_SECONDS)
-                    coverage, _ = await run_worker(session, DETAIL_GOAL.format(material=number, focus=focus),
-                                                   Coverage, deadline=until, max_steps=steps(until, 6, 18),
-                                                   tools=(open_pages,), **_worker_kwargs(notes=False, grounded=False))
+                    # ended SETTLE_SECONDS after every view its pages link to is open: the reader reads them
+                    result, _ = await until_settled(
+                        run_worker(session, DETAIL_GOAL.format(material=number, focus=focus), Coverage,
+                                   deadline=until, max_steps=steps(until, 6, 18), tools=(open_pages,),
+                                   **_worker_kwargs(notes=False, grounded=False)),
+                        lambda: session.__dict__.get("exhausted_at"), SETTLE_SECONDS, self.trace, session.name)
+                    coverage = result[0] if result else None
                 finally:
                     await self._close(session)
             corpus = _corpus(views)

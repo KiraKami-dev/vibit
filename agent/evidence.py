@@ -317,6 +317,9 @@ class RequirementResearch(BaseModel):
     candidates: list[Candidate] = Field(default_factory=list)
     inspected: list[str] = Field(default_factory=list)
     selected: str | None = Field(default=None, description="The exactly matching active material, if any")
+    group_empty: bool = Field(default=False, description="Searched, no hits: a search for the catalogue group "
+                                                         "itself showed the site's own no-hits text and no hit was "
+                                                         "found")
     problems: list[str] = Field(default_factory=list)
 
 

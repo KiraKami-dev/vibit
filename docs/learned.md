@@ -191,3 +191,13 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - confirm_decision after calc could never change a decision (calc returns no bid with missing materials) and
   cost ~8 s before the form; now skipped. A grounded FormReady quoting our own "5,00" was refused four times
   (30 s) and the model then went back a step; form status results are no longer grounded.
+- ERP search on a single-hit group ran to its 16-step cap because the model did not trust a one-row result: it
+  called collect on it, searched again, widened the query (fewer characters of the group) and paged through that.
+  A search submitted while the maintenance pop-up re-rendered the form also lost its query and returned the page
+  footer as "rows". Now the search tool resends a query the result page does not show, drops link-less rows when
+  the site says there are no hits, and ends a complete list with "This is the complete result list"; the harness
+  ends a search worker 20 s after it has a complete hit list of the group (or a second no-hits search for the group,
+  which sets `group_empty`) and reads the list it had. Local probe: single-hit group 13 s, one search call.
+- Detail workers: open_pages now tracks unopened links over all its calls and says when none remain; the harness
+  ends a worker 20 s after that and the reader reads what was opened. Hits are inspected up to 20, those whose rows
+  fit the requirement as known now first; a choice among those does not wait for the others.
