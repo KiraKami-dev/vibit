@@ -118,6 +118,22 @@ class CollectPages(unittest.TestCase):
         self.assertEqual(len(collected.pages), 2)
         self.assertEqual(asked, [base + "2"])
 
+    def test_a_load_more_click_that_showed_nothing_is_clicked_again(self):
+        first = "# Questions\n[img: 1] Answer 1 text\n[e9 button \"Load more\"]\n"
+        more = "# Questions\n[img: 1] Answer 1 text\n[img: 2] Answer 2 text\n[e9 button \"Load more\" disabled]\n"
+        session = FakeSession([first, first, more])
+        collected, _, _ = self.collect(session, {})
+        self.assertIn("Answer 2 text", "\n".join(collected.pages))
+        self.assertEqual(len(session.trace.kinds("collect_stall")), 1)
+
+    def test_a_disabled_load_more_ends_the_list_at_once(self):
+        first = "# Questions\n[img: 1] Answer 1 text\n[e9 button \"Load more\"]\n"
+        end = "# Questions\n[img: 1] Answer 1 text\n[e9 button \"Load more\" disabled]\n"
+        session = FakeSession([first, end])
+        collected, _, _ = self.collect(session, {})
+        self.assertEqual(session.trace.kinds("collect_stall"), [])
+        self.assertTrue(collected.finished)
+
 
     def test_other_lists_keep_the_plain_paging(self):
         session = FakeSession([qa_page(1, "101", next_page=2), qa_page(2, "", frame_loading=True)])

@@ -206,6 +206,7 @@ LINK = re.compile(r'\[(e\d+) link "([^"]*)" -> ([^\]\s]+)\]')
 EMPTY_FRAME = re.compile(r"\[frame ([^\]\s]+)\]\n\[/frame\]")
 SEPARATE = re.compile(r"\[frame [^\]]* \(separate\)\]")
 PAGE_WAITS = 8  # polls (0.7 s apart) for a list page that has not changed or not rendered after the click
+STALL_RETRIES = 2  # clicks more on a list control that is still enabled but showed nothing new
 
 
 def _normal(view: str) -> str:
@@ -274,6 +275,16 @@ def _control(view: str, ref: str) -> tuple[str, str] | None:
         if r == ref:
             return kind, name
     return None
+
+
+def _enabled(view: str, kind: str, name: str) -> list[str]:
+    """Refs of the controls of this kind and name in the view that are not shown as disabled."""
+    out = []
+    for line in view.splitlines():
+        found = REF_LINE.search(line)
+        if found and found.group(2) == kind and found.group(3) == name and "disabled" not in line[found.end():]:
+            out.append(found.group(1))
+    return out
 
 
 def _target(view: str, ref: str) -> str | None:
@@ -352,7 +363,7 @@ def paging_tool(collected: Collected, thorough: bool = False):
             same = [r for r, k, n in REF_LINE.findall(session.view) if k == kind and n == name]
             next_ref = same[0] if same else next_ref
         collected.add(session.view)
-        ref, pages, followed = next_ref, 1, 0
+        ref, pages, followed, stalls = next_ref, 1, 0, 0
         for _ in range(MAX_PAGES):
             before_view = session.view
             before = _normal(before_view)
@@ -371,6 +382,21 @@ def paging_tool(collected: Collected, thorough: bool = False):
             if added and same:
                 pages += 1
                 ref = same[0]
+                stalls = 0
+                continue
+            live = _enabled(session.view, kind, name)
+            if thorough and not added and live and stalls < STALL_RETRIES:
+                # The control is still there and enabled but nothing new showed: on a slow site the click had not
+                # taken effect (a sandbox run kept the first page of a "load more" list only, lost the older
+                # answers with an amendment and bid no_bid). Wait longer and click once more before calling it
+                # the end of the list.
+                stalls += 1
+                await asyncio.sleep(1.5 * stalls)
+                await session.look()
+                if collected.add(session.view):
+                    pages += 1
+                ref = _enabled(session.view, kind, name)[0] if _enabled(session.view, kind, name) else live[0]
+                session.trace.event(session.name, "collect_stall", control=name, retry=stalls)
                 continue
             if added:
                 pages += 1
