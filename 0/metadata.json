@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4MPD6Q5ND5B9NZXN9SEVA5K",
+  "session_id": "01a128bc-5ae3-7c50-a7e3-606359b5b93f",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-11T05:19:14.062414Z",
+  "branch": "codex/erp-view-reuse",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "agent/erp_view_reuse.py",
+    "agent/research.py",
+    "agent/tests/test_erp_view_reuse.py",
+    "agent/tracing.py",
+    "docs/erp-view-reuse-prototype.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6.1-sol",
+  "turn_id": "dd8ba515e5f4",
+  "checkpoint_transcript_start": 5682,
+  "transcript_lines_at_start": 5682,
+  "compact_transcript_start": 697,
+  "token_usage": {
+    "input_tokens": 29057,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2443648,
+    "output_tokens": 8953,
+    "api_call_count": 29,
+    "subagent_tokens_complete": false
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-11T05:19:13.872085Z",
+    "agent_lines": 518,
+    "agent_removed": 272,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 518,
+    "total_lines_changed": 790,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 197,
+      "user_lines_removed": 1,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 11,
+        ".claude/skills/entire-search/SKILL.md": 1,
+        ".codex/hooks.json": 88,
+        "docs/cost-time-analysis.md": 92,
+        "experiments/runs.jsonl": 5
+      },
+      "user_removed_per_file": {
+        ".claude/skills/entire-search/SKILL.md": 1
+      }
+    }
+  ]
+}
