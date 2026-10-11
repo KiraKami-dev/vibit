@@ -857,9 +857,10 @@ MAX_INSPECT = int(os.environ.get("ERP_MAX_INSPECT", "20"))  # the rules cap a us
 # up front cost a third of the ERP detail and reader calls, and records that finished after the requirement's
 # choice were not used anyway (collect() keeps only the records finished by then).
 DEFER_REST = os.environ.get("ERP_DEFER_REST", "1") == "1"
-# The first catalogue-group search a model makes (its page, field and button, the group as the query) is repeated by
-# a helper for the other groups, whose hit lists then need one reader call instead of a search worker each; any
-# group the repeat does not list completely gets its own worker. AGENT_ERP_BATCH=0: a worker per group.
+# After the first catalogue-group search a model makes (its page, field and button, the group as the query), one
+# short model call chooses the query for every other requirement (plan_group_queries); a helper runs those queries in
+# the same field, and each complete hit list needs one reader call instead of a search worker. A group without a
+# query or a complete list gets its own worker. AGENT_ERP_BATCH=0: a worker per group.
 ERP_BATCH = os.environ.get("AGENT_ERP_BATCH", "1") == "1"
 RECIPE_WAIT = 40.0  # how long the other groups wait for the first group's search
 
@@ -969,8 +970,39 @@ def search_recipe(searches: list[dict], group: str) -> dict | None:
     for entry in searches:
         if (entry.get("complete") and entry.get("rows") and _group_key(entry.get("query", "")) == key
                 and entry.get("form_url") and entry.get("field_label")):
-            return {k: entry.get(k, "") for k in ("form_url", "field_label", "submit_label")}
+            return {**{k: entry.get(k, "") for k in ("form_url", "field_label", "submit_label", "query")},
+                    "group": group}
     return None
+
+
+class GroupQuery(BaseModel):
+    requirement: str = Field(description="The requirement id exactly as listed")
+    query: str = Field(description="What to type into the search field to list its catalogue group's materials")
+
+
+class GroupQueries(BaseModel):
+    queries: list[GroupQuery]
+
+
+QUERY_INSTRUCTIONS = """\
+You plan searches in an ERP's material search. One search has already worked: it is shown with the field it was
+typed into and what it listed. For each requirement listed, give the query to type into the same field so that it
+lists the materials of that requirement's catalogue group the same way."""
+
+
+async def plan_group_queries(recipe: dict, groups: dict[str, str]) -> dict[str, str]:
+    """
+    The model's query for each requirement (id -> catalogue group), for the search field of `recipe` (the search
+    that listed the first group completely). One short call; requirement ids it does not answer get no query.
+    """
+    agent = Agent(llm.model(), output_type=GroupQueries, instructions=QUERY_INSTRUCTIONS,
+                  model_settings=llm.settings(thinking=False, timeout=30.0), retries=2)
+    listing = "\n".join(f"- {rid}: catalogue group {group}" for rid, group in groups.items())
+    prompt = (f"Search field: {recipe['field_label']!r}. Query typed: {recipe['query']!r}; it listed every material "
+              f"of catalogue group {recipe['group']}.\n\nRequirements:\n{listing}")
+    plan = (await agent.run(prompt)).output
+    return {q.requirement.strip(): q.query.strip() for q in plan.queries
+            if q.requirement.strip() in groups and q.query.strip()}
 
 
 def _labelled_ref(view: str, label: str, kinds: tuple[str, ...]) -> tuple[str | None, str]:
@@ -1048,6 +1080,9 @@ class Erp:
         self.recipe: dict | None = None
         self.recipe_owner: str | None = None
         self.recipe_ready = asyncio.Event()
+        self.groups: dict[str, str] = {}  # requirement -> catalogue group, of every requirement started
+        self.queries: dict[str, str] = {}  # requirement -> the query the model chose for the repeated search
+        self.planning = asyncio.Lock()
         self.started_at: float | None = None
 
     def left(self) -> float:
@@ -1263,14 +1298,32 @@ class Erp:
                                                                  if k != "text"})
                 self.recipe_ready.set()
 
+    async def _query(self, rid: str) -> str | None:
+        """The model's query for this requirement's group: one planning call for every requirement started that has
+        none yet (later requirements get one call of their own); None when the model gave none."""
+        async with self.planning:
+            if rid not in self.queries:
+                wanted = {r: g for r, g in self.groups.items() if r not in self.queries and r != self.recipe_owner}
+                try:
+                    planned = await asyncio.wait_for(plan_group_queries(self.recipe or {}, wanted), 45)
+                except Exception as error:
+                    planned = {}
+                    self.trace.event("erp", "query_plan_failed", error=f"{type(error).__name__}: {str(error)[:160]}")
+                self.trace.event("erp", "query_plan", queries=planned)
+                self.queries.update({r: planned.get(r, "") for r in wanted})
+            return self.queries.get(rid) or None
+
     async def _repeat_search(self, session: SiteSession, req: EffectiveRequirement,
                              searches: list) -> SearchReport | None:
         """
         The search a model made for the first catalogue group, repeated for this group: the same search page,
-        field and button, with this group as the query. Its complete hit list goes to the reader; anything else
-        (no hits, an incomplete list, a changed page) leaves the group to a search worker of its own.
+        field and button, with the query the model chose for this group. Its complete hit list goes to the reader;
+        anything else (no query, no hits, an incomplete list, a changed page) leaves the group to a search worker.
         """
         recipe = self.recipe or {}
+        query = await self._query(req.requirement_id)
+        if not query:
+            return None
         try:
             if not await self.open(session, recipe["form_url"]):
                 return None
@@ -1281,7 +1334,7 @@ class Erp:
             if field is None or (recipe["submit_label"] and submit is None):
                 self.trace.event(session.name, "search_repeat", group=req.catalog_group, result="controls missing")
                 return None
-            await site_tools.run_search(session, field, req.catalog_group, submit)
+            await site_tools.run_search(session, field, query, submit)
         except Exception as error:
             self.trace.event(session.name, "search_repeat", group=req.catalog_group,
                              result=f"{type(error).__name__}: {str(error)[:160]}")
@@ -1495,6 +1548,7 @@ class Erp:
         if self.started_at is None:
             self.started_at = time.monotonic()
         if req.requirement_id not in self.tasks:
+            self.groups[req.requirement_id] = req.catalog_group
             self.tasks[req.requirement_id] = asyncio.create_task(self.requirement(req))
         return self.tasks[req.requirement_id]
 
