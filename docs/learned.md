@@ -250,3 +250,9 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - Mail search with thinking off took 211 calls instead of 85 and lost end_reserves in one run: keep thinking on.
 - ERP hits whose rows contradict the requirement are read only when needed (ERP_DEFER_REST): detail calls 28-32
   instead of 36-53, $0.112-0.129 per run. Records that finished after a requirement's choice were never used anyway.
+- cost-cut-2: compact ERP views (gate pages, repeated views, the record banner and tab bars once) halved the
+  material reader's text with the same records (8/8 offline); later bid positions entered by the model's mapping
+  cut the form worker to 5 calls. The first group search the model makes is repeated for the other groups
+  (AGENT_ERP_BATCH): ERP search calls 20-22 -> 4. Detail workers end once open_pages finds no link of their record
+  left (ERP_DETAIL_STOP): detail calls 29-39 -> 22-27. Test runs of 4f94f35: 100, 100, 100 at $0.086-0.103.
+- Mail search and mail readers are now about half the cost (42-55 %); the next cuts are there.
