@@ -3,7 +3,7 @@
   "checkpoint_id": "01M4MPRBAEKZW1PSH2Y0TC6R24",
   "strategy": "manual-commit",
   "branch": "codex/erp-view-reuse",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "agent/agent.json"
   ],
@@ -14,13 +14,27 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 7000,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 931200,
-    "output_tokens": 4503,
-    "api_call_count": 8
+    "input_tokens": 7006,
+    "cache_creation_tokens": 627,
+    "cache_read_tokens": 1841329,
+    "output_tokens": 4745,
+    "api_call_count": 10,
+    "subagent_tokens": {
+      "input_tokens": 38,
+      "cache_creation_tokens": 23720,
+      "cache_read_tokens": 4361594,
+      "output_tokens": 11263,
+      "api_call_count": 19
+    }
   }
 }
