@@ -245,6 +245,10 @@ class GapFiller:
             touched = await self.fill(todo)
             if any(g.area == "mail" for g in todo):  # reads that finished before a cut still count
                 await self.resolve_mail()
+            # Every requirement without a choice is chosen again from the facts as they are now: a "none" made
+            # while its stroke reserve was pending reads as "no match" once the reserve is known, and turned a
+            # complete bid into a false no_bid in soak run 83438e79.
+            touched |= {rid for rid in self.o.requirements if self.o.chosen.get(rid) is None}
             await self.reselect(touched)
             new = calculate()
             after = detect_gaps(self.o, new.problems)

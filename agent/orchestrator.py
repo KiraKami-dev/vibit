@@ -383,9 +383,11 @@ class Orchestrator:
         started = time.monotonic()
 
         def read() -> bool:
-            return first.done() or bool(self.board.get("position")) or bool(getattr(self.tender_facts, "positions", None))
+            return bool(self.board.get("position")) or bool(getattr(self.tender_facts, "positions", None))
 
-        while not read() and time.monotonic() - started < TENDER_WATCH_SECONDS:
+        # An attempt that ended without positions (soak run 83438e79: its worker hit the request limit at 58 s) is
+        # retried at once, not only after the whole research.
+        while not read() and not first.done() and time.monotonic() - started < TENDER_WATCH_SECONDS:
             await asyncio.sleep(min(2.0, max(0.01, TENDER_WATCH_SECONDS - (time.monotonic() - started))))
         if read() or self.left() < TENDER_RETRY_SECONDS:
             return
