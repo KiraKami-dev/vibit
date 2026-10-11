@@ -222,3 +222,11 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   link's target on its own when the tab shows no next control (a test run showed followed=1); later views are read
   too; an unfinished Q&A is a gap; and before a no_bid for unmatched requirements the Q&A is re-read once for their
   amendments. Test runs of 2e0ef68: 100 (7:17), 100 (7:14), 100 (9:16).
+- run_9b939cdb78646426 (1af7d11, quality 63.6): one tender read (no merge involved), Q&A collected with "Weitere
+  laden" and complete, yet the three newest answers (a withdrawal and two positions' keys, all in every kept view)
+  were missing from the records: the reader skipped them. A similar pattern exists before this branch
+  (run_c22233db5d990663). run_a75f0ec37b475d89 (77) had the Q&A right; it lost the metal index (mail side). Fixed
+  (9fb3be4): readers list every answer number and answers without a fact get one more reading of that view; a
+  "load more" view now replaces the shorter one even when its button moved or shows disabled (locally 3 overlapping
+  views became one). Test runs: 100 (6:29), 100 (7:55). The Q&A worker still browses on after collect_pages until
+  its step limit (25 to 28 requests); harmless to the answer, but it costs model calls.
