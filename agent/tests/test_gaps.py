@@ -348,6 +348,31 @@ class TenderWatch(unittest.TestCase):
             orchestrator.TENDER_WATCH_SECONDS = saved
         return o, attempts, first
 
+    def test_an_attempt_without_positions_is_retried_at_once(self):
+        import orchestrator
+        from orchestrator import Orchestrator
+        o = Orchestrator.__new__(Orchestrator)
+        o.board, o.trace, o.tender_facts = Board(), Events(), None
+        o.research_deadline = time.monotonic() + 600
+        attempts = []
+
+        async def tender(site, attempt=""):
+            attempts.append(attempt)
+            if attempt:
+                o.tender_facts = SimpleNamespace(positions=["01"])
+
+        o.tender = tender
+
+        async def scenario():
+            first = asyncio.create_task(tender("s"))
+            await o._tender_watch("s", first)
+
+        started = time.monotonic()
+        asyncio.run(scenario())
+        self.assertLess(time.monotonic() - started, orchestrator.TENDER_WATCH_SECONDS / 10)
+        self.assertEqual(attempts, ["", "2"])
+        self.assertEqual(o.tender_facts.positions, ["01"])
+
     def test_a_stalled_tender_gets_a_second_attempt_that_wins(self):
         o, attempts, first = self.run_watch(30)
         self.assertEqual(attempts, ["", "2"])
@@ -439,6 +464,86 @@ class PositionsReadBound(unittest.TestCase):
         finally:
             research_tender._read, research_tender.POSITIONS_READ_SECONDS = saved
         self.assertEqual(calls, [True, False])
+
+
+class LatePositions(unittest.TestCase):
+    def test_positions_from_the_gap_round_reach_the_recalculation_with_fresh_choices(self):
+        """Soak run 83438e79: no positions in the first pass, the tender retry found them, but A-2 kept the
+        "none" chosen while its stroke reserve was pending and the recalculation became a false no_bid."""
+        o = state([], [requirement("A-1"), requirement("A-2")],
+                  [RequirementResearch(requirement_id="A-1", inspected=["M-1"], selected="M-1"),
+                   RequirementResearch(requirement_id="A-2", inspected=["M-2"])],
+                  {"M-1": complete_record("M-1"), "M-2": complete_record("M-2")},
+                  chosen={"A-1": "M-1", "A-2": None})
+        o.research_deadline = time.monotonic() + GAP_TAIL + GAP_MIN_ROUND + 60
+        o._erp = SimpleNamespace(materials={})
+        o.plan.needs = [n for n in o.plan.needs if n.kind != "mails"]
+        filler = GapFiller(o)
+        asked = []
+
+        async def tender():
+            o.tender_facts.positions = [position("01", "A-1"), position("02", "A-2")]
+
+        async def reselect(rids):
+            asked.append(set(rids))
+            o.chosen["A-2"] = "M-2"  # the choice made from the facts as they are now
+
+        def calculate():
+            # stand-in for build_bid + calc: a requirement without a choice would be a no_bid
+            positions = list(o.tender_facts.positions)
+            missing = [p.position for p in positions if o.chosen.get(p.requirement) is None]
+            result = SimpleNamespace(decision="no_bid" if missing else "bid",
+                                     positions=[] if missing else positions)
+            return Calculation(result, {}, [])
+
+        filler.tender, filler.reselect = tender, reselect
+        o.mail_facts.approval = object()
+        best = asyncio.run(filler.run(calculate(), calculate))
+        self.assertIn("A-2", asked[0])
+        self.assertEqual(best.decision, "bid")
+        self.assertEqual([p.position for p in best.result.positions], ["01", "02"])
+        self.assertEqual(o.trace.kinds("gap_filled")[0]["gap"], "tender/positions")
+
+
+class PartialRecords(unittest.TestCase):
+    def test_a_partly_read_kind_is_reread_with_a_hint_then_searched(self):
+        """Soak run a75f0ec3: the metal index message was read twice with one of its three windows."""
+        import dataclasses as dc
+
+        import research_mail
+        kind = research_mail.Kind(name="metal_indices", subject="s", sender="x", sender_form="name", site="m",
+                                  what="metal index rates", schema=research_mail.SCHEMAS["metal_indices"])
+        o = runnable(GAP_TAIL + GAP_MIN_ROUND + 300)
+        o.reference = "T-1"
+        o.mail_kinds, o.mail_sessions = [kind], [object()]
+        o.mail_results = {"metal_indices": SimpleNamespace(kind=kind, kept=["view"], records=["partial"],
+                                                           stopped=False)}
+        filler = GapFiller(o)
+        whats, searched = [], []
+
+        async def read_message(view, k, reference):
+            whats.append(k.what)
+            return "complete"
+
+        async def mails(kinds):
+            searched.append(list(kinds))
+
+        gap = Gap("mail", "metal_indices", "position 1: no metal index rate valid on 2027-01-25")
+        filler.mails = mails
+        saved = research_mail.read_message
+        research_mail.read_message = read_message
+        try:
+            self.assertEqual(filler.limit(gap), 2)
+            asyncio.run(filler.fill([gap]))
+            asyncio.run(filler.fill([gap]))
+        finally:
+            research_mail.read_message = saved
+        self.assertEqual(len(whats), 1)
+        self.assertIn("no metal index rate valid on 2027-01-25", whats[0])
+        self.assertIn("not only the first", whats[0])
+        self.assertEqual(o.mail_results["metal_indices"].records, ["partial", "complete"])
+        self.assertEqual(searched, [["metal_indices"]])  # the second round searches
+        self.assertTrue(dc.is_dataclass(kind))
 
 
 if __name__ == "__main__":
