@@ -63,7 +63,9 @@ class FrozenPageTest(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as directory, \
                         mock.patch.object(extract, "WALK_SECONDS", 1.0), \
                         mock.patch.object(extract, "FRAME_SECONDS", 1.0), \
-                        mock.patch.object(browser_tools, "FRAME_SECONDS", 1.0):
+                        mock.patch.object(browser_tools, "FRAME_SECONDS", 1.0), \
+                        mock.patch.object(browser_tools, "PROBE_SECONDS", 1.0), \
+                        mock.patch.object(SiteSession, "reopen", mock.AsyncMock(return_value=False)) as reopen:
                     session = SiteSession(SITE, context, Trace(directory), pages=[frozen])
                     started = time.monotonic()
                     view = await session.look(fresh=True)
@@ -72,8 +74,9 @@ class FrozenPageTest(unittest.TestCase):
                     alive = await SiteSession(SITE, context, Trace(directory), pages=[other]).look(fresh=True)
                     session.trace.file.close()
                 await browser.close()
-                return hung, view, ref, seconds, alive
-        hung, view, ref, seconds, alive = asyncio.run(run())
+                return hung, view, ref, seconds, alive, reopen.called
+        hung, view, ref, seconds, alive, reopened = asyncio.run(run())
+        self.assertTrue(reopened)  # a dead tab is opened again (here: that fails, and the look stays bounded)
         self.assertTrue(hung)
         self.assertIn("does not respond", view)
         self.assertIsNone(ref)

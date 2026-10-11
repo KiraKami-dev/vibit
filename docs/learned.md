@@ -230,3 +230,8 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   "load more" view now replaces the shorter one even when its button moved or shows disabled (locally 3 overlapping
   views became one). Test runs: 100 (6:29), 100 (7:55). The Q&A worker still browses on after collect_pages until
   its step limit (25 to 28 requests); harmless to the answer, but it costs model calls.
+- Dead tabs (runs ec4e, d253): a page that stopped answering script calls cost every later call its full timeout
+  (ec4e: the bid form 8 min, unsigned, quality 0; d253: an ERP worker 578 s on one tool call, a false no_bid). Now
+  settle/look reopen such a tab (same URL in a new tab, keeping the site session and the wizard step; else a fresh
+  start) and every worker tool call is cut off after STUCK_SECONDS without an answer. Test runs 565c and 8c1e: 100
+  and 100; in 565c a hung mail tab was reopened in about 1 s.

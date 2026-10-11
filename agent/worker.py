@@ -4,12 +4,15 @@ the browser tools and ends by returning the goal's typed result.
 """
 import asyncio
 import dataclasses
+import functools
+import inspect
 import re
 import time
 from typing import TypeVar
 
 import clef
 import llm
+import browser_tools
 from browser_tools import TOOLS, Deps, SiteSession, unseen_values
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.capabilities.process_history import ProcessHistory
@@ -116,6 +119,54 @@ def steps_for(base: int, deadline: float | None, *, per_step: float = 8.0, most:
     return max(base, min(int(base * most), int((deadline - time.monotonic()) / per_step)))
 
 
+def guarded(tool, session: SiteSession):
+    """`tool` cut off when the worker's page stops answering while it runs (watch_page); others as they are."""
+    if not inspect.iscoroutinefunction(tool):
+        return tool
+
+    @functools.wraps(tool)
+    async def run(*args, **kwargs):
+        return await watch_page(session, tool(*args, **kwargs))
+    return run
+
+
+async def watch_page(session: SiteSession, call):
+    """
+    Run one tool call while checking that the session's page still answers script calls. A tab that misses them
+    for STUCK_SECONDS is dead (run ec4e: the bid form hung 8 minutes; run d253: an ERP worker waited 578 s on one
+    call): the call is cut off, the page is opened again (SiteSession.reopen: a new tab, else a fresh start) and the
+    model gets the new view. A slow but answering page is never cut off.
+    """
+    task = asyncio.ensure_future(call)
+    silent = None
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=2 * browser_tools.PROBE_SECONDS)
+            if done:
+                return task.result()
+            if session.starting or not any(not page.is_closed() for page in session.pages):
+                silent = None
+                continue
+            if await session._answers() != "hung":
+                silent = None
+                continue
+            now = time.monotonic()
+            silent = silent or now - browser_tools.PROBE_SECONDS
+            if now - silent < browser_tools.STUCK_SECONDS:
+                continue
+            task.cancel()
+            await asyncio.wait({task}, timeout=10)
+            session.trace.event(session.name, "tool_cut_off", seconds=round(now - silent, 1))
+            ok = await session.reopen("a tool call waited on a page that answers no script call")
+            view = await session.look() if ok else ""
+            return ("The page stopped answering during this action, so the action was cut off and the website was "
+                    f"opened again{'' if ok else ', which failed'}. Check what the page shows now; an action that "
+                    f"did not finish may need doing again.\n\n{view}")
+    finally:
+        if not task.done():
+            task.cancel()
+
+
 async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, context: str = "",
                      deadline: float | None = None, max_steps: int = 40, thinking: bool = False,
                      grounded: bool = True, tools: tuple = (), notes: bool = True
@@ -132,7 +183,8 @@ async def run_worker(session: SiteSession, goal: str, output_type: type[T], *, c
         "Record every fact you establish with note() as soon as you have it, then return the result.",
         "Return the result as soon as you have it.")
     agent = Agent(llm.model(), output_type=output_type, deps_type=Deps, instructions=instructions,
-                  tools=[*browser, *tools, *clef.tools()], model_settings=llm.settings(thinking), retries=4,
+                  tools=[guarded(tool, session) for tool in (*browser, *tools)] + list(clef.tools()),
+                  model_settings=llm.settings(thinking), retries=4,
                   capabilities=[ProcessHistory(_forget_old_views)])
     if grounded:
         @agent.output_validator
