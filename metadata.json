@@ -3,7 +3,7 @@
   "checkpoint_id": "01M4MNGNQ7P7SGBAX6FMK859W1",
   "strategy": "manual-commit",
   "branch": "codex/reader-kernel",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     "docs/learned.md",
     "docs/radical-efficiency-plan.md"
@@ -15,14 +15,21 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 24332,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 589952,
-    "output_tokens": 4129,
-    "api_call_count": 17,
+    "input_tokens": 26360,
+    "cache_creation_tokens": 1127536,
+    "cache_read_tokens": 301415306,
+    "output_tokens": 508740,
+    "api_call_count": 831,
     "subagent_tokens_complete": false
   }
 }
