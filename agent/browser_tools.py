@@ -121,6 +121,13 @@ def _budget(attempt: int) -> float:
     return min(START_SECONDS, ATTEMPT_SECONDS[min(attempt, len(ATTEMPT_SECONDS)) - 1])
 
 
+async def _close_quietly(page: Page) -> None:
+    try:
+        await asyncio.wait_for(page.close(), 10)
+    except Exception:
+        pass
+
+
 async def _close_context(context: BrowserContext | None) -> None:
     if context is None:
         return
@@ -143,6 +150,7 @@ class SiteSession:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     stamp: int = 0
     logins: int = 0
+    restarts: int = 0  # times the site was started again because its page stopped answering (reopen)
     seen: str = ""  # every view's text this session, to check notes against
     shown: tuple = ()  # (url, title, view) the model has now, so an unchanged page is not sent again
     base: tuple = ()  # the same for the latest view it got in full; changes are told against this one
@@ -478,18 +486,70 @@ class SiteSession:
 
     async def settle(self) -> None:
         """Let the page finish and run the generic helpers, but never longer than SETTLE_SECONDS: a click that never
-        returns (seen on a cookie notice) must not block the tab for minutes."""
+        returns (seen on a cookie notice) must not block the tab for minutes. A page that answers no script call
+        any more is opened again (reopen)."""
+        alive = True
         try:
-            await asyncio.wait_for(self._settle_fresh(), SETTLE_SECONDS)
+            alive = await asyncio.wait_for(self._settle_fresh(), SETTLE_SECONDS)
         except asyncio.TimeoutError:
             self.events.append("the page kept loading; continuing with what it shows")
             self.trace.event(self.name, "helper_error", helper="settle", error=f"timeout after {SETTLE_SECONDS} s")
+            alive = await self._answers() != "hung"
+        if not alive and not self.starting:
+            await self.reopen("the page answers no script call")
 
-    async def _settle_fresh(self) -> None:
+    async def _settle_fresh(self) -> bool:
         self.logins = 0  # a timeout later in the run may need a fresh sign-in
-        await self._settle()
+        return await self._settle()
 
-    async def _settle(self) -> None:
+    async def reopen(self, why: str) -> bool:
+        """
+        Give up a tab whose page stopped answering (run ec4e: the bid form hung for 8 minutes and every call into
+        it waited out its timeout). The same URL opens in a new tab of the same context first: the site's session,
+        and with it a server-side wizard's state, lives in the context's cookies. When that page does not answer
+        either, the site starts again in a fresh context (signed in anew; what the old session held is gone, which
+        `restarts` tells). True when a page answers again.
+        """
+        url = self.page.url if any(not p.is_closed() for p in self.pages) else self.site["url"]
+        if not url.startswith("http"):
+            url = self.site["url"]
+        self.trace.event(self.name, "helper", action="reopen", why=why, url=url[:120])
+        old, self.pages = list(self.pages), []
+        for page in old:  # in the background: closing a hung tab may itself take a while
+            asyncio.create_task(_close_quietly(page))
+        try:
+            page = await asyncio.wait_for(self.context.new_page(), STUCK_SECONDS)
+            self._watch(page)
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=GOTO_SECONDS * 1000)
+            except Exception:
+                pass  # still loading: whether it answers decides
+            if await self._wait_answer(page):
+                try:
+                    await asyncio.wait_for(self._settle(), SETTLE_SECONDS)
+                except asyncio.TimeoutError:
+                    pass  # it answers; still loading is fine
+                self.events.append("the page stopped answering; it was opened again in a new tab (check where the "
+                                   "form stands)")
+                return True
+        except Exception as error:
+            self.trace.event(self.name, "helper_error", helper="reopen", error=f"{type(error).__name__}: {error}"[:160])
+        self.trace.event(self.name, "helper", action="restart", why="the reopened page does not answer either")
+        await self._close_pages()
+        self.restarts += 1
+        try:
+            fresh = await self._fresh_context("restart")
+            if fresh is not None:
+                self.context, self.scripted = fresh, None
+            await self.start(attempts=2, until=time.monotonic() + START_SECONDS)
+        except Exception as error:
+            self.trace.event(self.name, "helper_error", helper="restart", error=f"{type(error).__name__}: {error}"[:160])
+            return False
+        self.events.append("the page stopped answering; the website was opened again from its start page and "
+                           "signed in anew: steps not yet submitted are gone")
+        return True
+
+    async def _settle(self) -> bool:
         page = self.page
         for _ in range(6):
             try:
@@ -500,13 +560,14 @@ class SiteSession:
             if not await self._wait_answer(page):  # its helpers would hang on every page call
                 self.trace.event(self.name, "helper_error", helper="settle",
                                  error=f"the page answers no script call ({page.url[:80]})")
-                return
+                return False
             if (await self._safely(self._login, page) or await self._safely(self._cookies, page)
                     or await self._safely(self._error_page, page) or await self._safely(self._human_check, page)):
                 page = self.page
                 continue
             break
         await self._collect_closed(page)
+        return True
 
     async def _safely(self, helper, page: Page) -> bool:
         """A helper that fails (a slow page, a detached element) just did nothing; the model sees the page as is. A
@@ -621,6 +682,9 @@ class SiteSession:
                 self.view = await observe(page, str(self.stamp))
             except Exception as error:
                 await asyncio.sleep(1.0)
+                if not self.starting and await self._answers(page) == "hung" and await self.reopen(
+                        "the page answers no script call while it is read"):
+                    page = self.page
                 try:
                     self.view = (await observe(page, str(self.stamp)) if not page.is_closed()
                                  else f"(page error {error})")
