@@ -12,7 +12,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import calc  # noqa: E402
 from board import Board, Source  # noqa: E402
 from evidence import Requirement, SpecResult  # noqa: E402
-from orchestrator import Orchestrator, answer_from, rules_text, safe_calculate, scenario_time  # noqa: E402
+from orchestrator import (  # noqa: E402
+    Need,
+    Orchestrator,
+    Plan,
+    answer_from,
+    complete_plan,
+    rules_text,
+    safe_calculate,
+    scenario_time,
+)
 
 MATERIAL = calc.Material(material_number="M-1", free_stock=10, stock_lead_time_weeks=2, production_lead_time_weeks=6)
 CONDITION = calc.PriceCondition(valid_from=date(2026, 1, 1), scales=[calc.PriceScale(min_quantity=0, price=D("10"))])
@@ -32,6 +41,16 @@ class SafeCalculate(unittest.TestCase):
         self.assertEqual([p.position for p in result.positions], ["1"])
         self.assertEqual(blank, {})
         self.assertEqual(problems, [])
+
+    def test_a_failing_pool_leaves_the_other_pool(self):
+        heavy = MATERIAL.model_copy(update={"allocation_mass": D("1")})
+        good = calc.SetupPool(key="P-A", fee=D("5.00"), members=["1"])
+        weightless = calc.SetupPool(key="P-B", fee=D("5.00"), members=["2"])  # no allocation mass: cannot split
+        bid = self.bid(position("1", material=heavy), position("2")).model_copy(
+            update={"setup_pools": [good, weightless]})
+        result, _, problems = safe_calculate(bid)
+        self.assertEqual({d.position: d.pool_allocation for d in result.debug}, {"1": D("5.00")})
+        self.assertEqual(len(problems), 1)
 
     def test_missing_carton_size_blanks_packaging_keeps_unit_price(self):
         tariff = calc.PackagingTariff(price_per_carton=D("3"))
@@ -72,8 +91,29 @@ class Helpers(unittest.TestCase):
         orchestrator.blank_hints = {}
         pool = SimpleNamespace(members=["1"])
         tariff = calc.PackagingTariff(price_per_carton=D("3"))
-        orchestrator._unknown_clauses(p, SimpleNamespace(packaging=tariff), pool, None)
+        orchestrator._unknown_clauses(p, SimpleNamespace(packaging=tariff), [pool], None)
         self.assertEqual(orchestrator.blank_hints, {})
+
+
+class CompletePlan(unittest.TestCase):
+    """A plan that dropped a fact kind gets it back: tender and mails from the brief's roles, the rest from the
+    websites no other kind holds."""
+
+    IDS = {"bids", "docs", "stock", "inbox"}
+    BRIEFING = SimpleNamespace(bid_site="bids", mail_site="inbox")
+
+    def test_missing_kinds_are_filled_in(self):
+        plan = Plan(needs=[Need(kind="specification", site="docs", why="rule 2")])
+        done, filled = complete_plan(plan, self.BRIEFING, self.IDS)
+        self.assertEqual({(n.kind, n.site) for n in done.needs},
+                         {("specification", "docs"), ("tender", "bids"), ("mails", "inbox"), ("materials", "stock")})
+        self.assertEqual(sorted(filled), ["mails@inbox", "materials@stock", "tender@bids"])
+
+    def test_complete_plan_is_unchanged(self):
+        plan = Plan(needs=[Need(kind=k, site=s, why="x") for k, s in
+                           (("tender", "bids"), ("specification", "docs"), ("materials", "stock"),
+                            ("mails", "inbox"))])
+        self.assertEqual(complete_plan(plan, self.BRIEFING, self.IDS), (plan, []))
 
 
 def bare_orchestrator(approval=None) -> Orchestrator:
