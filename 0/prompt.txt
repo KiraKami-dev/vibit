@@ -1,0 +1,41 @@
+# AGENTS.md instructions for /Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals
+
+<INSTRUCTIONS>
+<!-- entire-graph:begin -->
+This repo has the entire-graph code graph installed. Before exploring code with
+grep/find/whole-file reads, read .entire/graph-agent.md — resolution-first guidance
+for using graph retrieval, focused source inspection, and verification.
+@.entire/graph-agent.md
+<!-- entire-graph:end -->
+
+</INSTRUCTIONS>
+
+---
+
+<environment_context>
+  <cwd>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals</cwd>
+  <shell>zsh</shell>
+  <current_date>2026-10-11</current_date>
+  <timezone>Europe/Berlin</timezone>
+  <filesystem><workspace_roots><root>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals</root></workspace_roots><permission_profile type="managed"><file_system type="restricted"><entry access="read"><special>:root</special></entry><entry access="write"><path>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals</path></entry><entry access="write"><special>:slash_tmp</special></entry><entry access="write"><special>:tmpdir</special></entry><entry access="read"><path>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.git</path></entry><entry access="read"><path>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.agents</path></entry><entry access="read"><path>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.codex</path></entry><entry access="read"><path>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.aws</path></entry></file_system></permission_profile></filesystem>
+</environment_context>
+
+---
+
+Can you (only make changes in a subtree or so) analyze how we can drive down cost and time? With the decision model cleft provided? Somehow else? Also check the CLAUDE.md
+
+---
+
+Can you dig deeper, maybe with subagents, analyzing other teams, our commits. And then give us a real good overview.
+
+---
+
+"Two Haiku runs and four GLM runs lost substantial quality" maybe also as we itereated only on one model and it kind of adapted? But others on the leaderboard also seem to use Qwen still
+
+---
+
+So to clarify: we are talking time and tokens
+
+---
+
+Can you (in a subtree) do changes to trim cost? Then you can also submit etc. as test runs to show it works. And what about the Clef model that isnot an option?
