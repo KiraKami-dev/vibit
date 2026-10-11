@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4MKJ48JF2AH9SFJKGXFSWJS",
+  "session_id": "01a128bc-5ae3-7c50-a7e3-606359b5b93f",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-11T04:29:29.022308Z",
+  "branch": "codex/reader-kernel",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [],
+  "agent": "Codex",
+  "model": "gpt-6.1-sol",
+  "turn_id": "8bea01907466",
+  "checkpoint_transcript_start": 4403,
+  "transcript_lines_at_start": 4403,
+  "compact_transcript_start": 553,
+  "token_usage": {
+    "input_tokens": 14416,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 554240,
+    "output_tokens": 2907,
+    "api_call_count": 9,
+    "subagent_tokens_complete": false
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 203,
+      "user_lines_removed": 1,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 11,
+        ".claude/skills/entire-search/SKILL.md": 1,
+        ".codex/hooks.json": 88,
+        "docs/cost-time-analysis.md": 92,
+        "experiments/runs.jsonl": 11
+      },
+      "user_removed_per_file": {
+        ".claude/skills/entire-search/SKILL.md": 1
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 100,
+      "user_lines_removed": 1,
+      "agent_lines_added": 96,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 11,
+        ".claude/skills/entire-search/SKILL.md": 1,
+        ".codex/hooks.json": 88
+      },
+      "user_removed_per_file": {
+        ".claude/skills/entire-search/SKILL.md": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 100,
+      "user_lines_removed": 1,
+      "agent_lines_added": 103,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 11,
+        ".claude/skills/entire-search/SKILL.md": 1,
+        ".codex/hooks.json": 88
+      },
+      "user_removed_per_file": {
+        ".claude/skills/entire-search/SKILL.md": 1
+      }
+    }
+  ]
+}
