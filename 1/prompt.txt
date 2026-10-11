@@ -4769,3 +4769,60 @@ If this event is something the user would act on now, send a PushNotification. R
 <event>04:26 run_34090ff418271431 95c6709 quality=100 8.8min $0.122 signed</event>
 If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>abf0de9d534fdb5a5</task-id>
+<tool-use-id>toolu_01X8aKDwtUegNRXAUXamwWNS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/abf0de9d534fdb5a5.output</output-file>
+<status>completed</status>
+<summary>Agent "Generalize bid form for private" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Run ec4e failed because the bid form's tab stopped answering script calls and nothing ever replaced it. That is now fixed generically for every phase, not just the form. Main (972810c) is merged, the tests pass (341), and both sandbox runs scored quality 100. The branch is `worktree-agent-abf0de9d534fdb5a5`, head dd07a97, committed and not pushed.
+
+**Cause, from the logs**
+- **Run ec4e:**
+  - At 441 s, the first choice click in the form timed out and the tab went dead.
+  - Detection worked: each `settle()` reported "the page answers no script call", but nothing replaced the tab. Every later tool call waited out its timeouts (about 115 s each) on the same dead page, and the form pass used up its 496 s that way.
+  - The first sign pass started at 976 s. The model navigated to the same URL, which brought the page back. The page hung again at 1047 s and the deadline hit at 1110 s, so the run never sent an answer.
+- **Run d253:** same class. The ERP worker for HZ-2170 got the same dead-page report at 167 s. Its `open_pages` call then hung until 685 s, after a single model request.
+
+**Fix**
+- **Reopen a dead tab** (`browser_tools.py`): a new `reopen()` first opens the same URL in a new tab of the same browser context. That keeps the site's sign-in and the wizard's step on the server; the local test confirms the form comes back at the step it was on. If the new tab doesn't answer either, the site is started again in a fresh context and signed in anew, and a `restarts` counter is raised.
+  - `settle()` and `look()` call it whenever the page stops answering.
+  - Starts are left alone; they already handle hung pages themselves.
+- **Cut off hung tool calls** (`worker.py`): every tool call of every worker is now watched (`watch_page`). If the worker's page misses script calls for 20 s, the call is cancelled, the page reopened, and the model gets the new view. A slow page that still answers is never cut off.
+- **Form and signing** (`submit.py`):
+  - The early bid-flow pass's session keep-alive (during research) reopens a dead tab right away and redoes its steps.
+  - After a fresh-context restart, the positions counted as entered are cleared, so the review and totals match what the restarted form really holds. The earlier control mapping is kept for re-entering them.
+  - Together with the repeating sign passes from before, a dead page now costs about 20 to 40 s instead of the rest of the run.
+
+**Tests**
+- New `tests/test_dead_page.py`: a local wizard server whose page is frozen mid-form.
+  - A look reopens the form at step 2 within 40 s, keeping the session.
+  - `settle()` recovers the same way.
+  - When a new tab can't be opened, the site restarts in a fresh context.
+  - A research tool stuck on a hung page is cut off and the page reopened, while a slow but answering tool runs to the end.
+  - A restart clears the entered positions.
+- I changed the existing frozen-page test in `tests/test_hang.py`: it now expects the reopen. The reopen is stubbed there, so the test no longer reaches example.com over the network.
+
+**Sandbox runs** (commit 3aae806, experiment `dead-tab-recovery`, both recorded in `experiments/runs.jsonl`):
+
+| Run | Quality | Research done | Form | Signed at |
+| --- | --- | --- | --- | --- |
+| 565c | 100 | 266 s | 40 s | 318 s |
+| 8c1e | 100 | 313 s | 84 s | 424 s |
+
+- **565c:** a mail tab hung mid-research and was reopened within about 1 s, and the run continued.
+- **8c1e:**
+  - At 36 s a tender-portal research worker's tab reported a dead page, but no reopen followed.
+  - My guess is that the site's start was still running at that moment, since reopen deliberately stays out of starts; I did not confirm this.
+  - The run reached 100 anyway.
+
+**Earlier in this task:** the form generalization and signing work reported before is all on this branch. Its last two sandbox runs (0b23 and 1124) also scored 100.
+
+I touched `browser_tools.py` and `worker.py`, which other agents work on; the changes are additive, but they need a look when merging. I added a bullet to `docs/learned.md`. All paths are under `/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-abf0de9d534fdb5a5/`.</result>
+<usage><subagent_tokens>330503</subagent_tokens><tool_uses>222</tool_uses><duration_ms>9106289</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-abf0de9d534fdb5a5</worktreePath><worktreeBranch>worktree-agent-abf0de9d534fdb5a5</worktreeBranch></worktree>
+</task-notification>
