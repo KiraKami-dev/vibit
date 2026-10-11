@@ -1,0 +1,1 @@
+What do you let the agent do in a kernel now? And could we expand it (if successful)?
