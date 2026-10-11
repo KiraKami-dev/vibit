@@ -100,6 +100,7 @@ Both pack this directory without what `.gitignore` excludes.
 | `CLEF_BASE_URL`, `CLEF_API_KEY` | runs, `atira scout --env`, when Clef is hosted | the hosted Clef |
 | `LLM_BACKEND`, `LLM_MODEL`, `LLM_EFFORT` | you (`agent/.env` locally) | `anthropic` runs the agents on Claude (default `claude-haiku-5-5`) instead of Qwen; see `llm.py` |
 | `ANTHROPIC_API_KEY` | team secret; `agent/.env` locally | the team's own Anthropic key; without it the run uses Qwen |
+| `OPENROUTER_API_KEY`, `LLM_PROVIDER` | team secret; you | `LLM_BACKEND=openrouter` (default `z-ai/glm-5.3-flash`, pinned to `fireworks`) through `$LLM_PROXY_URL/openrouter/v1` |
 | `ANTHROPIC_BASE_URL` | runs (`$LLM_PROXY_URL/anthropic`) | the metering proxy for Anthropic calls |
 
 Locally, `agent/.env` (gitignored, see `.env.example`) is loaded at start; variables already set win.
