@@ -240,3 +240,13 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
   292 and 307 requests ($0.127, $0.145) for 9fb3be4, where the Q&A worker alone used 25 and 28. The 11:12 run lost
   its time to model stalls (a 180 s reader timeout delayed the positions to 262 s, the tender watch fired, and
   verify timed out), not to the Q&A.
+- Cost per caller (llm.USAGE, printed after the run summary): Qwen bills uncached input $0.15/M, cached input about
+  $0.016/M (cache blocks of 1568 tokens; most calls only reuse the system prompt block) and output $0.47/M. Baseline
+  run_92294f32 ($0.145, 297 calls): mail search workers 26 %, ERP detail workers 21 %, ERP/spec readers 11 %, spec
+  attempts 9 %, tender workers 7 %, mail readers 6 %. Step count times view size is the lever, not caching.
+- Time cuts (cost-cut): the mail planner waited 45 s for tender keys that arrive at ~120 s, so every run planned from
+  the brief alone 45 s late; no wait now. verify_board (18-47 s) runs beside the first answer. Six mail tabs instead
+  of four. Seven test runs, all 100: 264-381 s against 375-533 s before.
+- Mail search with thinking off took 211 calls instead of 85 and lost end_reserves in one run: keep thinking on.
+- ERP hits whose rows contradict the requirement are read only when needed (ERP_DEFER_REST): detail calls 28-32
+  instead of 36-53, $0.112-0.129 per run. Records that finished after a requirement's choice were never used anyway.
