@@ -849,6 +849,11 @@ MAX_INSPECT = int(os.environ.get("ERP_MAX_INSPECT", "20"))  # the rules cap a us
 # up front cost a third of the ERP detail and reader calls, and records that finished after the requirement's
 # choice were not used anyway (collect() keeps only the records finished by then).
 DEFER_REST = os.environ.get("ERP_DEFER_REST", "1") == "1"
+# The first catalogue-group search a model makes (its page, field and button, the group as the query) is repeated by
+# a helper for the other groups, whose hit lists then need one reader call instead of a search worker each; any
+# group the repeat does not list completely gets its own worker. AGENT_ERP_BATCH=0: a worker per group.
+ERP_BATCH = os.environ.get("AGENT_ERP_BATCH", "1") == "1"
+RECIPE_WAIT = 40.0  # how long the other groups wait for the first group's search
 
 # A worker that has what it came for (a complete hit list; every view of a record opened) but keeps going is ended
 # this many seconds later; what it has is then read from its pages.
@@ -944,6 +949,24 @@ def inspection_order(req: EffectiveRequirement, candidates: list[Candidate]) -> 
     return first, list(other)[:MAX_INSPECT - len(first)]
 
 
+def search_recipe(searches: list[dict], group: str) -> dict | None:
+    """The search that listed the group completely with the group itself as the query: where and with which
+    controls it was made, for repeating it with another group; None without one."""
+    key = _group_key(group)
+    for entry in searches:
+        if (entry.get("complete") and entry.get("rows") and _group_key(entry.get("query", "")) == key
+                and entry.get("form_url") and entry.get("field_label")):
+            return {k: entry.get(k, "") for k in ("form_url", "field_label", "submit_label")}
+    return None
+
+
+def _labelled_ref(view: str, label: str, kinds: tuple[str, ...]) -> tuple[str | None, str]:
+    """The ref of the control of one of `kinds` whose label is exactly `label`; (None, why) otherwise."""
+    found = [ref for ref, kind, text in re.findall(r'\[(e\d+) (\w+) "((?:[^"\\]|\\.)*)"', view)
+             if kind in kinds and text == label]
+    return (found[0], "") if len(found) == 1 else (None, f"{len(found)} controls labelled {label!r}")
+
+
 def _group_key(text: str) -> str:
     return re.sub(r"[\s\-_./]+", "", text).casefold()
 
@@ -1008,6 +1031,10 @@ class Erp:
         self.idle_limit = float(os.environ.get("ERP_IDLE_SECONDS", "120"))  # the ERP drops idle sessions
         self.partial: dict[str, RequirementResearch] = {}  # requirement -> research whose search has finished
         self.deferred: dict[str, list[str]] = {}  # requirement -> hits not inspected (see inspect_deferred)
+        # the first search a model made for a catalogue group, repeated for the other groups (ERP_BATCH)
+        self.recipe: dict | None = None
+        self.recipe_owner: str | None = None
+        self.recipe_ready = asyncio.Event()
         self.started_at: float | None = None
 
     def left(self) -> float:
@@ -1204,6 +1231,59 @@ class Erp:
         stops without a result leaves its hit list to the salvage reader."""
         views = _keep_views(session)
         session.__dict__["searches"] = searches  # the search tool records every search here
+        if ERP_BATCH:
+            if self.recipe_owner is None:
+                self.recipe_owner = req.requirement_id
+            elif not self.recipe_ready.is_set():
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(self.recipe_ready.wait(), RECIPE_WAIT)
+            if self.recipe is not None and self.recipe_owner != req.requirement_id:
+                report = await self._repeat_search(session, req, searches)
+                if report is not None:
+                    return report
+        try:
+            return await self._search_worker(session, req, until, searches, views)
+        finally:
+            if self.recipe_owner == req.requirement_id and not self.recipe_ready.is_set():
+                self.recipe = search_recipe(searches, req.catalog_group)
+                self.trace.event("erp", "search_recipe", recipe={k: v for k, v in (self.recipe or {}).items()
+                                                                 if k != "text"})
+                self.recipe_ready.set()
+
+    async def _repeat_search(self, session: SiteSession, req: EffectiveRequirement,
+                             searches: list) -> SearchReport | None:
+        """
+        The search a model made for the first catalogue group, repeated for this group: the same search page,
+        field and button, with this group as the query. Its complete hit list goes to the reader; anything else
+        (no hits, an incomplete list, a changed page) leaves the group to a search worker of its own.
+        """
+        recipe = self.recipe or {}
+        try:
+            if not await self.open(session, recipe["form_url"]):
+                return None
+            view = await session.look()
+            field, _ = _labelled_ref(view, recipe["field_label"], ("textbox", "searchbox", "combobox"))
+            submit, _ = _labelled_ref(view, recipe["submit_label"], ("button",)) if recipe["submit_label"] else (
+                None, "")
+            if field is None or (recipe["submit_label"] and submit is None):
+                self.trace.event(session.name, "search_repeat", group=req.catalog_group, result="controls missing")
+                return None
+            await site_tools.run_search(session, field, req.catalog_group, submit)
+        except Exception as error:
+            self.trace.event(session.name, "search_repeat", group=req.catalog_group,
+                             result=f"{type(error).__name__}: {str(error)[:160]}")
+            return None
+        listing = group_listing(searches, req.catalog_group)
+        if listing is None:
+            self.trace.event(session.name, "search_repeat", group=req.catalog_group, result="no complete hit list")
+            return None
+        report = await _salvage_search(session, {}, req.catalog_group, listing["text"])
+        self.trace.event(session.name, "search_repeat", group=req.catalog_group,
+                         result=f"{len(report.candidates)} hits" if report else "reader found none")
+        return report
+
+    async def _search_worker(self, session: SiteSession, req: EffectiveRequirement, until: float | None,
+                             searches: list, views: dict[str, str]) -> SearchReport | None:
 
         def settled() -> float | None:
             """When the worker had its answer: a complete hit list of the group, or a second search for the group

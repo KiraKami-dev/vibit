@@ -413,9 +413,20 @@ async def _submit(session: SiteSession, field_ref: str, query: str, submit_ref: 
     return None
 
 
+def control_label(view: str, ref: str | None) -> str:
+    """The label a view shows for the control `ref` ('' if none)."""
+    if not ref:
+        return ""
+    found = re.search(r"\[" + re.escape(ref) + r' \w+ "((?:[^"\\]|\\.)*)"', view)
+    return found.group(1) if found else ""
+
+
 async def run_search(session: SiteSession, field_ref: str, query: str, submit_ref: str | None = None) -> str:
     """Fill the search field, submit, and list every row of the result list that shows. A result page that does
     not show the query (a pop-up or re-rendered form swallowed it) is searched once more."""
+    # where the search was made and with which controls, so the same search can be repeated for another query
+    form = {"form_url": session.page.url, "field_label": control_label(session.view, field_ref),
+            "submit_label": control_label(session.view, submit_ref)}
     failed = await _submit(session, field_ref, query, submit_ref)
     if failed:
         return failed
@@ -449,7 +460,7 @@ async def run_search(session: SiteSession, field_ref: str, query: str, submit_re
     session.__dict__.setdefault("searches", []).append(
         {"query": query, "rows": len(listing.rows) if reached or any(r.links for r in listing.rows) else 0,
          "no_hits": reached and not listing.rows and no_hits,
-         "complete": complete, "text": text, "at": time.monotonic()})
+         "complete": complete, "text": text, "at": time.monotonic(), **form})
     return text
 
 

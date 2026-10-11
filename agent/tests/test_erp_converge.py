@@ -67,6 +67,21 @@ class SearchToolTest(unittest.TestCase):
         self.assertIs(research.group_listing(searches, "GR-1"), searches[0])
         self.assertFalse(group_without_hits(searches, "GR-1"))
 
+    def test_a_complete_group_search_gives_a_recipe_for_the_other_groups(self):
+        _, searches = search(False, "GR-1")
+        recipe = research.search_recipe(searches, "GR-1")
+        self.assertEqual(recipe["field_label"], "Term")
+        self.assertEqual(recipe["submit_label"], "")  # sent with Enter
+        self.assertIsNone(research.search_recipe(searches, "GR-2"))  # another group's query is no recipe
+        _, empty = search(False, "GR-9")
+        self.assertIsNone(research.search_recipe(empty, "GR-9"))  # no hits: no recipe
+
+    def test_labelled_ref_needs_one_exact_control(self):
+        view = '[e1 textbox "Term" value=""] [e2 button "Suchen"] [e3 button "Suchen"]'
+        self.assertEqual(research._labelled_ref(view, "Term", ("textbox",))[0], "e1")
+        self.assertIsNone(research._labelled_ref(view, "Suchen", ("button",))[0])
+        self.assertIsNone(research._labelled_ref(view, "Ter", ("textbox",))[0])
+
     def test_swallowed_query_is_sent_again(self):
         out, searches = search(True, "GR-2")
         self.assertIn("2 rows", out)
