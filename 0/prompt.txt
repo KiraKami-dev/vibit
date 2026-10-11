@@ -4835,3 +4835,39 @@ I touched `browser_tools.py` and `worker.py`, which other agents work on; the ch
 <event>04:31 run_1bcdc16abf20cc97 95c6709 quality=100 8.2min $0.142 signed</event>
 If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a7d100a6cd4c6623d</task-id>
+<tool-use-id>toolu_01JZgGXHe6xaHr9rjSgt6v74</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-jonasstenglein-OtherProjects-EHL-Finale-error404ai-ehl-finals/064ce75e-f288-40e2-8ed8-853ec224ce81/tasks/a7d100a6cd4c6623d.output</output-file>
+<status>completed</status>
+<summary>Agent "Tender Q&amp;A amendments reliability" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The Q&amp;A worker now stops once it has collected the list, and both sandbox runs scored 100 with about 30 fewer model calls per run (roughly 10% fewer, about $0.016 cheaper).
+
+**The change (commit 2187356):**
+- **Tool reply.** When `collect_pages` reaches the end of the Q&amp;A list, its reply now says the list is complete and tells the worker to return its summary. Mail lists keep the old reply, because mail workers still have work to do after collecting.
+- **Harness stop.** If the worker keeps browsing anyway, `until_settled` (the helper from `research.py`) ends it 10 s after the list's end. That still counts as a complete read.
+- **Collapsed answers** are still opened in every view that is kept. Pages the worker opened itself in those 10 s are still read.
+
+**Results**
+
+| Run | Commit | Quality | Time | Model calls | Cost |
+|---|---|---|---|---|---|
+| run_67c268edd0b48561 | 2187356 | 100 | 11:12 | 266 | $0.120 |
+| run_87ff544ddb94b1f0 | 2187356 | 100 | 7:18 | 269 | $0.121 |
+| run_8417f9015452ca97 (before) | 9fb3be4 | 100 | 6:29 | 292 | $0.127 |
+| run_fbe3b5d7628ee93b (before) | 9fb3be4 | 100 | 7:55 | 307 | $0.145 |
+
+- **Calls saved.** In the two earlier runs the Q&amp;A worker alone used 25 and 28 calls and ran for 100 to 130 s after collecting at about 17 s. Recent main runs on 95c6709 used 271 to 299 calls and $0.122 to $0.149.
+- **No per-worker count for the new runs.** The platform log cut those lines, so the saving comes from the run totals. In run_87ff544ddb94b1f0 the list was collected at 27 s and the worker reported nothing after that, so it was ended rather than paging on.
+- **The 11:12 run was slow for another reason.** A model call (a document reader on a 180 s timeout) stalled and delayed the tender positions to 262 s. That set off the second tender attempt, and the verify step also timed out. The run still scored 100.
+
+**Merges and tests:** I merged main twice, first at 972810c (the gap pass fixes) and then 10a30c3 (dead tab recovery), both cleanly. All unit tests pass. Two new tests in `agent/tests/test_tender_qa.py` cover the worker being ended after collecting and a single-page Q&amp;A where the worker returns on its own. The sandbox runs used 2187356 and do not include the 10a30c3 changes.
+
+The runs are recorded in `experiments/runs.jsonl` with a `docs/learned.md` note (commit 446f873). The branch head is 446f873; nothing is pushed.</result>
+<usage><subagent_tokens>306219</subagent_tokens><tool_uses>10</tool_uses><duration_ms>256908</duration_ms></usage>
+<worktree><worktreePath>/Users/jonasstenglein/OtherProjects/EHL_Finale/error404ai_ehl_finals/.claude/worktrees/agent-a7d100a6cd4c6623d</worktreePath><worktreeBranch>worktree-agent-a7d100a6cd4c6623d</worktreeBranch></worktree>
+</task-notification>
