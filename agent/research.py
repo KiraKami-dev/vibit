@@ -47,8 +47,10 @@ from evidence import (
     SpecResult,
     SpecRevision,
     check_choice,
+    group_without_hits,
     merged_attributes,
     number_format,
+    parse_currency,
     parse_date,
     parse_int,
     parse_mass_kg,
@@ -710,7 +712,7 @@ def _material_record(seen: MaterialSeen) -> MaterialRecord:
                                       price=parse_number(s.price, fmt)) for s in c.scales]
             conditions.append(calc.PriceCondition(
                 valid_from=parse_date(c.valid_from), valid_to=parse_date(c.valid_to) if c.valid_to.strip() else None,
-                currency=c.currency.strip().upper()[:3] or "EUR", fx_key=c.fx_key.strip() or None,
+                currency=parse_currency(c.currency) or "EUR", fx_key=c.fx_key.strip() or None,
                 price_unit=parse_int(c.price_unit), scales=scales))
         except (ParseError, ValueError) as error:
             problems.append(f"condition {c.valid_from}..{c.valid_to}: {error}")
@@ -1051,6 +1053,7 @@ class Erp:
     async def requirement(self, req: EffectiveRequirement) -> RequirementResearch:
         out = RequirementResearch(requirement_id=req.requirement_id)
         report = None
+        searches: list[dict] = []  # what the search worker's site_tools.search calls showed
         until = self._until(MATERIAL_SECONDS)
         for attempt in range(2):  # retry once: the ERP sometimes drops the session mid-search
             if self.left() < MATERIAL_SECONDS + 20:
@@ -1068,9 +1071,14 @@ class Erp:
                     if report is None:  # stopped (steps, time): the hit list it ended on may still be there
                         report = await _salvage_search(session, views, req.catalog_group)
                 finally:
+                    searches = session.__dict__.get("searches", [])
                     await self._close(session)
             if report is not None:
                 break
+        if report is not None and not report.candidates and group_without_hits(searches, req.catalog_group):
+            out.search_term, out.no_hits = report.search_term, True  # searched, no match (rule 3), not a gap
+            self.trace.event("erp", "group_without_hits", requirement=req.requirement_id, searches=searches)
+            return out
         if report is None:
             out.problems.append("search worker returned no result")
             return out
@@ -1287,6 +1295,9 @@ async def reselect(requirements: list[EffectiveRequirement], erp: ErpResearch, t
     async def one(req: EffectiveRequirement) -> None:
         research = by_id.get(req.requirement_id)
         if research is None:
+            return
+        if research.no_hits and not research.inspected:  # the group is empty: nothing to choose from
+            chosen[req.requirement_id] = None
             return
         materials = {n: erp.materials[n] for n in research.inspected if n in erp.materials}
         if (req.stroke is not None and research.selected in materials

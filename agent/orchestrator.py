@@ -32,10 +32,11 @@ import llm
 from board import Board, Source
 from briefing import Briefing
 from browser_tools import SiteSession
-from evidence import EffectiveRequirement, Requirement, effective_requirement, parse_date, to_position_input
+from evidence import (EffectiveRequirement, Requirement, effective_requirement, merged_attributes, parse_date,
+                      to_position_input, wording_differences)
 from research import Erp, ErpResearch, SpecResult, research_spec, reselect, same_revision
 from tracing import Trace
-from verify import confirm_decision, verify_board
+from verify import VERIFY_SECONDS, confirm_decision, verify_board, wording_check
 
 try:  # the pipeline degrades without them
     import research_tender
@@ -173,9 +174,10 @@ def safe_calculate(bid: calc.BidInput) -> tuple[calc.BidResult | None, dict[str,
         try:
             return calc.calculate(bid.model_copy(update={"positions": positions})), blank, problems
         except calc.CalcError as error:
-            message = str(error)
-        culprit, why = None, message
-        for p in positions:
+            message, named = str(error), error.position
+        # an error that names its position (e.g. a lead time only the pooled demand needs) is that position's
+        culprit, why = next((p for p in positions if named is not None and p.position == named), None), message
+        for p in positions if culprit is None else ():
             try:
                 calc.calculate(bid.model_copy(update={"positions": [p]}))
             except calc.CalcError as error:
@@ -814,10 +816,12 @@ class Orchestrator:
                             None)
             # without a final choice (reselect cut short) the ERP worker's own choice stands
             number = self.chosen[req_id] if req_id in self.chosen else getattr(research, "selected", None)
-            if number is None and (research is None or not research.inspected):
+            # a catalogue group the site itself reported empty is searched with no match (rule 3), not a gap
+            empty_group = bool(getattr(research, "no_hits", False)) and not getattr(research, "inspected", None)
+            if number is None and not empty_group and (research is None or not research.inspected):
                 problems.append(f"position {p.position}: ERP not researched; position omitted")
                 continue
-            if number is None:
+            if number is None and not empty_group:
                 # No material only means no_bid (rule 3) when the search for it was complete; a requirement still
                 # pending (e.g. a reserve not found) or a search that hit problems leaves the position out instead.
                 pending = self.effective(self.requirements[req_id]).pending
@@ -826,6 +830,9 @@ class Orchestrator:
                                     f"({'; '.join(pending or research.problems)[:160]}); position omitted")
                     continue
             material = self.erp.materials.get(number) if (number and self.erp) else None
+            if number and material is None:  # chosen, but its record was not read: a gap, never "no material"
+                problems.append(f"position {p.position}: record of {number} not read; position omitted")
+                continue
             if material is not None:
                 try:  # after amendments and the usable-travel derivation
                     wanted = self.effective(self.requirements[req_id])
@@ -838,16 +845,18 @@ class Orchestrator:
             extra = ({"discount_scope": clause.discount_scope, "setup_fee": clause.setup_fee,
                       "packaging": clause.packaging, "commitment": clause.commitment} if clause
                      else {"setup_fee": getattr(p, "setup_fee", Decimal(0))})
+            pieces_per_set = self.effective(self.requirements[req_id]).pieces_per_set  # amended set size (rule 14)
             try:
                 positions.append(to_position_input(p.position, p.quantity, p.unit, self.requirements[req_id],
-                                                   material, **extra))
+                                                   material, pieces_per_set=pieces_per_set, **extra))
             except calc.CalcError as error:
+                if material is not None:  # a reading gap (e.g. the unit): this position out, never "no material"
+                    problems.append(f"position {p.position}: {error}; position omitted")
+                    continue
+                # no matching material, established: it carries the no_bid decision whatever its unit reads
                 problems.append(f"position {p.position}: {error}")
-                positions.append(to_position_input(p.position, p.quantity, p.unit, self.requirements[req_id], None,
-                                                   **extra) if material is None else
-                                 calc.PositionInput(position=p.position, quantity=p.quantity,
-                                                    unit=p.unit if isinstance(p.unit, calc.Unit) else calc.parse_unit(p.unit),
-                                                    pieces_per_set=self.requirements[req_id].pieces_per_set, **extra))
+                positions.append(calc.PositionInput(position=p.position, quantity=p.quantity, material=None,
+                                                    **{k: v for k, v in extra.items() if v is not None}))
         bid = calc.BidInput(tender_reference=self.reference, scenario_date=self.scenario_stamp, positions=positions,
                             approval=getattr(clauses, "approval", None) or getattr(self.mail_facts, "approval", None),
                             fx_rates=getattr(clauses, "fx_rates", None) or getattr(self.mail_facts, "fx_rates", {}) or {},
@@ -871,6 +880,62 @@ class Orchestrator:
             return {"tender_reference": self.reference, "decision": "bid", "currency": "EUR",
                     "discount_percent": 0.0, "positions": [], "total_net": 0.0}
 
+    def _calculate(self) -> tuple[calc.BidResult | None, dict[str, set[str]], list[str]]:
+        bid, problems = self.build_bid()
+        self.trace.event("calc", "input", positions=[p.position for p in bid.positions], problems=problems)
+        if not bid.positions:
+            self.board.problem("calc", "no position could be built; the bid goes in with every position omitted")
+        result, blank, calc_problems = safe_calculate(bid)
+        for position, fields in self.blank_hints.items():
+            blank.setdefault(position, set()).update(fields)
+        return result, blank, problems + calc_problems
+
+    async def wording_matches(self, missing: list[str]) -> dict[str, str]:
+        """
+        For the positions calc found without material: an active inspected material whose numbers all equal the
+        requirement and whose text attributes differ, checked by one thinking call for whether that is only
+        wording. Returns requirement -> material only when it covers every missing position with exactly one
+        material each (otherwise the no_bid stands, and nothing is asked when no such material exists).
+        """
+        if self.erp is None:
+            return {}
+        positions = {p.position: p for p in getattr(self.tender_facts, "positions", []) or []}
+        cases: dict[str, str] = {}
+        by_case: dict[str, tuple[str, str]] = {}
+        needed: set[str] = set()
+        for position in missing:
+            p = positions.get(position)
+            req_id = next((rid for rid in self.requirements if _same_id(rid, p.requirement)), None) if p else None
+            research = next((r for r in self.erp.requirements if r.requirement_id == req_id), None)
+            if req_id is None or research is None:
+                return {}
+            needed.add(req_id)
+            want = self.effective(self.requirements[req_id])
+            for number in research.inspected:
+                record = self.erp.materials.get(number)
+                if record is None or not record.active:
+                    continue
+                keys = wording_differences(want, merged_attributes(record, research))
+                if not keys:
+                    continue
+                shown = next((c for c in research.candidates if c.material_number == number), None)
+                case = f"{req_id}/{number}"
+                cases[case] = "; ".join(
+                    f"{key}: requirement {getattr(want, key)!r}, material "
+                    f"{(getattr(record, key) or getattr(shown, key, ''))!r}" for key in keys)
+                by_case[case] = (req_id, number)
+        if not cases or {rid for rid, _ in by_case.values()} != needed:
+            return {}
+        same = await wording_check(cases)
+        self.trace.event("verify", "wording", cases=cases, same=sorted(same or ()))
+        picks: dict[str, set[str]] = {}
+        for case in same or ():
+            req_id, number = by_case[case]
+            picks.setdefault(req_id, set()).add(number)
+        if set(picks) != needed or any(len(numbers) != 1 for numbers in picks.values()):
+            return {}
+        return {req_id: numbers.pop() for req_id, numbers in picks.items()}
+
     async def run(self) -> tuple[dict | None, calc.BidResult | None]:
         """Research, verify, calculate: the answer dict for the bid form. Positions that are not complete are
         omitted; with none complete it is still a bid with reference, decision and discount."""
@@ -879,14 +944,21 @@ class Orchestrator:
         if self.form_left() > 60:
             await self._bounded(self.verify(), "verify")
         await self._bounded(self.select_materials(), "select")
-        bid, problems = self.build_bid()
-        self.trace.event("calc", "input", positions=[p.position for p in bid.positions], problems=problems)
-        if not bid.positions:
-            self.board.problem("calc", "no position could be built; the bid goes in with every position omitted")
-        result, blank, calc_problems = safe_calculate(bid)
-        for position, fields in self.blank_hints.items():
-            blank.setdefault(position, set()).update(fields)
-        problems += calc_problems
+        result, blank, problems = self._calculate()
+        if result is not None and result.decision == "no_bid" and result.missing_materials and self.form_left() > 45:
+            # Before a no_bid is accepted: are the mismatches that leave positions without material only wording?
+            try:
+                rescued = await asyncio.wait_for(self.wording_matches(result.missing_materials),
+                                                 max(1.0, min(VERIFY_SECONDS, self.form_left() - 30)))
+            except Exception as error:
+                rescued = {}
+                self.board.problem("verify", f"wording check: {type(error).__name__}: {str(error)[:160]}")
+            if rescued:
+                self.chosen = {**self.chosen, **rescued}
+                again = self._calculate()
+                if again[0] is not None and again[0].decision == "bid":
+                    self.trace.event("verify", "no_bid_overturned", chosen=rescued)
+                    result, blank, problems = again
         if result is None:  # still a bid: reference, decision and discount score without positions
             answer = self.fallback_answer()
             self.trace.event("calc", "answer", answer=answer, problems=problems, fallback=True)

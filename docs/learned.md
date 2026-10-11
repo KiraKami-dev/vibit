@@ -191,3 +191,11 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - confirm_decision after calc could never change a decision (calc returns no bid with missing materials) and
   cost ~8 s before the form; now skipped. A grounded FormReady quoting our own "5,00" was refused four times
   (30 s) and the model then went back a step; form status results are no longer grounded.
+- Hung starts (run_9f6e6e23f55952fc, quality 30.6; the Haiku run lost 210 s the same way): in one browser context the
+  webmail's requests never completed (first a goto that never committed, then a sign-in post), while a fresh context
+  opened it in under 1 s. Playwright page calls (locator.count, evaluate) on a tab whose navigation has not
+  committed wait for ever, so every settle hit its 45 s cap and the attempt waited 210 s on a dead tab. Starts now
+  race a tab in a fresh context after 15 s without a usable page, give up a page that answers no script call for
+  20 s, retry at once in a fresh context with 45/60/90/120 s budgets, and accept a rendered page whose settle never
+  ends. Test runs of 86b4f27: 100 (7:33) and 100 (11:33), all starts in 2.4 to 4.6 s; the second still had three
+  mail gotos mid-research that never committed, now bounded (30 s goto + about 22 s settle) and traced as slow_page.
