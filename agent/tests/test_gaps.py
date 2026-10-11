@@ -83,6 +83,14 @@ def idents(found):
 
 
 class DetectGaps(unittest.TestCase):
+    def test_implausible_base_price_rereads_fx(self):
+        o = state([position("1", "A-1")], [requirement("A-1")],
+                  [RequirementResearch(requirement_id="A-1", inspected=["M-1"], selected="M-1")],
+                  {"M-1": complete_record("M-1")})
+        problem = "position 1: base price 55000.00 EUR is 1.1e+04 x the ERP scale price 5 USD per piece (FX rate " \
+                  "11000 implausible); field left blank"
+        self.assertEqual(idents(detect_gaps(o, [problem])), {"mail/fx": ("1",)})
+
     def test_complete_answer_has_no_gaps(self):
         o = state([position("1", "A-1")], [requirement("A-1")],
                   [RequirementResearch(requirement_id="A-1", inspected=["M-1"], selected="M-1")],

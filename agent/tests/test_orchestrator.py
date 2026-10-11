@@ -73,6 +73,43 @@ class SafeCalculate(unittest.TestCase):
         self.assertTrue(any("position 2 omitted" in p for p in problems))
 
 
+    def fx_bid(self, rate: str, *positions, **update) -> calc.BidInput:
+        return self.bid(*positions).model_copy(update={"fx_rates": {"FX-1": D(rate)}, **update})
+
+    def usd(self, number: str, price: str = "500") -> calc.PositionInput:
+        condition = calc.PriceCondition(valid_from=date(2026, 1, 1), currency="USD", fx_key="FX-1", price_unit=100,
+                                        scales=[calc.PriceScale(min_quantity=0, price=D(price))])
+        return position(number, conditions=[condition])
+
+    def test_implausible_fx_blanks_the_base_price(self):
+        # 500 per 100 pieces = 5.00 USD; a rate misread as 11000 gives 55000.00 EUR, 11000 x the ERP price
+        result, blank, problems = safe_calculate(self.fx_bid("11000", self.usd("1"), position("2")))
+        self.assertEqual(blank, {"1": {"base_unit_price", "unit_price"}})
+        self.assertEqual(len(problems), 1)
+        self.assertTrue(problems[0].startswith("position 1:") and "FX rate" in problems[0], problems[0])
+        answer = answer_from(result, blank)
+        first, second = answer["positions"]
+        self.assertNotIn("base_unit_price", first)
+        self.assertIn("unit_price", first)  # the form enters the position only with a unit price
+        self.assertEqual(second["base_unit_price"], 10.0)
+
+    def test_plausible_rates_pass(self):
+        for rate in ("1.10", "0.0062", "90"):  # a dollar-, a yen- and a dinar-like currency
+            _, blank, problems = safe_calculate(self.fx_bid(rate, self.usd("1")))
+            self.assertEqual((blank, problems), ({}, []), rate)
+
+    def test_implausible_base_blanks_shared_rebates(self):
+        # the bonus band and split of position 2 came from the same, inflated goods value; 3 is not in the plan
+        bonus = calc.ProjectBonus(bands=[calc.BonusBand(lower=D("0"), percent=D("1"))], members=["1", "2"])
+        result, blank, _ = safe_calculate(self.fx_bid("11000", self.usd("1"), position("2"), position("3"),
+                                                      project_bonus=bonus))
+        self.assertEqual(blank, {"1": {"base_unit_price", "unit_price", "rebate_total"},
+                                 "2": {"rebate_total", "unit_price"}})
+        positions = answer_from(result, blank)["positions"]
+        self.assertNotIn("rebate_total", positions[1])
+        self.assertIn("rebate_total", positions[2])
+
+
 class Helpers(unittest.TestCase):
     def test_scenario_time(self):
         self.assertEqual(scenario_time("2026-06-01T10:00:00Z"), datetime(2026, 6, 1, 10, tzinfo=UTC))

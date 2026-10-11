@@ -216,6 +216,26 @@ def _same_id(a: str, b: str) -> bool:
 # ---------------------------------------------------------------- the calculation with per-field fallbacks
 
 
+def _blank_implausible(result: calc.BidResult, blank: dict[str, set[str]], problems: list[str]) -> None:
+    """
+    A base price wildly out of line with its ERP scale price (calc.implausible_prices) is unknown, not submitted:
+    its report fields are blanked, and so are the rebates of positions that share in a bonus with it (their band
+    and split came from the same goods value). The problem names the FX rate, so the gap pass reads it again.
+    """
+    bad = calc.implausible_prices(result)
+    if not bad:
+        return
+    bonus = {d.position for d in result.debug if d.bonus}
+    shared = bonus if bonus & set(bad) else set()
+    for position in {*bad, *shared}:
+        fields = blank.setdefault(position, set())
+        fields |= {"rebate_total", "unit_price"} if position in shared else set()
+        if position in bad:
+            fields |= {"base_unit_price", "unit_price"}
+    for position, why in bad.items():
+        problems.append(f"position {position}: {why}; field left blank")
+
+
 def safe_calculate(bid: calc.BidInput) -> tuple[calc.BidResult | None, dict[str, set[str]], list[str]]:
     """
     calc with CalcError caught per position: a position whose packaging or surcharge inputs are incomplete is
@@ -227,7 +247,9 @@ def safe_calculate(bid: calc.BidInput) -> tuple[calc.BidResult | None, dict[str,
     problems: list[str] = []
     for _ in range(3 * len(positions) + 3):
         try:
-            return calc.calculate(bid.model_copy(update={"positions": positions})), blank, problems
+            result = calc.calculate(bid.model_copy(update={"positions": positions}))
+            _blank_implausible(result, blank, problems)
+            return result, blank, problems
         except calc.CalcError as error:
             message, named = str(error), error.position
         # an error that names its position (e.g. a lead time only the pooled demand needs) is that position's
@@ -1097,6 +1119,11 @@ class Orchestrator:
         if not bid.positions:
             self.board.problem("calc", "no position could be built; the bid goes in with every position omitted")
         result, blank, calc_problems = safe_calculate(bid)
+        if result is not None and result.debug:  # where each base price came from, for runs that bid odd prices
+            self.trace.event("calc", "prices", fx_rates={k: str(v) for k, v in bid.fx_rates.items()},
+                             fx_per_eur={k: str(v) for k, v in bid.fx_per_eur.items()},
+                             positions={d.position: f"{d.scale_price}/{d.price_unit} {d.currency} x {d.fx_rate:.6g} "
+                                                    f"= {d.base_eur}" for d in result.debug})
         for position, fields in self.blank_hints.items():
             blank.setdefault(position, set()).update(fields)
         return result, blank, problems + calc_problems

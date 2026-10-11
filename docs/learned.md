@@ -250,3 +250,7 @@ One bullet per experiment or failure: what changed, what happened, what we keep.
 - Mail search with thinking off took 211 calls instead of 85 and lost end_reserves in one run: keep thinking on.
 - ERP hits whose rows contradict the requirement are read only when needed (ERP_DEFER_REST): detail calls 28-32
   instead of 36-53, $0.112-0.129 per run. Records that finished after a requirement's choice were never used anyway.
+- A record-level number format comes from a model and does not bind every figure: a soak run (80.1) read an FX
+  fixing tagged "de" whose rate was written with a decimal point, parsed it as ten thousand times the rate and bid
+  three USD positions at millions of EUR. A separator that cannot group thousands is now the decimal mark, and a
+  base price more than 100x (or under 1/1000) its ERP per-piece price is blanked and sends FX to the gap pass.

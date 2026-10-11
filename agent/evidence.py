@@ -35,12 +35,24 @@ def number_format(text: str, fallback: str | None = None) -> str | None:
     return None
 
 
+_DECIMAL_COMMA = ("de", "fr", "es", "it", "nl", "pt")
+
+
+def _grouped(raw: str, sep: str) -> bool:
+    """Whether `sep` can be a thousands separator in `raw`: 1 to 3 leading digits, then groups of exactly three."""
+    return re.fullmatch(rf"[-+]?\d{{1,3}}(?:{re.escape(sep)}\d{{3}})+", raw) is not None
+
+
 def parse_number(text: str, fmt: str | None = None) -> Decimal:
     """
     A number as a page writes it. `fmt` is a language code or locale ("de", "en-US") when the text carries no tag.
 
     Without any format: both separators -> the last one is decimal; a single comma or dot followed by exactly three
     digits is a thousands separator only for "en"/"de" respectively, otherwise German pages default to comma decimal.
+    A format whose thousands separator is the only one in the value but cannot group it ("1.0873" read as "de",
+    "2,75" as "en") does not fit that value: the separator is its decimal mark. A record-level format came from a
+    model and a message may quote one figure in the other notation; a soak run read a "de" FX fixing's
+    "1.0873" as 10873 and bid prices ten thousand times too high.
     """
     if text is None:
         raise ParseError("no value")
@@ -50,9 +62,13 @@ def parse_number(text: str, fmt: str | None = None) -> Decimal:
     if not m:
         raise ParseError(f"no number in {text!r}")
     raw = re.sub(r"['   ]", "", m.group(0)).rstrip(".,")
+    if lang in _DECIMAL_COMMA and "," not in raw and raw.count(".") == 1 and not _grouped(raw, "."):
+        lang = "en"  # "1.0873" in a German message: a dot that cannot group thousands is a decimal point
+    elif lang == "en" and "." not in raw and raw.count(",") == 1 and not _grouped(raw, ","):
+        lang = "de"  # "2,75" in an English message: likewise a decimal comma
     if lang == "en":
         raw = raw.replace(",", "")
-    elif lang in ("de", "fr", "es", "it", "nl", "pt"):
+    elif lang in _DECIMAL_COMMA:
         raw = raw.replace(".", "").replace(",", ".")
     elif "," in raw and "." in raw:
         if raw.rfind(",") > raw.rfind("."):
