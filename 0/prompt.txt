@@ -476,3 +476,11 @@ it failed, re-run
 ---
 
 also before starting with a new run, look at the leaderboard, i need the time to go down, and the cost, we are currently tinkering with the new and a better model than qwen which is faster, but until then check this https://ehl-challenge.atira.ai/challenges/rfq/stage.
+
+---
+
+model will come later, for now do the first one, when done dont run a test run, lmk
+
+---
+
+also do all the edits only in this branch btw
