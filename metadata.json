@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4MB666VTMY7W0Z92MBN6S7Q",
+  "strategy": "manual-commit",
+  "branch": "research/agent-architecture",
+  "checkpoints_count": 7,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1188,
+    "cache_creation_tokens": 1349139,
+    "cache_read_tokens": 157313646,
+    "output_tokens": 663884,
+    "api_call_count": 514
+  }
+}
