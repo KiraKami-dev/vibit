@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01FXgPsf9bNnJnSxSoKC6ihM",
+  "agent_id": "a183c69be42b5cc53",
+  "subagent_type": "general-purpose",
+  "task_description": "Generalize mail fact shapes",
+  "token_usage": {
+    "input_tokens": 122,
+    "cache_creation_tokens": 156754,
+    "cache_read_tokens": 8179320,
+    "output_tokens": 44595,
+    "api_call_count": 61
+  },
+  "started_at": "2026-10-11T02:43:58.043944+02:00",
+  "completed_at": "2026-10-11T02:56:20.417156+02:00"
+}
