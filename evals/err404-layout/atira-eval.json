@@ -1,0 +1,9 @@
+{
+  "start": "node server.js",
+  "sites": [
+    { "name": "sourcing-hub", "port": 3000 },
+    { "name": "buyer-extranet", "port": 3001 },
+    { "name": "ops-suite", "port": 3002 },
+    { "name": "inbox", "port": 3003 }
+  ]
+}

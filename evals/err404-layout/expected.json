@@ -1,0 +1,75 @@
+{
+  "tender_reference": "TR-2026-0815",
+  "decision": "bid",
+  "currency": "EUR",
+  "discount_percent": 4.5,
+  "positions": [
+    {
+      "position": "10",
+      "material_number": "FT-6340-FA2",
+      "quantity": 18,
+      "unit_price": 643.46,
+      "lead_time_weeks": 9,
+      "base_unit_price": 618.4,
+      "surcharge_per_unit": 49.96,
+      "packaging_per_unit": 4.03,
+      "rebate_total": 0
+    },
+    {
+      "position": "20",
+      "material_number": "FT-6340-FA2",
+      "quantity": 12,
+      "unit_price": 666.69,
+      "lead_time_weeks": 4,
+      "base_unit_price": 642,
+      "surcharge_per_unit": 49.96,
+      "packaging_per_unit": 3.63,
+      "rebate_total": 0
+    },
+    {
+      "position": "30",
+      "material_number": "FT-4015-C00",
+      "quantity": 24,
+      "unit_price": 111.96,
+      "lead_time_weeks": 3,
+      "base_unit_price": 109.5,
+      "surcharge_per_unit": 7.41,
+      "packaging_per_unit": 1.23,
+      "rebate_total": 29.99
+    },
+    {
+      "position": "40",
+      "material_number": "FT-8050-TD5",
+      "quantity": 8,
+      "unit_price": 1632.37,
+      "lead_time_weeks": 8,
+      "base_unit_price": 1485,
+      "surcharge_per_unit": 128.37,
+      "packaging_per_unit": 19,
+      "rebate_total": 0
+    },
+    {
+      "position": "50",
+      "material_number": "FT-5030-E00",
+      "quantity": 30,
+      "unit_price": 243.52,
+      "lead_time_weeks": 1,
+      "base_unit_price": 230.02,
+      "surcharge_per_unit": 24.84,
+      "packaging_per_unit": 1.63,
+      "rebate_total": 78.73
+    },
+    {
+      "position": "60",
+      "material_number": "FT-1040-FD5",
+      "quantity": 10,
+      "unit_price": 1721.37,
+      "lead_time_weeks": 3,
+      "base_unit_price": 1622.54,
+      "surcharge_per_unit": 152.36,
+      "packaging_per_unit": 38,
+      "rebate_total": 185.13
+    }
+  ],
+  "total_net": 59847.86
+}
