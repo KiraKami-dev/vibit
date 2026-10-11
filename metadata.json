@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4MP04HJFWR7BR65M1608W81",
+  "strategy": "manual-commit",
+  "branch": "codex/reader-kernel",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/learned.md",
+    "docs/radical-efficiency-plan.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 42176,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2375808,
+    "output_tokens": 8429,
+    "api_call_count": 43,
+    "subagent_tokens_complete": false
+  }
+}
