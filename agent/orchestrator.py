@@ -93,12 +93,36 @@ class Need(BaseModel):
 
 
 class Plan(BaseModel):
-    needs: list[Need] = Field(description="Every kind of fact the bid needs, each with its website; leave out "
-                                          "what the rules do not require")
+    needs: list[Need] = Field(description="Every kind of fact the bid needs (each kind at least once), each with "
+                                          "its website")
+
+
+def complete_plan(plan: Plan, briefing: Briefing, ids: set[str]) -> tuple[Plan, list[str]]:
+    """
+    A plan that still lacks a fact kind after the model's retries: the tender goes to the bid website and the mails
+    to the mailbox (both read from the brief); a missing specification or ERP goes to every website that holds no
+    other kind. Returns the completed plan and what was filled in.
+    """
+    have = {n.kind for n in plan.needs}
+    free = sorted(ids - {n.site for n in plan.needs} - {briefing.bid_site, briefing.mail_site})
+    needs, filled = list(plan.needs), []
+    for kind in FACT_KINDS:
+        if kind in have:
+            continue
+        for site in [briefing.bid_site] if kind == "tender" else [briefing.mail_site] if kind == "mails" else free:
+            if site in ids:
+                needs.append(Need(kind=kind, site=site, why="missing from the model's plan; filled in"))
+                filled.append(f"{kind}@{site}")
+    return Plan(needs=needs), filled
 
 
 async def plan_research(task: dict, briefing: Briefing) -> Plan:
-    """One model call: from the brief, which facts the bid needs and which website each comes from."""
+    """
+    One model call: from the brief, which facts the bid needs and which website each comes from. Every fact kind
+    is needed (the rules use the tender, the specification, the ERP and the mails), so a plan that drops one is
+    sent back; one still incomplete after the retries is asked once more without that check and completed by
+    complete_plan().
+    """
     ids = {s["siteId"] for s in task["access"]}
     sites = "\n".join(f"- siteId {s['siteId']}: {s['url']}" for s in task["access"])
     kinds = "\n".join(f"- {k}: {v}" for k, v in FACT_KINDS.items())
@@ -106,19 +130,35 @@ async def plan_research(task: dict, briefing: Briefing) -> Plan:
                   instructions="You plan the research for a tender bid from its brief: which kinds of facts the "
                                "bid rules need, and on which of the run's websites each kind is found. Use the "
                                "siteIds exactly.")
+    strict = [True]
 
     @agent.output_validator
     def _known(plan: Plan) -> Plan:
         bad = sorted({n.site for n in plan.needs} - ids)
         if bad:
             raise ModelRetry(f"{bad} are not siteIds of this run: {sorted(ids)}")
+        missing = [k for k in FACT_KINDS if k not in {n.kind for n in plan.needs}]
+        if missing and strict[0]:
+            raise ModelRetry(f"The bid rules need every kind of fact; {missing} have no website yet. Add each "
+                             f"with the website that holds it.")
         return plan
 
     brief = task["brief"]
     prompt = (f"Websites of this run:\n{sites}\n\nKinds of facts the workers can establish:\n{kinds}\n\n"
               f"The bid is entered on {briefing.bid_site}; the bidder's mailbox is {briefing.mail_site}.\n\n"
               f"Brief:\n{brief}")
-    return (await agent.run(prompt)).output
+    try:
+        return (await agent.run(prompt)).output
+    except Exception as error:
+        print(f"[plan] no complete plan ({type(error).__name__}): asked again, gaps filled in", flush=True)
+    strict[0] = False
+    try:
+        plan = (await agent.run(prompt)).output
+    except Exception:
+        plan = Plan(needs=[])
+    plan, filled = complete_plan(plan, briefing, ids)
+    print(f"[plan] filled in {filled}", flush=True)
+    return plan
 
 
 # ---------------------------------------------------------------- small helpers
@@ -184,12 +224,13 @@ def safe_calculate(bid: calc.BidInput) -> tuple[calc.BidResult | None, dict[str,
                 culprit, why = p, str(error)
                 break
         if culprit is None:  # a bid-level input (pool, bonus) fails for the set as a whole
-            if bid.setup_pool is not None:
-                bid = bid.model_copy(update={"setup_pool": None})
-                problems.append(f"setup pool dropped: {message}")
-            elif bid.project_bonus is not None:
-                bid = bid.model_copy(update={"project_bonus": None})
-                problems.append(f"project bonus dropped: {message}")
+            pools, bonuses = bid.all_setup_pools(), bid.all_project_bonuses()
+            if pools:  # the last pool first: one bad key must not cost the others theirs
+                bid = bid.model_copy(update={"setup_pool": None, "setup_pools": pools[:-1]})
+                problems.append(f"setup pool {pools[-1].key or ''} dropped: {message}")
+            elif bonuses:
+                bid = bid.model_copy(update={"project_bonus": None, "project_bonuses": bonuses[:-1]})
+                problems.append(f"project bonus {bonuses[-1].key or ''} dropped: {message}")
             else:
                 problems.append(f"calc failed: {message}")
                 return None, blank, problems
@@ -676,9 +717,12 @@ class Orchestrator:
             post("approval", "latest", facts.approval)
         for table, kind in (("discount_scopes", "condition_rules"), ("metal_indices", "metal_indices"),
                             ("end_reserves", "end_reserves"), ("packaging", "packaging"),
-                            ("commitments", "commitments"), ("fx_rates", "fx"), ("setup_pools", "setup_pools"),
+                            ("commitments", "commitments"), ("fx_rates", "fx"), ("fx_per_eur", "fx"),
+                            ("setup_pools", "setup_pools"),
                             ("project_bonuses", "project_bonus")):
             for key, value in (getattr(facts, table, None) or {}).items():
+                if table == "fx_per_eur":  # quoted the other way round; calc divides by it
+                    value = {"currency_units_per_eur": str(value)}
                 post(kind, key, [v.model_dump(mode="json") for v in value] if isinstance(value, list) else value)
 
     # ------------------------------------------------------------ the pipeline
@@ -776,15 +820,15 @@ class Orchestrator:
         self.chosen = {**own, **chosen}
         self.trace.event("select", "done", chosen=self.chosen)
 
-    def _unknown_clauses(self, p, clause, pool, bonus) -> None:
+    def _unknown_clauses(self, p, clause, pools, bonuses) -> None:
         """A position whose Q&A names a key the mails did not resolve: calc would report a zero for that part,
         which reads as a known zero, so the report field and the unit price it feeds are left blank instead."""
         fields = set()
         if getattr(p, "packaging_key", None) and getattr(clause, "packaging", None) is None:
             fields |= {"packaging_per_unit", "unit_price"}
-        if getattr(p, "setup_pool_key", None) and p.position not in getattr(pool, "members", []):
+        if getattr(p, "setup_pool_key", None) and not any(p.position in x.members for x in pools or []):
             fields |= {"surcharge_per_unit", "unit_price"}
-        if getattr(p, "bonus_key", None) and p.position not in getattr(bonus, "members", []):
+        if getattr(p, "bonus_key", None) and not any(p.position in x.members for x in bonuses or []):
             fields |= {"rebate_total", "unit_price"}
         if fields:
             self.blank_hints.setdefault(p.position, set()).update(fields)
@@ -831,8 +875,8 @@ class Orchestrator:
             if material is not None:
                 self.attributes[p.position] = material_attributes(material)
             clause = by_position.get(p.position)
-            self._unknown_clauses(p, clause, getattr(clauses, "setup_pool", None),
-                                  getattr(clauses, "project_bonus", None))
+            self._unknown_clauses(p, clause, getattr(clauses, "setup_pools", None),
+                                  getattr(clauses, "project_bonuses", None))
             extra = ({"discount_scope": clause.discount_scope, "setup_fee": clause.setup_fee,
                       "packaging": clause.packaging, "commitment": clause.commitment} if clause
                      else {"setup_fee": getattr(p, "setup_fee", Decimal(0))})
@@ -853,8 +897,9 @@ class Orchestrator:
                             fx_rates=getattr(clauses, "fx_rates", None) or getattr(self.mail_facts, "fx_rates", {}) or {},
                             metal_indices=getattr(clauses, "metal_indices", None)
                             or getattr(self.mail_facts, "metal_indices", {}) or {},
-                            setup_pool=getattr(clauses, "setup_pool", None),
-                            project_bonus=getattr(clauses, "project_bonus", None))
+                            fx_per_eur=getattr(clauses, "fx_per_eur", None) or {},
+                            setup_pools=getattr(clauses, "setup_pools", None) or [],
+                            project_bonuses=getattr(clauses, "project_bonuses", None) or [])
         return bid, problems
 
     def fallback_answer(self) -> dict:

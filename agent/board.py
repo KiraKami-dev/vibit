@@ -146,7 +146,7 @@ class BidClausesLike(Protocol):
     approval: Any
     fx_rates: dict
     metal_indices: dict
-    setup_pool: Any
-    project_bonus: Any
+    setup_pools: list  # calc.SetupPool, one per pool key
+    project_bonuses: list  # calc.ProjectBonus, one per plan key
     positions: list  # per position: position, quantity, unit, discount_scope, setup_fee, packaging, commitment
     problems: list
