@@ -8,8 +8,10 @@ was not recorded gets a plain "not recorded" page and a line in `captured/_missi
 paths still to record.
 
 Each website gets its own port, since the agent keeps a tab on its website's host. From the repo root:
-    python3 sim/mirror.py                    # serves until stopped; prints the run for CHALLENGE_SCOUTING
+    python3 sim/mirror.py                    # serves until stopped (--print-run also prints the run as JSON)
     python3 sim/mirror.py -- <command ...>   # runs the command against the mirror, then prints the signed bid
+The mirror takes the websites' own scouting logins from `atira scout` (never stored); without the CLI it makes up
+logins and prints them. SIM_AUTOLOGIN=1 signs every visitor in without the form, for browsing by hand.
 SIM_SESSION_SECONDS makes sessions time out, SIM_FLAKY (0 to 1) answers that share of pages with the recorded
 error page first, SIM_PORT moves the ports, SIM_SEED fixes the order of the bid form's positions.
 """
@@ -34,6 +36,7 @@ import bidform  # noqa: E402
 CAPTURED = Path(__file__).resolve().parent / "captured"
 BASE_PORT = int(os.environ.get("SIM_PORT", "8801"))
 SESSION_SECONDS = float(os.environ.get("SIM_SESSION_SECONDS", "0"))  # 0: sessions do not time out
+AUTOLOGIN = os.environ.get("SIM_AUTOLOGIN") == "1"  # sign visitors in without the form
 FLAKY = float(os.environ.get("SIM_FLAKY", "0"))  # share of pages answered with the recorded error page first
 CSRF = re.compile(r'name="csrf" value="([^"]+)"')
 NUMBER = re.compile(r'"value":"([^"]+)"')  # the number an entry check shows, in its drawing script
@@ -214,6 +217,10 @@ class Site:
     def answer(self, method, path, query, raw_query, form, session, cookie) -> Reply:
         rec, here = self.rec, path + ("?" + raw_query if raw_query else "")
         back = dict(query).get("returnTo") or form.get("returnTo") or "/"
+        if not session and AUTOLOGIN:  # for browsing by hand: every visitor is signed in on arrival
+            key = secrets.token_hex(16)
+            self.sessions[key] = Session(signed_in=True)
+            return Reply(303, location=here, cookie=f"{rec.cookie}={key}; Path=/; HttpOnly; SameSite=Lax")
         if not session or not session.signed_in:
             if path == "/login" and method == "POST":
                 if (form.get("username"), form.get("password")) != tuple(self.credentials.values()):
@@ -387,8 +394,7 @@ def mirrored_run(world: World) -> tuple[dict, dict]:
         site = world.sites.get(real["siteId"])
         if site:
             brief = brief.replace(real["url"], site.origin)
-            for key, value in real["credentials"].items():
-                brief = brief.replace(value, site.credentials[key])
+            site.credentials = dict(real["credentials"])  # the same login as on the website, kept in memory only
     models = dict(re.findall(r"^export ((?!CHALLENGE_)\w+)='?([^'\n]*)'?$", exports, re.M))
     extra = {k: live[k] for k in ("answer_schema", "scenario_id", "challenge_id") if k in live}
     return world.run(brief, extra), models
@@ -400,7 +406,10 @@ def main() -> None:
     world.serve()
     task, models = mirrored_run(world)
     if "--" not in sys.argv:
-        print(json.dumps(task, indent=1), flush=True)
+        for site in world.sites.values():
+            print(f"{site.id}: {site.origin}", flush=True)
+        if "--print-run" in sys.argv:
+            print(json.dumps(task, indent=1), flush=True)
         try:
             while True:
                 time.sleep(3600)
