@@ -516,3 +516,11 @@ i see a lot of wasted clicks in random areas in both the tender one (1st browser
 <status>completed</status>
 <summary>Background command "Start the sandbox test run of the merged code (retrying if the queue is full) and wait for its score" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+yes do that, but dont start a new run, i want you to research decision model like clef, what are the types of things is it good at deciding and coming back with a certain and almost 1.0 determinsm and tells our llm of what to do. do these things in order
+
+---
+
+tell me what exactly is my current situation with the llms, parallel agents and stuff like that, are things actually happening parallel? you know the logic by now, which other processes can take place parallely? look into that, what depends on what some other thing, what doesn't, and hence what could be done parallely
