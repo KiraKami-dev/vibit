@@ -43,3 +43,7 @@ whats happening here? do you know the data we are currently training upon, so th
 <status>failed</status>
 <summary>Background command "Start the local model proxy for hosted Qwen" failed with exit code 144</summary>
 </task-notification>
+
+---
+
+/Users/gaurav/Downloads/error404.ai-run_df14f82a49438b67 look into this for the type of data we need to test against, '/Users/gaurav/Downloads/logs (1).jsonl' check this as well, try to create unseen data for me similar to this
