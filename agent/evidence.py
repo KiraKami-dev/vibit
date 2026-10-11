@@ -239,6 +239,30 @@ def parse_currency(text: str | None) -> str:
     return t.upper()
 
 
+REVISION_WORDS = {"revision", "rev", "index", "version", "ausgabe", "stand", "issue", "änderungsstand",
+                  "aenderungsstand", "änderungsindex", "aenderungsindex"}
+
+
+def _revision_tokens(text: str | None) -> list[str]:
+    tokens = [t.strip(".-/") for t in re.findall(r"[\w./-]+", str(text or "").casefold())]
+    return [t for t in tokens if t and t not in REVISION_WORDS]
+
+
+def revision_id(text: str | None) -> str:
+    """The identifier inside a revision label, comparable across sources: one source writes "Revision C of
+    1 March", another just "C" or "Rev. C". The first token that is not a label word, without case."""
+    return next(iter(_revision_tokens(text)), "")
+
+
+def same_revision(a: str | None, b: str | None) -> bool:
+    """Two labels of one revision: the same identifier, or a bare identifier that is a whole word of the other
+    label. Whole words only: "A" is not inside "Revision B (aktuell)", "I" is not "III"."""
+    ta, tb = _revision_tokens(a), _revision_tokens(b)
+    if not ta or not tb:
+        return False
+    return ta[0] == tb[0] or (len(ta) == 1 and ta[0] in tb) or (len(tb) == 1 and tb[0] in ta)
+
+
 # ---------------------------------------------------------------- specification
 
 
@@ -305,7 +329,10 @@ def effective_requirement(req: Requirement, amendments: list[calc.Amendment] | N
     """
     base: dict[str, Decimal | str] = {"bore": req.bore, "stroke": req.stroke, "pressure": req.pressure,
                                       "mounting": req.mounting, "certification": req.certification}
-    attrs = calc.apply_amendments(base, amendments or [], req.revision, req.requirement_id, scenario_date)
+    # An amendment names the revision its own way (label word, date or status around the identifier or not).
+    scoped = [a.model_copy(update={"revision": req.revision}) if same_revision(a.revision, req.revision) else a
+              for a in amendments or []]
+    attrs = calc.apply_amendments(base, scoped, req.revision, req.requirement_id, scenario_date)
     pending: list[str] = []
     stroke: Decimal | None = Decimal(str(attrs["stroke"]))
     if req.stroke_is_usable:

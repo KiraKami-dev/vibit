@@ -416,7 +416,8 @@ class Orchestrator:
         revision-specific); a record that names no revision counts for any."""
         reserves = getattr(self.mail_facts, "end_reserves", None) or {}
         return {key: Decimal(str(getattr(entry, "reserve_per_end_mm", entry))) for key, entry in reserves.items()
-                if not getattr(entry, "revision", "") or _same_id(getattr(entry, "revision", ""), revision)}
+                if not getattr(entry, "revision", "") or _same_id(getattr(entry, "revision", ""), revision)
+                or same_revision(getattr(entry, "revision", ""), revision)}
 
     def effective(self, req: Requirement) -> EffectiveRequirement:
         return effective_requirement(req, amendments=self._amendments(), reserves=self._reserves(req.revision),
